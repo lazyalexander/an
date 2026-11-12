@@ -1,0 +1,7 @@
+[dsh]
+argv = ["dsh", "headless"]
+timeout_secs = 120
+
+[codex]
+argv = ["codex", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "-o", "last.txt"]
+timeout_secs = 120
