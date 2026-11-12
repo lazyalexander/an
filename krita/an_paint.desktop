@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Service
+ServiceTypes=Krita/PythonPlugin
+X-KDE-Library=an_paint
+X-Python-2-Compatible=false
+Name=An Paint
+Comment=把笔触渲染成分开的图层
