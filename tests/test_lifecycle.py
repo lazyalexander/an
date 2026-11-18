@@ -16,12 +16,16 @@ import instances
 
 class LifecycleTest(unittest.TestCase):
     def setUp(self):
+        root = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.enterContext(patch.object(kernel, "ROOT", root))
+        self.enterContext(patch.object(kernel, "DB", root / "registry.sqlite3"))
         with kernel.connect() as db:
             kernel.put(db, "image", "test", "test", True)
             self.task = kernel.task_new(db, ["test"], [], {})
             self.i = dict(
                 task=self.task,
                 spool="test",
+                platform={"os": "linux", "architecture": "arm64"},
                 id=kernel.uid(),
                 name="test",
                 intent="load",
@@ -41,6 +45,7 @@ class LifecycleTest(unittest.TestCase):
             self.assertEqual(self.state()["status"], "unknown")
             cli.assert_not_called()
         with (
+            patch.object(instances.admission, "require", return_value={"platform": self.i["platform"]}),
             patch.object(instances, "observe", return_value="running"),
             patch.object(instances, "apple") as cli,
         ):
@@ -119,9 +124,15 @@ class LifecycleTest(unittest.TestCase):
             kernel.connect() as db,
             patch.object(kernel, "inspect_image", return_value=config),
             patch.object(
-                subprocess, "run", side_effect=subprocess.CalledProcessError(1, "run")
+                instances.admission,
+                "variant",
+                return_value={"platform": {}, "variant": "test"},
             ),
-            patch.object(subprocess, "check_output", return_value=b"[]"),
+            patch.object(
+                subprocess,
+                "check_output",
+                side_effect=[subprocess.CalledProcessError(1, "run"), b"[]"],
+            ),
         ):
             with self.assertRaisesRegex(ValueError, "/bin/sleep infinity"):
                 kernel.register(db, image)

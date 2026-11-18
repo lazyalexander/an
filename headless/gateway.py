@@ -112,6 +112,12 @@ BUILTINS = {
     t.name: t
     for t in [
         schema(
+            "skill",
+            "Read an admitted spool skill before loading",
+            {"spool": string},
+            ["spool"],
+        ),
+        schema(
             "deliveries",
             "List workspace deliveries; pass next as after for the next page",
             {"after": {"type": "integer", "minimum": 0}},
@@ -162,7 +168,7 @@ BUILTINS = {
 async def serve(task, binding=None):
     from workspaces import binding_guard
 
-    api = Server("an", version="0.4.0")
+    api = Server("an", version="0.5.0")
     with connect() as db:
         record = get(db, "task", task)
         grants = record.get("tools", {})
