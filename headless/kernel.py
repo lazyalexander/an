@@ -9,7 +9,6 @@ import re
 import sqlite3
 import subprocess
 import sys
-import time
 import uuid
 from pathlib import Path
 
@@ -105,6 +104,50 @@ def register(db, ref):
         )
     if inspect_image(image)["descriptor"]["digest"] != digest:
         raise ValueError("Image changed during registration")
+    # Check the exact keepalive contract in isolation before granting the image.
+    probe = "an-register-" + uid()
+    try:
+        subprocess.run(
+            [
+                CONTAINER,
+                "run",
+                "--detach",
+                "--name",
+                probe,
+                "--read-only",
+                "--network",
+                "none",
+                "--entrypoint",
+                "/bin/sleep",
+                image,
+                "infinity",
+            ],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        actual = json.loads(subprocess.check_output([CONTAINER, "inspect", probe]))[0]
+        if actual["status"]["state"] != "running":
+            raise ValueError("Spool requires /bin/sleep infinity")
+    except Exception as exc:
+        # Failed startup can leave a stopped container, or none at all.
+        items = json.loads(
+            subprocess.check_output([CONTAINER, "list", "--all", "--format", "json"])
+        )
+        if any(item["id"] == probe for item in items):
+            subprocess.run(
+                [CONTAINER, "delete", "--force", probe],
+                check=True,
+                stdout=subprocess.DEVNULL,
+            )
+        raise ValueError(
+            f"Cannot register {image}: /bin/sleep infinity readiness probe failed: {exc}"
+        ) from exc
+    else:
+        subprocess.run(
+            [CONTAINER, "delete", "--force", probe],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
     put(db, "image", image, image, True)
     return image
 
@@ -126,8 +169,8 @@ def task_new(db, releases, editable, inputs):
     return key
 
 
-def stage(folder, files):
-    folder.mkdir()
+def stage(folder, files, existing=False):
+    folder.mkdir(exist_ok=existing)
     for name, data in files.items():
         path = folder / safe(name)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -145,215 +188,53 @@ def owned(db, task, run):
     return r
 
 
-def worker(key):
-    with connect() as db:
-        db.execute("BEGIN IMMEDIATE")
-        r = get(db, "run", key)
-        db.commit()
-        image = get(db, "image", r["spool"])
-        path = ROOT / "runs" / key
-        path.mkdir(parents=True)
+def legacy_status(db, r, key, op):
+    if op == "cancel" and r["status"] == "running":
+        r["status"] = "cancel_pending"
+    if r["status"] in ("running", "cancel_pending") and r.get("worker_pid"):
         try:
-            if inspect_image(image)["descriptor"]["digest"] != image.split("@")[-1]:
-                raise ValueError("Registered image digest changed")
-            stage(path / "work", get(db, "revision", r["work"]))
-            stage(path / "input", get(db, "revision", r["input"]))
-            out = path / "output"
-            out.mkdir()
-            if "," in str(path):
-                raise ValueError("Container mount path contains a comma")
-            cmd = [
-                CONTAINER,
-                "run",
-                "--name",
-                "an-" + key,
-                "--read-only",
-                "--network",
-                "none",
-                "-w",
-                "/work",
-                "--entrypoint",
-                r["argv"][0],
-            ]
-            for directory in ("input", "work", "output"):
-                mount = f"type=bind,source={path / directory},target=/{directory}"
-                cmd += [
-                    "--mount",
-                    mount
-                    + (
-                        ",readonly"
-                        if directory == "input"
-                        or (directory == "work" and not r["editable"])
-                        else ""
-                    ),
-                ]
-            with (path / "log").open("wb") as log:
-                process = subprocess.Popen(
-                    cmd + [image, *r["argv"][1:]], stdout=log, stderr=log
-                )
-                while process.poll() is None:
-                    if get(db, "run", key)["status"] == "cancel_pending":
-                        subprocess.run(
-                            [CONTAINER, "stop", "an-" + key], capture_output=True
-                        )
-                    time.sleep(0.2)
-                if process.returncode:
-                    raise RuntimeError(
-                        f"container exited {process.returncode}; see {path / 'log'}"
-                    )
-            files = {}
-            for name in r["outputs"]:
-                p = out / name
-                if p.resolve() != p or not p.is_file():
-                    raise ValueError("Missing or invalid declared output")
-                files[name] = blob(p.read_bytes())
-            db.execute("BEGIN IMMEDIATE")
-            r = get(db, "run", key)
-            if r["status"] == "running":
-                r.update(status="delivered", output=revision(db, files))
-                if r["editable"]:
-                    t = get(db, "task", r["task"])
-                    r["result_work"] = revision(db, snapshot(path / "work"))
-                    t["work"][image] = r["result_work"]
-                    put(db, "task", r["task"], t, True)
-        except Exception as e:
-            db.rollback()
-            db.execute("BEGIN IMMEDIATE")
-            r = get(db, "run", key)
-            if r["status"] == "running":
-                r.update(status="failed", error=str(e))
-        if r["status"] == "cancel_pending":
-            stopped = subprocess.run(
-                [CONTAINER, "delete", "an-" + key], capture_output=True
-            )
-            if stopped.returncode == 0:
-                r["status"] = "cancelled"
-        put(db, "run", key, r, True)
-    if Path(CONTAINER).exists() and r["status"] != "cancelled":
-        subprocess.run(
-            [CONTAINER, "delete", "an-" + key], capture_output=True, check=False
-        )
+            os.kill(r["worker_pid"], 0)
+        except ProcessLookupError:
+            r["status"] = "unknown"
+    put(db, "run", key, r, True)
+    return r
 
 
-def call(task, name, args):
-    with connect() as db:
-        db.execute("BEGIN IMMEDIATE")
-        t = get(db, "task", task)
-        if "work" not in t:
-            raise ValueError(
-                "Legacy directory task. Start a new task with a registered image."
-            )
-        if name == "state":
-            runs = {
-                key: json.loads(body)["status"]
-                for key, body in db.execute(
-                    "SELECT id,body FROM objects WHERE kind='run' AND json_extract(body,'$.task')=?",
-                    (task,),
-                )
-            }
-            return {**t, "runs": runs}
-        if name == "run":
-            s = args["spool"]
-            gen = t["work"][s]
-            if (
-                not args["argv"]
-                or not args["argv"][0]
-                or args["argv"][0].startswith("-")
-            ):
-                raise ValueError("Supply a guest executable and its arguments after --")
-            outputs = [safe(p) for p in args["outputs"]]
-            if (
-                s in t["editable"]
-                and db.execute(
-                    "SELECT 1 FROM objects WHERE kind='run' AND json_extract(body,'$.task')=? AND json_extract(body,'$.spool')=? AND json_extract(body,'$.status') IN ('running','cancel_pending','unknown')",
-                    (task, s),
-                ).fetchone()
-            ):
-                raise ValueError(
-                    "Another command still owns the editable work revision"
-                )
-            ref = args["input"]
-            inp = t["inputs"].get(ref)
-            if ref is None:
-                inp = revision(db, {})
-            elif inp is None:
-                upstream = owned(db, task, ref)
-                if upstream["status"] != "delivered":
-                    raise ValueError("Input has not been delivered")
-                inp = upstream["output"]
-            key = uid()
-            put(
-                db,
-                "run",
-                key,
-                dict(
-                    task=task,
-                    spool=s,
-                    work=gen,
-                    argv=args["argv"],
-                    outputs=outputs,
-                    editable=s in t["editable"],
-                    input=inp,
-                    source=ref,
-                    status="running",
-                ),
-            )
-            worker_process = subprocess.Popen(
-                [sys.executable, __file__, "_worker", key],
-                start_new_session=True,
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-            run = get(db, "run", key)
-            run["worker_pid"] = worker_process.pid
-            put(db, "run", key, run, True)
-            return key
-        r = owned(db, task, args["run"])
-        if name == "cancel" and r["status"] == "running":
-            r["status"] = "cancel_pending"
-            put(db, "run", args["run"], r, True)
-            db.commit()
-        if (
-            name == "status"
-            and r["status"] in ("running", "cancel_pending")
-            and r.get("worker_pid")
-        ):
-            try:
-                os.kill(r["worker_pid"], 0)
-            except ProcessLookupError:
-                inspect = subprocess.run(
-                    [CONTAINER, "inspect", "an-" + args["run"]], capture_output=True
-                )
-                r.update(status="unknown", container_observed=inspect.returncode == 0)
-                put(db, "run", args["run"], r, True)
-        if name == "log":
-            return (
-                (ROOT / "runs" / args["run"] / "log")
-                .read_bytes()[-65536:]
-                .decode(errors="replace")
-            )
-        return r
+def call(task, op, args):
+    from instances import call as dispatch
+
+    return dispatch(task, op, args)
 
 
 def main():
     if sys.argv[1:2] == ["_worker"]:
-        return worker(sys.argv[2])
+        from instances import worker
+
+        return worker(sys.argv[2], int(sys.argv[3]))
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
     export = sub.add_parser("export")
     export.add_argument("delivery")
     export.add_argument("destination", type=Path)
-    registration = sub.add_parser("register")
+    registration = sub.add_parser(
+        "register",
+        description="Register a spool image providing /bin/sleep infinity as its idle process.",
+    )
     registration.add_argument("image")
     registration.add_argument(
         "--archive", type=Path, help="Load an OCI image archive before registration"
     )
-    for cmd in ("state", "run", "status", "cancel", "log"):
+    for cmd in ("load", "unload", "state", "run", "status", "cancel", "log"):
         action = sub.add_parser(cmd)
         action.add_argument("--task", required=True)
-        if cmd == "run":
+        if cmd == "load":
             action.add_argument("--spool", required=True)
+        elif cmd == "unload":
+            action.add_argument("--instance", required=True)
+        elif cmd == "run":
+            target = action.add_mutually_exclusive_group(required=True)
+            target.add_argument("--spool")
+            target.add_argument("--instance")
             action.add_argument("--input")
             action.add_argument("--output", dest="outputs", action="append", default=[])
             action.add_argument("argv", nargs=argparse.REMAINDER)
@@ -387,7 +268,7 @@ def main():
         else:
             gateway.register(a.name, a.argv[1:] if a.argv[:1] == ["--"] else a.argv)
         return
-    if a.cmd in ("state", "run", "status", "cancel", "log"):
+    if a.cmd in ("load", "unload", "state", "run", "status", "cancel", "log"):
         if a.cmd == "run" and a.argv[:1] == ["--"]:
             a.argv = a.argv[1:]
         result = call(a.task, a.cmd, vars(a))

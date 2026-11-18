@@ -113,20 +113,33 @@ BUILTINS = {
     for t in [
         schema(
             "state",
-            "Inspect granted images, inputs, tools, connections, calls and runs",
+            "Inspect granted images, task-owned instances, inputs, tools, connections, calls and runs",
             {},
             [],
         ),
         schema(
+            "load",
+            "Explicitly load a task-owned spool instance",
+            {"spool": string},
+            ["spool"],
+        ),
+        schema(
+            "unload",
+            "Cancel any active command and remove the owned instance",
+            {"instance": string},
+            ["instance"],
+        ),
+        schema(
             "run",
-            "Run guest argv in a granted spool. Input is an input name or delivered run ID. Declare paths relative to /output. Returns run ID.",
+            "Run guest argv on a loaded instance. Supply its instance ID, or its loaded spool reference. Input is an input name or delivered run ID. Declare paths relative to /output. Returns run ID.",
             {
                 "spool": string,
+                "instance": string,
                 "input": string,
                 "argv": {**strings, "minItems": 1},
                 "outputs": strings,
             },
-            ["spool", "argv"],
+            ["argv"],
         ),
         *[
             schema(name, desc, {"run": string}, ["run"])
@@ -141,7 +154,7 @@ BUILTINS = {
 
 
 async def serve(task):
-    api = Server("an", version="0.2.0")
+    api = Server("an", version="0.3.0")
     with connect() as db:
         grants = get(db, "task", task).get("tools", {})
     routes = {}
