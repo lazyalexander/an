@@ -201,9 +201,24 @@ def legacy_status(db, r, key, op):
 
 
 def call(task, op, args):
+    if op == "deliveries":
+        from workspaces import deliveries
+
+        with connect() as db:
+            return deliveries(db, task, args.get("after", 0))
     from instances import call as dispatch
 
     return dispatch(task, op, args)
+
+
+def mcp_servers(selector):
+    return {
+        "an": {
+            "command": os.environ.get("AN_EXECUTABLE", "an"),
+            "args": ["mcp", *selector],
+            "env": {"AN_HOME": str(ROOT), "AN_PYTHON": sys.executable},
+        }
+    }
 
 
 def main():
@@ -241,7 +256,22 @@ def main():
         elif cmd != "state":
             action.add_argument("run")
 
-    sub.add_parser("mcp").add_argument("--task", required=True)
+    import workspaces as ws
+
+    mcp = sub.add_parser("mcp")
+    mcp.add_argument("--task")
+    ws.selector(mcp)
+    workspace = sub.add_parser("workspace").add_subparsers(dest="action", required=True)
+    create = workspace.add_parser("create")
+    create.add_argument("--spool", action="append", required=True)
+    create.add_argument("--editable", action="append", default=[])
+    create.add_argument("--allow-tool", action="append", default=[])
+    bind = workspace.add_parser("bind")
+    bind.add_argument("workspace")
+    ws.selector(bind)
+    deliveries = sub.add_parser("deliveries")
+    deliveries.add_argument("--task", required=True)
+    deliveries.add_argument("--after", type=int, default=0)
     servers = sub.add_parser("server").add_subparsers(dest="action", required=True)
     reg = servers.add_parser("register")
     reg.add_argument("name")
@@ -249,6 +279,7 @@ def main():
     servers.add_parser("tools").add_argument("name")
     tasks = sub.add_parser("task").add_subparsers(dest="action", required=True)
     new = tasks.add_parser("new")
+    ws.selector(new)
     new.add_argument("--spool", action="append", default=[])
     new.add_argument("--allow-tool", action="append", default=[])
     new.add_argument("--editable", action="append", default=[])
@@ -257,12 +288,49 @@ def main():
     resume.add_argument("delivery")
     resume.add_argument("--editable", action="append", default=[])
     a = parser.parse_args()
+    selected = any(
+        getattr(a, n, None) is not None for n in ("session", "key", "harness")
+    )
+    if a.cmd == "workspace":
+        with connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if a.action == "create":
+                result = {"workspace": ws.create(db, a)}
+            else:
+                result = {
+                    "workspace": ws.bind(db, a),
+                    "mcp_servers": mcp_servers(
+                        [
+                            "--harness",
+                            a.harness,
+                            "--session" if a.session else "--key",
+                            a.session or a.key,
+                        ]
+                    ),
+                }
+        print(json.dumps(result))
+        return
+    if a.cmd == "deliveries":
+        print(json.dumps(call(a.task, "deliveries", vars(a))))
+        return
+    if a.cmd == "task" and selected:
+        if a.spool or a.allow_tool or a.editable or a.input:
+            parser.error("Bound tasks inherit workspace configuration")
+        print(json.dumps({"task": ws.resolve(a, fresh=True)}))
+        return
     if a.cmd in ("server", "mcp"):
         import asyncio
         import gateway
 
         if a.cmd == "mcp":
-            asyncio.run(gateway.serve(a.task))
+            if bool(a.task) == selected:
+                parser.error("Select either task ID or a bound identity")
+            asyncio.run(
+                gateway.serve(
+                    ws.resolve(a) if selected else a.task,
+                    ws.identity(a) if selected else None,
+                )
+            )
         elif a.action == "tools":
             print(json.dumps(asyncio.run(gateway.list_server(a.name))))
         else:
@@ -311,20 +379,7 @@ def main():
             t = get(db, "task", key)
             t["work"][r["spool"]] = r.get("result_work", r["work"])
             put(db, "task", key, t, True)
-        print(
-            json.dumps(
-                {
-                    "task": key,
-                    "mcp_servers": {
-                        "an": {
-                            "command": os.environ.get("AN_EXECUTABLE", "an"),
-                            "args": ["mcp", "--task", key],
-                            "env": {"AN_HOME": str(ROOT), "AN_PYTHON": sys.executable},
-                        }
-                    },
-                }
-            )
-        )
+        print(json.dumps({"task": key, "mcp_servers": mcp_servers(["--task", key])}))
 
 
 if __name__ == "__main__":

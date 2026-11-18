@@ -342,10 +342,9 @@ def submit(db, i, args):
     elif source in t["inputs"]:
         inp = t["inputs"][source]
     else:
-        upstream = k.owned(db, i["task"], source)
-        if upstream["status"] != "delivered":
-            raise ValueError("Input has not been delivered")
-        inp = upstream["output"]
+        from workspaces import upstream
+
+        inp = upstream(db, i["task"], source)
     run = k.uid()
     path = k.ROOT / "runs" / run
     path.mkdir(parents=True)
@@ -398,7 +397,7 @@ def call(task, op, args):
                     (task,),
                 )
             }
-            return {**t, "instances": items, "runs": runs}
+            return {**t, "task": task, "instances": items, "runs": runs}
         if op in ("status", "log", "cancel"):
             r = k.owned(db, task, args["run"])
             if op == "log":

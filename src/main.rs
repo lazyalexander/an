@@ -2,8 +2,9 @@ fn main() {
     let mut args = std::env::args().skip(1);
     match args.next().as_deref() {
         Some(
-            command @ ("register" | "task" | "state" | "run" | "status" | "cancel" | "log"
-            | "export" | "server" | "mcp" | "load" | "unload"),
+            command @ ("workspace" | "deliveries" | "register" | "task" | "state" | "run"
+            | "status" | "cancel" | "log" | "export" | "server" | "mcp" | "load"
+            | "unload"),
         ) => {
             use std::os::unix::process::CommandExt;
             let script = concat!(env!("CARGO_MANIFEST_DIR"), "/headless/kernel.py");
