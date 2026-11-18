@@ -3,7 +3,7 @@ fn main() {
     match args.next().as_deref() {
         Some(
             command @ ("register" | "task" | "state" | "run" | "status" | "cancel" | "log"
-            | "export" | "server" | "mcp"),
+            | "export" | "server" | "mcp" | "load" | "unload"),
         ) => {
             use std::os::unix::process::CommandExt;
             let script = concat!(env!("CARGO_MANIFEST_DIR"), "/headless/kernel.py");
@@ -30,7 +30,7 @@ fn main() {
             std::process::exit(1);
         }
         _ => {
-            eprintln!("usage: an mcp --task ID | server register/tools | register IMAGE | task new/resume | state/run/status/cancel/log --task ID | export ID DIR");
+            eprintln!("usage: an mcp --task ID | server register/tools | register IMAGE | task new/resume | load/unload/state/run/status/cancel/log --task ID | export ID DIR");
             std::process::exit(2);
         }
     }
