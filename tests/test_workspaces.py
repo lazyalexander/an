@@ -14,6 +14,7 @@ class MappingTest(unittest.TestCase):
     def setUp(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
+        self.enterContext(patch.object(k, "ROOT", Path(tmp.name)))
         override = patch.object(k, "DB", Path(tmp.name) / "db")
         override.start()
         self.addCleanup(override.stop)

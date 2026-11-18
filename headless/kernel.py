@@ -13,12 +13,12 @@ import uuid
 from pathlib import Path
 
 ROOT = Path(os.environ.get("AN_HOME", Path.home() / ".an")).resolve()
-ROOT.mkdir(mode=0o700, parents=True, exist_ok=True)
 CONTAINER = "/usr/local/bin/container"
 DB = ROOT / "registry.sqlite3"
 
 
 def connect():
+    DB.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
     db = sqlite3.connect(DB, timeout=20)
     db.execute(
         "CREATE TABLE IF NOT EXISTS objects (kind, id, body, PRIMARY KEY(kind,id))"
@@ -104,50 +104,9 @@ def register(db, ref):
         )
     if inspect_image(image)["descriptor"]["digest"] != digest:
         raise ValueError("Image changed during registration")
-    # Check the exact keepalive contract in isolation before granting the image.
-    probe = "an-register-" + uid()
-    try:
-        subprocess.run(
-            [
-                CONTAINER,
-                "run",
-                "--detach",
-                "--name",
-                probe,
-                "--read-only",
-                "--network",
-                "none",
-                "--entrypoint",
-                "/bin/sleep",
-                image,
-                "infinity",
-            ],
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
-        actual = json.loads(subprocess.check_output([CONTAINER, "inspect", probe]))[0]
-        if actual["status"]["state"] != "running":
-            raise ValueError("Spool requires /bin/sleep infinity")
-    except Exception as exc:
-        # Failed startup can leave a stopped container, or none at all.
-        items = json.loads(
-            subprocess.check_output([CONTAINER, "list", "--all", "--format", "json"])
-        )
-        if any(item["id"] == probe for item in items):
-            subprocess.run(
-                [CONTAINER, "delete", "--force", probe],
-                check=True,
-                stdout=subprocess.DEVNULL,
-            )
-        raise ValueError(
-            f"Cannot register {image}: /bin/sleep infinity readiness probe failed: {exc}"
-        ) from exc
-    else:
-        subprocess.run(
-            [CONTAINER, "delete", "--force", probe],
-            check=True,
-            stdout=subprocess.DEVNULL,
-        )
+    from admission import check
+
+    check(db, image)
     put(db, "image", image, image, True)
     return image
 

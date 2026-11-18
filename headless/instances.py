@@ -11,6 +11,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+import admission
 import kernel as k
 
 
@@ -136,11 +137,14 @@ def instances(db, task):
 
 def load(db, task, t, spool, lock):
     work = t["work"][spool]
+    platform = admission.require(db, spool)["platform"]
     for old in instances(db, task):
         if old["spool"] != spool or old["status"] == "unloaded":
             continue
         reconcile(db, old, lock)
         if old["status"] == "running":
+            if old.get("platform") != platform:
+                raise ValueError("Unload the instance before loading the admitted platform")
             return old
         if old["status"] == "stopped" and not old["active"]:
             old["intent"] = "unload"
@@ -154,6 +158,7 @@ def load(db, task, t, spool, lock):
         name="an-" + ident,
         task=task,
         spool=spool,
+        platform=platform,
         status="loading",
         intent="load",
         active=None,
@@ -169,29 +174,12 @@ def load(db, task, t, spool, lock):
         (path / "output").mkdir()
         if k.inspect_image(spool)["descriptor"]["digest"] != spool.split("@")[-1]:
             raise ValueError("Image digest changed")
-        argv = [
-            "run",
-            "--detach",
-            "--name",
-            i["name"],
-            "--label",
-            "an.instance=" + ident,
-            "--network",
-            "none",
-            "--read-only",
-            "-w",
-            "/work",
-            "--entrypoint",
-            "/bin/sleep",
-        ]
-        for d in ("work", "input", "output"):
-            readonly = d == "input" or (d == "work" and spool not in t["editable"])
-            argv += [
-                "--mount",
-                f"type=bind,source={path / d},target=/{d}"
-                + (",readonly" if readonly else ""),
-            ]
-        apple([*argv, spool, "infinity"], lock)
+        apple(
+            admission.runtime_args(
+                spool, i["name"], "an.instance=" + ident, path, spool in t["editable"], platform
+            ),
+            lock,
+        )
     except Exception as exc:
         i.update(error=str(exc), intent="unload")
         save(db, "instance", i)
@@ -388,6 +376,11 @@ def call(task, op, args):
         t = k.get(db, "task", task)
         if op == "load":
             return load(db, task, t, args["spool"], lock)
+        if op == "skill":
+            image = args["spool"]
+            if image not in t["work"]:
+                raise ValueError("Spool outside task")
+            return admission.require(db, image)
         if op == "state":
             items = [reconcile(db, i, lock) for i in instances(db, task)]
             runs = {
@@ -397,7 +390,13 @@ def call(task, op, args):
                     (task,),
                 )
             }
-            return {**t, "task": task, "instances": items, "runs": runs}
+            return {
+                **t,
+                "spools": {s: admission.summary(db, s) for s in t["work"]},
+                "task": task,
+                "instances": items,
+                "runs": runs,
+            }
         if op in ("status", "log", "cancel"):
             r = k.owned(db, task, args["run"])
             if op == "log":
@@ -437,4 +436,8 @@ def call(task, op, args):
                 k.put(db, "run", r["id"], r, True)
             save(db, "instance", i)
         reconcile(db, i, lock)
-        return i if op == "unload" else submit(db, i, args)
+        if op == "unload":
+            return i
+        if i.get("platform") != admission.require(db, i["spool"])["platform"]:
+            raise ValueError("Unload and reload the instance on the admitted platform")
+        return submit(db, i, args)
