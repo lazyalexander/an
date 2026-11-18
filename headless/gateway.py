@@ -112,6 +112,12 @@ BUILTINS = {
     t.name: t
     for t in [
         schema(
+            "deliveries",
+            "List workspace deliveries; pass next as after for the next page",
+            {"after": {"type": "integer", "minimum": 0}},
+            [],
+        ),
+        schema(
             "state",
             "Inspect granted images, task-owned instances, inputs, tools, connections, calls and runs",
             {},
@@ -153,10 +159,16 @@ BUILTINS = {
 }
 
 
-async def serve(task):
-    api = Server("an", version="0.3.0")
+async def serve(task, binding=None):
+    from workspaces import binding_guard
+
+    api = Server("an", version="0.4.0")
     with connect() as db:
-        grants = get(db, "task", task).get("tools", {})
+        record = get(db, "task", task)
+        grants = record.get("tools", {})
+        builtins = dict(BUILTINS)
+        if not record.get("workspace"):
+            builtins.pop("an_deliveries")
     routes = {}
     peers = {}
     states = {}
@@ -203,8 +215,12 @@ async def serve(task):
 
     @api.list_tools()
     async def list_tools():
+        with binding_guard(binding, task=task):
+            return visible_tools()
+
+    def visible_tools():
         return [
-            *BUILTINS.values(),
+            *builtins.values(),
             *[
                 tool
                 for name, raw, tool in routes.values()
@@ -214,7 +230,11 @@ async def serve(task):
 
     @api.call_tool()
     async def invoke(name, arguments):
-        if name in BUILTINS:
+        with binding_guard(binding, task=task):
+            return await dispatch(name, arguments)
+
+    async def dispatch(name, arguments):
+        if name in builtins:
             result = await asyncio.to_thread(
                 call, task, name[3:], {"input": None, "outputs": [], **arguments}
             )

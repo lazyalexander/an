@@ -1,6 +1,6 @@
 [package]
 name = "an"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Task-scoped MCP gateway and OCI spool scheduler"
 license = "Apache-2.0"
