@@ -1,0 +1,206 @@
+[
+  {
+    "name": "an_skill",
+    "description": "Read an admitted spool skill before loading",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "spool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spool"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_deliveries",
+    "description": "List workspace deliveries; pass next as after for the next page",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "after": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_state",
+    "description": "Inspect granted images, task-owned instances, inputs, tools, connections, calls and runs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_load",
+    "description": "Explicitly load a task-owned spool instance",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "spool": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "spool"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_unload",
+    "description": "Cancel any active command and remove the owned instance",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "instance": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "instance"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_run",
+    "description": "Run guest argv on a loaded instance. Supply its instance ID, or its loaded spool reference. Input is an input name or delivered run ID. Declare paths relative to /output. Returns run ID.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "spool": {
+          "type": "string"
+        },
+        "instance": {
+          "type": "string"
+        },
+        "input": {
+          "type": "string"
+        },
+        "argv": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "outputs": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "argv"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_handoff",
+    "description": "Deliver a private candidate to a specific spool",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "type": "string"
+        },
+        "recipient_spool": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run",
+        "recipient_spool"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_status",
+    "description": "Inspect a run",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_log",
+    "description": "Read run log",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_publish",
+    "description": "Publish frozen run outputs",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "type": "string"
+        },
+        "request_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_cancel",
+    "description": "Request cancellation",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "run": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "run"
+      ],
+      "additionalProperties": false
+    }
+  }
+]

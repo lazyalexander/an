@@ -1,5 +1,4 @@
 """Run from the repository root with two admitted-format local image references."""
-import argparse
 import hashlib
 import json
 import os
@@ -9,7 +8,6 @@ import sys
 import tempfile
 import time
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "headless"))
 
 
 def main(sender, receiver):
@@ -39,12 +37,11 @@ def main(sender, receiver):
 
     with tempfile.TemporaryDirectory(dir="/private/tmp") as tmp:
         os.environ["AN_HOME"] = tmp
-        import workspaces
         a, b = [cli("register", image) for image in (sender, receiver)]
         assert a.split("@")[1] != b.split("@")[1]
         workspace = call("workspace", "create", "--spool", a, "--spool", b)["workspace"]
         call("workspace", "bind", workspace, "--harness", "test", "--session", "test")
-        task = workspaces.resolve(argparse.Namespace(harness="test", session="test", key=None))
+        task = call("task", "new", "--harness", "test", "--session", "test")["task"]
         flowfile = Path(tmp)/"flows.json"
         flowfile.write_text(json.dumps([["handoff", a, b]]))
         call("workspace","policy","set",workspace,"--file",str(flowfile))

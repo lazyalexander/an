@@ -14,7 +14,7 @@ Probe and task containers explicitly select the admitted platform. Unload and re
 
 ### Interface manifest
 
-Package a regular UTF-8 file at `/spool/spool.yaml`. Run `an check spool.yaml` before building. Install the Python dependencies from `headless/requirements.txt` into the interpreter used by An. The check prints the spool name on success and reports invalid fields or YAML syntax on stderr.
+Package a regular UTF-8 file at `/spool/spool.yaml`. Run `an check spool.yaml` before building. Build the native CLI with `cargo build --release --locked`. The check prints the spool name on success and reports invalid fields or YAML syntax on stderr.
 
 ```yaml
 schema: an.spool/v1
