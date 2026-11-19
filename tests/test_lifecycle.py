@@ -109,6 +109,25 @@ class LifecycleTest(unittest.TestCase):
             args["request_id"] = pending["request_id"]
             self.assertIn("spawn failed", instances.call(self.task, "log", args))
 
+    def test_handoff_retry_after_worker_launch_failure(self):
+        self.i["status"] = "running"
+        with kernel.connect() as db:
+            turn = instances.permissions.control(db, self.task, "begin", None, None)["turn"]
+        with patch.dict(os.environ, AN_TURN=turn), kernel.connect() as db:
+            key = "handoff-test"
+            ticket = dict(task=self.task, recipient="test", revision=kernel.revision(db, {}),
+                          stamp=instances.permissions.stamp(db, self.task))
+            kernel.put(db, "handoff", key, ticket)
+            db.commit()
+            args = {"argv":["true"], "input":key, "outputs":[]}
+            with patch("subprocess.Popen", side_effect=OSError("spawn failed")):
+                first = instances.submit(db, self.i, args)
+            self.assertEqual(kernel.get(db, "run", first)["status"], "failed")
+            self.assertEqual(kernel.get(db, "handoff", key), ticket)
+            with patch("subprocess.Popen"):
+                second = instances.submit(db, self.i, args)
+            self.assertEqual(kernel.get(db, "handoff", key)["used"], second)
+
     def test_legacy_writer_blocks_new_reservation(self):
         self.i["status"] = "running"
         with kernel.connect() as db:
