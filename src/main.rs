@@ -5,6 +5,7 @@ mod mcp;
 mod permission;
 mod runtime;
 mod store;
+mod transfer;
 mod workspace;
 
 use anyhow::{ensure, Context, Result};
@@ -76,6 +77,11 @@ enum Core {
         instance: Option<String>,
         #[arg(long)]
         input: Option<String>,
+        /// JSON object mapping manifest port names to immutable source references.
+        #[arg(long, conflicts_with = "input")]
+        inputs: Option<Value>,
+        #[arg(long, requires = "inputs")]
+        input_requests: Option<Value>,
         #[arg(long = "output")]
         outputs: Vec<String>,
         #[arg(long)]
@@ -196,13 +202,15 @@ fn run() -> Result<()> {
             spool,
             instance,
             input,
+            inputs,
+            input_requests,
             outputs,
             request_id,
             argv,
         } => call(
             target,
             &op,
-            json!({"spool":spool,"instance":instance,"input":input,"outputs":outputs,"request_id":request_id,"argv":argv}),
+            json!({"spool":spool,"instance":instance,"input":input,"inputs":inputs,"input_requests":input_requests,"outputs":outputs,"request_id":request_id,"argv":argv}),
         ),
         Core::Cancel(r) | Core::Publish(r) | Core::Status(r) | Core::Log(r) => call(
             r.target,

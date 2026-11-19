@@ -286,6 +286,14 @@ pub fn execute() -> Result<Value> {
                     let (s, d) = (&row[1], &row[2]);
                     let valid = match row[0].as_str() {
                         Some("input") => s.is_string() && images.contains(d),
+                        Some("bridge_input") => {
+                            s.as_str().is_some_and(|k| cfg["tools"].get(k).is_some())
+                                && images.contains(d)
+                        }
+                        Some("bridge_send") => {
+                            images.contains(s)
+                                && d.as_str().is_some_and(|k| cfg["tools"].get(k).is_some())
+                        }
                         Some("handoff") => images.contains(s) && images.contains(d),
                         Some("publish") => images.contains(s) && d == &id,
                         Some("export") => {
