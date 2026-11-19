@@ -4,7 +4,7 @@ fn main() {
         Some(
             command @ ("workspace" | "deliveries" | "register" | "task" | "state" | "run"
             | "status" | "cancel" | "log" | "export" | "server" | "mcp" | "load"
-            | "unload" | "publish" | "permission" | "handoff"),
+            | "unload" | "publish" | "permission" | "handoff" | "check"),
         ) => {
             use std::os::unix::process::CommandExt;
             let script = concat!(env!("CARGO_MANIFEST_DIR"), "/headless/kernel.py");
