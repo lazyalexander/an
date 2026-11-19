@@ -97,6 +97,18 @@ class LifecycleTest(unittest.TestCase):
             self.assertEqual(kernel.get(db, "run", run)["status"], "failed")
             self.assertIsNone(kernel.get(db, "instance", self.i["id"])["active"])
 
+        permissions = instances.permissions
+        with kernel.connect() as db:
+            turn = permissions.control(db, self.task, "begin", None, None)["turn"]
+        with patch.dict(os.environ, AN_TURN=turn):
+            args = {"run": run}
+            pending = instances.call(self.task, "log", args)
+            self.assertEqual(pending["status"], "permission_required")
+            with kernel.connect() as db:
+                permissions.control(db, self.task, "decide", pending["request_id"], "once")
+            args["request_id"] = pending["request_id"]
+            self.assertIn("spawn failed", instances.call(self.task, "log", args))
+
     def test_legacy_writer_blocks_new_reservation(self):
         self.i["status"] = "running"
         with kernel.connect() as db:

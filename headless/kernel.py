@@ -187,7 +187,13 @@ def main():
         return worker(sys.argv[2], int(sys.argv[3]))
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
+    control = sub.add_parser("permission")
+    control.add_argument("action", choices=["begin","end","pending","decide"])
+    control.add_argument("--task", required=True)
+    control.add_argument("--request-id")
+    control.add_argument("--decision", choices=["once","turn","deny"])
     export = sub.add_parser("export")
+    export.add_argument("--request-id")
     export.add_argument("delivery")
     export.add_argument("destination", type=Path)
     registration = sub.add_parser(
@@ -198,8 +204,9 @@ def main():
     registration.add_argument(
         "--archive", type=Path, help="Load an OCI image archive before registration"
     )
-    for cmd in ("load", "unload", "state", "run", "status", "cancel", "log"):
+    for cmd in ("load", "unload", "state", "run", "status", "cancel", "log", "publish"):
         action = sub.add_parser(cmd)
+        action.add_argument("--request-id")
         action.add_argument("--task", required=True)
         if cmd == "load":
             action.add_argument("--spool", required=True)
@@ -247,6 +254,11 @@ def main():
     resume.add_argument("delivery")
     resume.add_argument("--editable", action="append", default=[])
     a = parser.parse_args()
+    import permissions
+    if a.cmd == "permission":
+        with connect() as db:
+            print(json.dumps(permissions.control(db, a.task, a.action, a.request_id, a.decision)))
+        return
     selected = any(
         getattr(a, n, None) is not None for n in ("session", "key", "harness")
     )
@@ -295,7 +307,7 @@ def main():
         else:
             gateway.register(a.name, a.argv[1:] if a.argv[:1] == ["--"] else a.argv)
         return
-    if a.cmd in ("load", "unload", "state", "run", "status", "cancel", "log"):
+    if a.cmd in ("load", "unload", "state", "run", "status", "cancel", "log", "publish"):
         if a.cmd == "run" and a.argv[:1] == ["--"]:
             a.argv = a.argv[1:]
         result = call(a.task, a.cmd, vars(a))
@@ -304,7 +316,15 @@ def main():
     with connect() as db:
         if a.cmd == "export":
             r = get(db, "run", a.delivery)
-            stage(a.destination, get(db, "revision", r["output"]))
+            if r["status"] != "delivered":
+                raise ValueError("Expected published delivery")
+            destination = a.destination.resolve()
+            pending = permissions.gate(db, r["task"], "export", [a.delivery, r["output"], str(destination)], {}, a.request_id)
+            db.commit()
+            if pending:
+                print(json.dumps(pending))
+                return
+            stage(destination, get(db, "revision", r["output"]))
             return
         if a.cmd == "register":
             if a.archive:
