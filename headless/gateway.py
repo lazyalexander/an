@@ -153,6 +153,7 @@ BUILTINS = {
             },
             ["argv"],
         ),
+        schema("handoff", "Deliver a private candidate to a specific spool", {"run": string, "recipient_spool": string}, ["run", "recipient_spool"]),
         *[
             schema(name, desc, {"run": string}, ["run"])
             for name, desc in [
@@ -177,7 +178,7 @@ async def serve(task, binding=None):
         if not task_record.get("workspace"):
             builtins.pop("an_deliveries")
     for tool in builtins.values():
-        if tool.name in ("an_log", "an_publish", "an_run"):
+        if tool.name in ("an_log", "an_publish", "an_run", "an_handoff"):
             tool.inputSchema["properties"]["request_id"] = string
     bootstrap = not os.environ.get("AN_TURN")
     if bootstrap:

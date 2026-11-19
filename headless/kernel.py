@@ -188,10 +188,11 @@ def main():
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
     control = sub.add_parser("permission")
-    control.add_argument("action", choices=["begin","end","pending","decide"])
+    control.add_argument("action", choices=["begin","end","pending","decide","policy","effect"])
+    control.add_argument("--file", type=Path)
     control.add_argument("--task", required=True)
     control.add_argument("--request-id")
-    control.add_argument("--decision", choices=["once","turn","deny"])
+    control.add_argument("--decision", choices=["once","turn","deny","allow","ask","unavailable"])
     export = sub.add_parser("export")
     export.add_argument("--request-id")
     export.add_argument("delivery")
@@ -204,7 +205,7 @@ def main():
     registration.add_argument(
         "--archive", type=Path, help="Load an OCI image archive before registration"
     )
-    for cmd in ("load", "unload", "state", "run", "status", "cancel", "log", "publish"):
+    for cmd in ("load", "unload", "state", "run", "status", "cancel", "log", "publish", "handoff"):
         action = sub.add_parser(cmd)
         action.add_argument("--request-id")
         action.add_argument("--task", required=True)
@@ -219,6 +220,9 @@ def main():
             action.add_argument("--input")
             action.add_argument("--output", dest="outputs", action="append", default=[])
             action.add_argument("argv", nargs=argparse.REMAINDER)
+        elif cmd == "handoff":
+            action.add_argument("run")
+            action.add_argument("--recipient-spool", required=True)
         elif cmd != "state":
             action.add_argument("run")
 
@@ -228,6 +232,10 @@ def main():
     mcp.add_argument("--task")
     ws.selector(mcp)
     workspace = sub.add_parser("workspace").add_subparsers(dest="action", required=True)
+    policy = workspace.add_parser("policy")
+    policy.add_argument("mode", choices=["show", "set"])
+    policy.add_argument("workspace")
+    policy.add_argument("--file", type=Path)
     create = workspace.add_parser("create")
     create.add_argument("--spool", action="append", required=True)
     create.add_argument("--editable", action="append", default=[])
@@ -257,7 +265,14 @@ def main():
     import permissions
     if a.cmd == "permission":
         with connect() as db:
-            print(json.dumps(permissions.control(db, a.task, a.action, a.request_id, a.decision)))
+            if a.action == "policy":
+                print(json.dumps(permissions.set_host(db, a.task, json.loads(a.file.read_text()))))
+                return
+            result = permissions.control(db, a.task, a.action, a.request_id, a.decision)
+            if a.action == "begin" and a.file:
+                os.environ["AN_TURN"] = result["turn"]
+                permissions.set_host(db, a.task, json.loads(a.file.read_text()))
+            print(json.dumps(result))
         return
     selected = any(
         getattr(a, n, None) is not None for n in ("session", "key", "harness")
@@ -265,7 +280,14 @@ def main():
     if a.cmd == "workspace":
         with connect() as db:
             db.execute("BEGIN IMMEDIATE")
-            if a.action == "create":
+            if a.action == "policy":
+                if a.mode == "set":
+                    if not a.file:
+                        parser.error("workspace policy set requires --file")
+                    result = permissions.policy(db, a.workspace, json.loads(a.file.read_text()))
+                else:
+                    result = permissions.policy(db, a.workspace)
+            elif a.action == "create":
                 result = {"workspace": ws.create(db, a)}
             else:
                 result = {
@@ -307,7 +329,7 @@ def main():
         else:
             gateway.register(a.name, a.argv[1:] if a.argv[:1] == ["--"] else a.argv)
         return
-    if a.cmd in ("load", "unload", "state", "run", "status", "cancel", "log", "publish"):
+    if a.cmd in ("load", "unload", "state", "run", "status", "cancel", "log", "publish", "handoff"):
         if a.cmd == "run" and a.argv[:1] == ["--"]:
             a.argv = a.argv[1:]
         result = call(a.task, a.cmd, vars(a))
@@ -319,8 +341,7 @@ def main():
             if r["status"] != "delivered":
                 raise ValueError("Expected published delivery")
             destination = a.destination.resolve()
-            pending = permissions.gate(db, r["task"], "export", [a.delivery, r["output"], str(destination)], {}, a.request_id)
-            db.commit()
+            pending = permissions.gate(db, r["task"], "export", [a.delivery, r["output"], str(destination)], {}, a.request_id, ["export", r["spool"], str(destination)])
             if pending:
                 print(json.dumps(pending))
                 return

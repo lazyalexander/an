@@ -238,8 +238,11 @@ def worker(run, lease):
                     )
                 path = k.ROOT / "instances" / i["id"]
                 if r.get("source") is not None:
-                    permissions.current(db, task)
+                    db.execute("BEGIN IMMEDIATE")
+                    if permissions.stamp(db, task) != r.get("input_stamp"):
+                        raise ValueError("Input authority changed")
                 reset_folder(path / "input", k.get(db, "revision", r["input"]))
+                db.commit()
                 reset_folder(path / "output", {})
                 reset_folder(path / "work", k.get(db, "revision", r["work"]))
                 with (k.ROOT / "runs" / run / "log").open("wb") as log:
@@ -331,16 +334,25 @@ def submit(db, i, args):
         raise ValueError("Expected a guest executable")
     outputs = [k.safe(p) for p in args["outputs"]]
     source = args["input"]
+    ticket = None
     if source is None:
         inp = k.revision(db, {})
     elif source in t["inputs"]:
         inp = t["inputs"][source]
+    elif source.startswith("handoff-"):
+        ticket = k.get(db, "handoff", source)
+        if (ticket["task"] != i["task"] or ticket["recipient"] != i["spool"]
+                or ticket.get("used") or ticket["stamp"] != permissions.stamp(db, i["task"])):
+            raise ValueError("Invalid or revoked handoff")
+        inp = ticket["revision"]
     else:
         from workspaces import upstream
 
         inp = upstream(db, i["task"], source)
-    if source is not None:
-        pending = permissions.gate(db, i["task"], "input", [source, inp, i["spool"]], [i["id"], argv, outputs], args.get("request_id"))
+    if source is not None and ticket is None:
+        flow = (["input", source, i["spool"]] if source in t["inputs"]
+                else ["handoff", k.get(db, "run", source)["spool"], i["spool"]])
+        pending = permissions.gate(db, i["task"], "input", [source, inp, i["spool"]], [i["id"], argv, outputs], args.get("request_id"), flow)
         if pending:
             db.commit()
             return pending
@@ -362,6 +374,11 @@ def submit(db, i, args):
             editable=i["spool"] in t["editable"],
             status="running",
         )
+        if source is not None:
+            r["input_stamp"] = permissions.stamp(db, i["task"])
+        if ticket:
+            ticket["used"] = run
+            k.put(db, "handoff", source, ticket, True)
         i["active"] = run
         k.put(db, "run", run, r)
         save(db, "instance", i)
@@ -375,6 +392,9 @@ def submit(db, i, args):
                 stderr=subprocess.DEVNULL,
             )
         except OSError as exc:
+            if ticket:
+                ticket.pop("used")
+                k.put(db, "handoff", source, ticket, True)
             r.update(status="failed", error=f"Worker launch failed: {exc}")
             i["active"] = None
             k.put(db, "run", run, r, True)
@@ -408,9 +428,9 @@ def call(task, op, args):
                 "instances": items,
                 "runs": runs,
             }
-        if op in ("status", "log", "cancel", "publish"):
+        if op in ("status", "log", "cancel", "publish", "handoff"):
             r = k.owned(db, task, args["run"])
-            if op == "publish":
+            if op in ("handoff", "publish"):
                 if r["status"] != "awaiting_publication":
                     raise ValueError("Expected private candidate")
                 files = k.get(db, "revision", r["candidate"])
@@ -419,9 +439,18 @@ def call(task, op, args):
                     data = base64.b64decode(blob)
                     manifest.append([name, len(data), hashlib.sha256(data).hexdigest()])
                 destination = t.get("workspace") or task
-                pending = permissions.gate(db, task, op, [r["spool"], sorted(files), destination], [r["id"], manifest], args.get("request_id"))
+                if op == "handoff":
+                    destination = args["recipient_spool"]
+                    if destination not in t["work"]:
+                        raise ValueError("Recipient outside task")
+                pending = permissions.gate(db, task, op, [r["spool"], sorted(files), destination], [r["id"], manifest], args.get("request_id"), [op, r["spool"], destination])
                 if pending:
                     return pending
+                if op == "handoff":
+                    key = "handoff-" + k.uid()
+                    k.put(db, "handoff", key, dict(task=task, recipient=destination, source=r["id"],
+                          revision=r["candidate"], stamp=permissions.stamp(db, task)))
+                    return {"handoff": key}
                 r.update(output=r.pop("candidate"), status="delivered")
                 save(db, "run", r)
                 return {"status": "delivered", "run": r["id"]}
