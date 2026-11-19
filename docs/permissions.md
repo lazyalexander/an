@@ -17,3 +17,5 @@ The trusted harness can atomically begin a turn with `an permission begin --task
 Replace the entire turn policy with `an permission policy --task TASK --file host.json`. Every replacement invalidates previous requests, grants and unconsumed handoffs. Retry with fresh arguments and no request ID after a policy change. examples/harness_policy.py demonstrates a trusted adapter installing a single exact effect. For a user approval of a pending request, use the existing decide command instead.
 
 Use an_handoff(run, recipient_spool) for a private candidate. Pass the returned handoff ID as an_run input. It belongs to one task, turn, recipient and frozen revision. The public delivery list and host export accept only published deliveries.
+
+The dev artifact bridge adds scoped bridge-to-spool and spool-to-bridge flows, and named input approvals. See [private bridge artifacts](bridge-artifacts.md).

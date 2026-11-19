@@ -202,12 +202,82 @@ fn owned(db: &Connection, task: &str, id: &str) -> Result<Value> {
     ensure!(r["task"] == task, "Run outside task");
     Ok(r)
 }
+fn bridge_artifact(db: &Connection, task: &str, t: &Value, source: &str) -> Result<Value> {
+    let item = get(db, "artifact", source)?;
+    let origin = string(&item, "tool")?;
+    ensure!(
+        item["task"] == task
+            && t["tools"][origin] == item["server_revision"]
+            && get(db, "server", string(&item, "server")?)?["revision"] == item["server_revision"],
+        "Artifact outside task or bridge grant"
+    );
+    Ok(item)
+}
+
+fn input_bindings<'a>(
+    args: &'a Value,
+    manifest: &Value,
+) -> Result<Vec<(Option<&'a str>, &'a str)>> {
+    let named = args.get("inputs").filter(|v| !v.is_null());
+    ensure!(
+        named.is_none() || args["input"].is_null(),
+        "Choose input or inputs"
+    );
+    ensure!(
+        named.is_none() || args["request_id"].is_null(),
+        "Use input_requests for named ports"
+    );
+    if !args["input_requests"].is_null() {
+        let requests = args["input_requests"]
+            .as_object()
+            .context("Expected input request map")?;
+        let ports = named
+            .and_then(Value::as_object)
+            .context("input_requests requires inputs")?;
+        ensure!(
+            requests
+                .iter()
+                .all(|(name, id)| ports.contains_key(name) && id.is_string()),
+            "Invalid input request binding"
+        );
+    }
+    let mut bindings = Vec::new();
+    if let Some(value) = named {
+        let ports = value.as_object().context("Expected named inputs")?;
+        let declared = manifest["inputs"]
+            .as_array()
+            .context("Invalid admitted manifest")?;
+        for port in declared {
+            let name = string(port, "name")?;
+            ensure!(
+                port["required"] != true || ports.contains_key(name),
+                "Missing required input: {name}"
+            );
+        }
+        for (name, source) in ports {
+            ensure!(
+                declared.iter().any(|p| p["name"] == name.as_str()),
+                "Undeclared input: {name}"
+            );
+            bindings.push((
+                Some(name.as_str()),
+                source.as_str().context("Expected source reference")?,
+            ));
+        }
+    } else if let Some(source) = args["input"].as_str() {
+        bindings.push((None, source));
+    }
+    Ok(bindings)
+}
+
 fn submit(
     db: &mut Connection,
     task: &str,
     t: &Value,
     i: &mut Value,
     args: &Value,
+    manifest: &Value,
+    launch: impl FnOnce(&str, &File) -> std::io::Result<std::process::Child>,
 ) -> Result<Value> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let spool = string(i, "spool")?;
@@ -233,63 +303,105 @@ fn submit(
     for p in &outputs {
         artifacts::safe(p)?;
     }
-    let mut ticket = None;
+    let named = args.get("inputs").filter(|v| !v.is_null());
+    let bindings = input_bindings(args, manifest)?;
+    let mut tickets = Vec::new();
+    let mut decisions = Vec::new();
+    let mut files = json!({});
     let mut input_stamp = Value::Null;
-    let inp = if let Some(source) = args["input"].as_str() {
+    if !bindings.is_empty() {
         input_stamp = permission::stamp(&tx, task)?;
-        if source.starts_with("handoff-") && t["inputs"].get(source).is_none() {
-            let r = get(&tx, "handoff", source)?;
+    }
+    // Roll back approval consumption if a later port still needs a decision.
+    tx.execute_batch("SAVEPOINT input_decisions")?;
+    for (port, source) in bindings {
+        let (rev, flow) = if let Some(rev) = t["inputs"].get(source) {
+            (rev.clone(), Some(json!(["input", source, spool])))
+        } else if source.starts_with("handoff-") {
+            let ticket = get(&tx, "handoff", source)?;
             ensure!(
-                r["task"] == task
-                    && r["recipient"] == spool
-                    && r["used"].is_null()
-                    && r["stamp"] == input_stamp,
+                ticket["task"] == task
+                    && ticket["recipient"] == spool
+                    && ticket["used"].is_null()
+                    && ticket["stamp"] == input_stamp
+                    && !tickets.iter().any(|(key, _)| *key == source),
                 "Invalid or revoked handoff"
             );
-            let rev = r["revision"].clone();
-            ticket = Some((source, r));
-            rev
+            let rev = ticket["revision"].clone();
+            tickets.push((source, ticket));
+            (rev, None)
+        } else if source.starts_with("artifact-") {
+            let item = bridge_artifact(&tx, task, t, source)?;
+            let origin = string(&item, "tool")?;
+            (
+                item["revision"].clone(),
+                Some(json!(["bridge_input", origin, spool])),
+            )
         } else {
-            let (rev, flow) = if let Some(rev) = t["inputs"].get(source) {
-                (rev.clone(), json!(["input", source, spool]))
-            } else {
-                let up = get(&tx, "run", source)?;
-                if up["task"] != task {
-                    ensure!(
-                        t["workspace"].is_string()
-                            && up["outputs"].as_array().is_some_and(|a| !a.is_empty())
-                            && get(&tx, "task", string(&up, "task")?)?["workspace"]
-                                == t["workspace"],
-                        "Delivery outside workspace"
-                    );
-                }
-                ensure!(up["status"] == "delivered", "Input has not been delivered");
-                (up["output"].clone(), json!(["handoff", up["spool"], spool]))
-            };
-            if let Some(p) = permission::gate(
-                &tx,
-                task,
-                "input",
-                json!([source, rev, spool]),
-                json!([i["id"], argv, outputs]),
-                args["request_id"].as_str(),
-                Some(flow),
-            )? {
-                tx.commit()?;
-                return Ok(p);
+            let up = get(&tx, "run", source)?;
+            if up["task"] != task {
+                ensure!(
+                    t["workspace"].is_string()
+                        && up["outputs"].as_array().is_some_and(|a| !a.is_empty())
+                        && get(&tx, "task", string(&up, "task")?)?["workspace"] == t["workspace"],
+                    "Delivery outside workspace"
+                );
             }
-            rev
+            ensure!(up["status"] == "delivered", "Input has not been delivered");
+            (
+                up["output"].clone(),
+                Some(json!(["handoff", up["spool"], spool])),
+            )
+        };
+        if let Some(flow) = flow {
+            let scope = match port {
+                Some(name) => json!([source, rev, spool, name]),
+                None => json!([source, rev, spool]),
+            };
+            let details = match port {
+                Some(name) => json!([i["id"], argv, outputs, name, named]),
+                None => json!([i["id"], argv, outputs]),
+            };
+            let request = match port {
+                Some(name) => args["input_requests"][name].as_str(),
+                None => args["request_id"].as_str(),
+            };
+            if let Some(id) = request {
+                decisions.push((id, get(&tx, "request", id)?));
+            }
+            if let Some(mut pending) =
+                permission::gate(&tx, task, "input", scope, details, request, Some(flow))?
+            {
+                let id = string(&pending, "request_id")?.to_owned();
+                let row = get(&tx, "request", &id)?;
+                tx.execute_batch("ROLLBACK TO input_decisions")?;
+                put(&tx, "request", &id, &row)?;
+                if let Some(port) = port {
+                    pending["port"] = json!(port);
+                }
+                tx.commit()?;
+                return Ok(pending);
+            }
         }
-    } else {
-        json!(revision(&tx, &json!({}))?)
-    };
+        let input = get(&tx, "revision", rev.as_str().context("Invalid revision")?)?;
+        for (name, entry) in input.as_object().context("Invalid files")? {
+            artifacts::safe(name)?;
+            let key = if let Some(port) = port {
+                format!("{port}/{name}")
+            } else {
+                name.clone()
+            };
+            files[key] = entry.clone();
+        }
+    }
+    let inp = revision(&tx, &files)?;
     let id = uid();
     let dir = root()?.join("runs").join(&id);
     fs::create_dir_all(&dir)?;
     let lease = File::create_new(dir.join("lease"))?;
     lease.lock()?;
-    let mut r = json!({"id":id,"instance":i["id"],"task":task,"spool":spool,"work":t["work"][spool],"argv":argv,"input":inp,"source":args["input"],"outputs":outputs,"editable":editable,"status":"running","input_stamp":input_stamp});
-    if let Some((key, record)) = &ticket {
+    let mut r = json!({"inputs":named,"id":id,"instance":i["id"],"task":task,"spool":spool,"work":t["work"][spool],"argv":argv,"input":inp,"source":args["input"],"outputs":outputs,"editable":editable,"status":"running","input_stamp":input_stamp});
+    for (key, record) in &tickets {
         let mut used = record.clone();
         used["used"] = json!(id);
         put(&tx, "handoff", key, &used)?;
@@ -298,27 +410,15 @@ fn submit(
     save(&tx, "run", &r)?;
     save(&tx, "instance", i)?;
     tx.commit()?;
-    let mut cmd = Command::new(std::env::current_exe()?);
-    cmd.args(["_worker", &id, &lease.as_raw_fd().to_string()])
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
-    runtime::inherited(&mut cmd, &lease);
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::setsid() < 0 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        });
-    }
-    match cmd.spawn() {
+    match launch(&id, &lease) {
         Ok(child) => reap(child),
         Err(e) => {
             let tx = db.transaction()?;
-            if let Some((key, record)) = ticket {
+            for (key, record) in tickets {
                 put(&tx, "handoff", key, &record)?;
+            }
+            for (key, record) in decisions {
+                put(&tx, "request", key, &record)?;
             }
             r["status"] = json!("failed");
             r["error"] = json!(format!("Worker launch failed: {e}"));
@@ -329,6 +429,24 @@ fn submit(
         }
     }
     Ok(json!(id))
+}
+fn spawn_worker(id: &str, lease: &File) -> std::io::Result<std::process::Child> {
+    let mut cmd = Command::new(std::env::current_exe()?);
+    cmd.args(["_worker", id, &lease.as_raw_fd().to_string()])
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    runtime::inherited(&mut cmd, lease);
+    unsafe {
+        cmd.pre_exec(|| {
+            if libc::setsid() < 0 {
+                Err(std::io::Error::last_os_error())
+            } else {
+                Ok(())
+            }
+        });
+    }
+    cmd.spawn()
 }
 fn reap(mut child: std::process::Child) {
     std::thread::spawn(move || {
@@ -516,11 +634,20 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
     if op == "unload" {
         return Ok(i);
     }
+    let admission = runtime::require(&db, string(&i, "spool")?)?;
     ensure!(
-        i["platform"] == runtime::require(&db, string(&i, "spool")?)?["platform"],
+        i["platform"] == admission["platform"],
         "Reload instance on admitted platform"
     );
-    submit(&mut db, task, &t, &mut i, args)
+    submit(
+        &mut db,
+        task,
+        &t,
+        &mut i,
+        args,
+        &admission["manifest"],
+        spawn_worker,
+    )
 }
 pub fn worker(id: &str, fd: i32) -> Result<()> {
     // The descriptor is the inherited run lease. Do not leak it into container exec.
@@ -546,11 +673,23 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             );
             let p = path(&i)?;
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-            if !r["source"].is_null() {
+            if !r["input_stamp"].is_null() || !r["source"].is_null() {
                 ensure!(
                     r["input_stamp"] == permission::stamp(&tx, &task)?,
                     "Input authority changed"
                 );
+            }
+            let t = get(&tx, "task", &task)?;
+            let sources = r["inputs"]
+                .as_object()
+                .into_iter()
+                .flat_map(|m| m.values())
+                .chain(std::iter::once(&r["source"]))
+                .filter_map(Value::as_str);
+            for source in
+                sources.filter(|s| s.starts_with("artifact-") && t["inputs"].get(s).is_none())
+            {
+                bridge_artifact(&tx, &task, &t, source)?;
             }
             artifacts::stage(
                 &p.join("input"),
@@ -658,6 +797,72 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn named_inputs_preserve_approvals_and_tickets_until_all_ports_commit() -> Result<()> {
+        // One subprocess owns its environment and throwaway registry.
+        if std::env::var_os("AN_RESERVATION_CHILD").is_none() {
+            let dir = std::env::temp_dir().join(uid());
+            let status = Command::new(std::env::current_exe()?)
+                .args(["--exact", "instances::tests::named_inputs_preserve_approvals_and_tickets_until_all_ports_commit"])
+                .env("AN_HOME", &dir).env("AN_TURN", "turn").env("AN_RESERVATION_CHILD", "1")
+                .status()?;
+            if dir.is_dir() {
+                fs::remove_dir_all(dir)?;
+            }
+            assert!(status.success());
+            return Ok(());
+        }
+        let mut db = connect()?;
+        let rev = revision(&db, &json!({"data": "YQ=="}))?;
+        let t = json!({"work":{"dest":rev},"inputs":{"second":rev,"third":rev}});
+        let mut i = json!({"id":"i","task":"t","spool":"dest","status":"running","intent":"load"});
+        let manifest = json!({"inputs":[{"name":"a","required":true},{"name":"b","required":true},{"name":"c","required":true}]});
+        let mut args =
+            json!({"argv":["run"],"inputs":{"a":"handoff-one","b":"second","c":"third"}});
+        put(&db, "task", "t", &t)?;
+        put(&db, "turn", "t", &json!("turn"))?;
+        let ticket = json!({"task":"t","recipient":"dest","revision":rev,"stamp":permission::stamp(&db,"t")?});
+        put(&db, "handoff", "handoff-one", &ticket)?;
+        let fail = |_: &str, _: &File| Err(std::io::Error::other("injected launch failure"));
+        let mut missing = args.clone();
+        missing["inputs"].as_object_mut().unwrap().remove("c");
+        assert!(submit(&mut db, "t", &t, &mut i, &missing, &manifest, fail).is_err());
+        let mut invalid = args.clone();
+        invalid["inputs"]["extra"] = json!("second");
+        assert!(submit(&mut db, "t", &t, &mut i, &invalid, &manifest, fail).is_err());
+        for name in ["b", "c"] {
+            let pending = submit(&mut db, "t", &t, &mut i, &args, &manifest, fail)?;
+            assert_eq!(pending["port"], name);
+            let id = string(&pending, "request_id")?;
+            let mut request = get(&db, "request", id)?;
+            request["state"] = json!("once");
+            put(&db, "request", id, &request)?;
+            args["input_requests"][name] = json!(id);
+            assert_eq!(get(&db, "handoff", "handoff-one")?, ticket);
+            let first = string(&args["input_requests"], "b")?;
+            assert_eq!(get(&db, "request", first)?["state"], "once");
+        }
+        let failed = submit(&mut db, "t", &t, &mut i, &args, &manifest, fail)?;
+        let run = get(&db, "run", failed.as_str().unwrap())?;
+        assert_eq!(run["status"], "failed");
+        assert!(get(&db, "instance", "i")?["active"].is_null());
+        assert_eq!(get(&db, "handoff", "handoff-one")?, ticket);
+        for name in ["b", "c"] {
+            assert_eq!(
+                get(&db, "request", string(&args["input_requests"], name)?)?["state"],
+                "once"
+            );
+        }
+        let launch = |_: &str, _: &File| Command::new("/usr/bin/true").spawn();
+        let accepted = submit(&mut db, "t", &t, &mut i, &args, &manifest, launch)?;
+        let run = get(&db, "run", accepted.as_str().unwrap())?;
+        assert_eq!(
+            get(&db, "revision", string(&run, "input")?)?,
+            json!({"a/data":"YQ==","b/data":"YQ==","c/data":"YQ=="})
+        );
+        assert_eq!(get(&db, "handoff", "handoff-one")?["used"], accepted);
+        Ok(())
+    }
     #[test]
     fn completed_child_is_reaped_while_parent_remains_alive() {
         let child = Command::new("/usr/bin/true").spawn().unwrap();

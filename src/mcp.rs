@@ -42,6 +42,8 @@ enum Cmd {
 enum Server {
     Register {
         name: String,
+        #[arg(long = "artifact-tool")]
+        artifact_tools: Vec<String>,
         #[arg(trailing_var_arg = true, required = true)]
         argv: Vec<String>,
     },
@@ -68,6 +70,7 @@ async fn peer(config: &Value) -> Result<(Peer, Vec<Tool>)> {
     Ok((service, tools))
 }
 struct Route {
+    transfer: bool,
     server: String,
     raw: String,
     revision: Value,
@@ -160,32 +163,73 @@ impl Gateway {
         let approval = args.as_object_mut().unwrap().remove("_an_request_id");
         let id = uid();
         let mut audit = json!({"id":id,"task":self.task,"server":route.server,"tool":route.raw,"status":"unknown","start":now()});
+        let mut transfer = None;
+        let mut provenance = Value::Null;
+        let mut authority = Value::Null;
         {
             let mut db = connect()?;
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
             ensure!(self.allowed(&tx, route)?, "Tool grant is stale");
+            let tool_ref = format!("{}/{}", route.server, route.raw);
+            let source = if route.transfer {
+                ensure!(
+                    args.get("an_transfer").is_none(),
+                    "Reserved bridge argument"
+                );
+                crate::transfer::source(&tx, &self.task, &args)?
+            } else {
+                None
+            };
+            let flow = source
+                .as_ref()
+                .map(|(_, sender)| json!(["bridge_send", sender, tool_ref]));
+            let details = if route.transfer {
+                json!({"source_revision":source.as_ref().map(|(rev,_)|rev)})
+            } else {
+                json!({})
+            };
             let pending = permission::gate(
                 &tx,
                 &self.task,
                 "mcp",
                 json!([route.server, route.raw, route.revision, args]),
-                json!({}),
+                details,
                 approval
                     .as_ref()
                     .map(|v| v.as_str().context("Invalid request ID"))
                     .transpose()?,
-                None,
+                flow,
             )?;
             if let Some(p) = pending {
                 tx.commit()?;
                 return Ok(text(p));
+            }
+            if route.transfer {
+                audit["server_revision"] = route.revision.clone();
+                audit["source"] = args["an_source"].clone();
+                audit["source_revision"] = source
+                    .as_ref()
+                    .map(|(rev, _)| json!(rev))
+                    .unwrap_or(Value::Null);
+                let area = crate::transfer::Transfer::new(&id)?;
+                let source_id = args.as_object_mut().unwrap().remove("an_source");
+                args["an_transfer"] =
+                    area.prepare(&tx, source.as_ref().map(|(r, _)| r.as_str()))?;
+                provenance = json!({"task":self.task,"call":id,"server":route.server,"tool":tool_ref,"server_revision":route.revision,"source":source_id});
+                authority = permission::stamp(&tx, &self.task)?;
+                transfer = Some(area);
             }
             put(&tx, "call", &id, &audit)?;
             tx.commit()?;
         }
         let forwarded = CallToolRequestParams::new(route.raw.clone())
             .with_arguments(args.as_object().unwrap().clone());
-        let result = timeout(DEADLINE, self.peers[&route.server].call_tool(forwarded)).await;
+        let deadline = if route.transfer {
+            Duration::from_secs(240)
+        } else {
+            DEADLINE
+        };
+        let result = timeout(deadline, self.peers[&route.server].call_tool(forwarded)).await;
         audit["end"] = json!(now());
         match result {
             Ok(Ok(result)) => {
@@ -194,8 +238,33 @@ impl Gateway {
                 } else {
                     "completed"
                 });
-                put(&connect()?, "call", &id, &audit)?;
-                Ok(result)
+                let mut db = connect()?;
+                let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let response = if let Some(area) = transfer {
+                    let imported = (|| -> Result<CallToolResult> {
+                        ensure!(
+                            result.is_error != Some(true),
+                            "Bridge call failed (call {id})"
+                        );
+                        ensure!(
+                            self.allowed(&tx, route)?
+                                && permission::stamp(&tx, &self.task)? == authority,
+                            "Bridge authority changed"
+                        );
+                        let receipt = area.finish(&tx, provenance)?;
+                        audit["result"] = receipt.clone();
+                        Ok(text(receipt))
+                    })();
+                    if imported.is_err() && result.is_error != Some(true) {
+                        audit["status"] = json!("import_failed");
+                    }
+                    imported
+                } else {
+                    Ok(result)
+                };
+                put(&tx, "call", &id, &audit)?;
+                tx.commit()?;
+                response
             }
             Ok(Err(rmcp::service::ServiceError::McpError(e)))
                 if !matches!(e.code.0, 408 | -32000) =>
@@ -235,6 +304,9 @@ fn validate_builtin(schema: &JsonObject, args: &Value) -> Result<()> {
         ensure!(
             match def["type"].as_str() {
                 Some("string") => v.is_string(),
+                Some("object") => v
+                    .as_object()
+                    .is_some_and(|m| m.values().all(Value::is_string)),
                 Some("integer") => v.as_u64().is_some_and(|n| i64::try_from(n).is_ok()),
                 Some("array") => v.as_array().is_some_and(|a| a.iter().all(Value::is_string)
                     && a.len() >= def["minItems"].as_u64().unwrap_or(0) as usize),
@@ -295,7 +367,12 @@ fn executable(path: &std::path::Path) -> bool {
 pub async fn execute() -> Result<()> {
     match Cli::parse().cmd {
         Cmd::Server {
-            action: Server::Register { name, argv },
+            action:
+                Server::Register {
+                    name,
+                    argv,
+                    artifact_tools,
+                },
         } => {
             ensure!(
                 !name.is_empty()
@@ -316,7 +393,10 @@ pub async fn execute() -> Result<()> {
             let cwd = env::current_dir()?;
             let path = cwd.join(path);
             ensure!(executable(&path), "Executable not found");
-            let config = json!({"command":path,"args":argv[1..],"cwd":cwd});
+            let mut config = json!({"command":path,"args":argv[1..],"cwd":cwd});
+            if !artifact_tools.is_empty() {
+                config["artifact_tools"] = json!(artifact_tools);
+            }
             let mut db = connect()?;
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if !find(&tx, "server", &name)?.is_some_and(|s| s["config"] == config) {
@@ -354,6 +434,9 @@ pub async fn execute() -> Result<()> {
             };
             let record = get(&connect()?, "task", &task)?;
             let bootstrap = env::var("AN_TURN").unwrap_or_default().is_empty();
+            if !bootstrap {
+                crate::transfer::Transfer::recover()?;
+            }
             let mut builtins = BTreeMap::new();
             for tool in serde_json::from_str::<Vec<Tool>>(include_str!("tools.json"))? {
                 if (tool.name != "an_deliveries" || record["workspace"].is_string())
@@ -384,11 +467,16 @@ pub async fn execute() -> Result<()> {
                     let server = server.to_owned();
                     discovery.spawn(async move {
                         let result = peer(&cfg["config"]).await;
-                        (server, cfg["revision"].clone(), result)
+                        (
+                            server,
+                            cfg["revision"].clone(),
+                            cfg["config"]["artifact_tools"].clone(),
+                            result,
+                        )
                     });
                 }
                 while let Some(result) = discovery.join_next().await {
-                    let (server, rev, result) = result?;
+                    let (server, rev, artifact_tools, result) = result?;
                     let server = server.as_str();
                     let Ok((service, tools)) = result else {
                         states.insert(server.into(), "disconnected".into());
@@ -401,6 +489,21 @@ pub async fn execute() -> Result<()> {
                             continue;
                         }
                         let schema = std::sync::Arc::make_mut(&mut tool.input_schema);
+                        let transfer = artifact_tools
+                            .as_array()
+                            .is_some_and(|tools| tools.contains(&json!(raw)));
+                        if transfer {
+                            if schema["properties"].get("an_transfer").is_none()
+                                || schema["properties"].get("an_source").is_some()
+                            {
+                                continue;
+                            }
+                            if let Some(req) =
+                                schema.get_mut("required").and_then(Value::as_array_mut)
+                            {
+                                req.retain(|v| v != "an_transfer");
+                            }
+                        }
                         let Some(props) = schema
                             .entry("properties")
                             .or_insert(json!({}))
@@ -410,6 +513,10 @@ pub async fn execute() -> Result<()> {
                         };
                         if props.contains_key("_an_request_id") {
                             continue;
+                        }
+                        if transfer {
+                            props.remove("an_transfer");
+                            props.insert("an_source".into(),json!({"type":"string","description":"Private candidate run to send to this bridge"}));
                         }
                         props.insert("_an_request_id".into(), json!({"type":"string"}));
                         let prefix: String = format!("{server}_{raw}")
@@ -429,6 +536,7 @@ pub async fn execute() -> Result<()> {
                         routes.insert(
                             alias,
                             Route {
+                                transfer,
                                 server: server.into(),
                                 raw,
                                 revision: rev.clone(),

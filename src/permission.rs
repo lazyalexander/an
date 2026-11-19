@@ -1,5 +1,5 @@
 use crate::store::*;
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::{Parser, ValueEnum};
 use rusqlite::{Connection, TransactionBehavior};
 use serde_json::{json, Value};
@@ -29,6 +29,7 @@ enum Action {
     Begin,
     End,
     Pending,
+    Preview,
     Decide,
     Policy,
     Effect,
@@ -211,6 +212,34 @@ pub fn execute() -> Result<Value> {
                     }
                 }
                 json!(items)
+            }
+            Action::Preview => {
+                let id = request_id.context("Expected request id")?;
+                let r = get(&tx, "request", &id)?;
+                ensure!(
+                    r["task"] == task
+                        && r["state"] == "pending"
+                        && r["revisions"] == stamp(&tx, &task)?
+                        && r["operation"] == "mcp",
+                    "Expected current pending bridge request"
+                );
+                let scope = &r["scope"];
+                let server = scope[0].as_str().context("Invalid bridge")?;
+                let raw = scope[1].as_str().context("Invalid tool")?;
+                ensure!(
+                    get(&tx, "server", server)?["revision"] == scope[2]
+                        && get(&tx, "task", &task)?["tools"][format!("{server}/{raw}")] == scope[2],
+                    "Bridge grant changed"
+                );
+                let revision = r["details"]["source_revision"]
+                    .as_str()
+                    .context("Request has no artifact source")?;
+                let source = crate::transfer::source(&tx, &task, &scope[3])?;
+                ensure!(
+                    source.as_ref().is_some_and(|(rev, _)| rev == revision),
+                    "Bridge candidate changed"
+                );
+                json!({"revision":revision, "files":get(&tx,"revision",revision)?})
             }
             Action::Decide | Action::Effect => {
                 let id = request_id.ok_or_else(|| anyhow!("Expected request id"))?;

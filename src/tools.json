@@ -74,7 +74,7 @@
   },
   {
     "name": "an_run",
-    "description": "Run guest argv on a loaded instance. Supply its instance ID, or its loaded spool reference. Input is an input name or delivered run ID. Declare paths relative to /output. Returns run ID.",
+    "description": "Run guest argv on a loaded instance. Supply its instance ID, or its loaded spool reference. Input is an input name or delivered run ID. Declare paths relative to /output. Returns run ID. For named ports supply inputs as a mapping of port to source. Retry a pending port using input_requests mapping that port to its approved request ID, retaining earlier IDs.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -102,6 +102,18 @@
         },
         "request_id": {
           "type": "string"
+        },
+        "inputs": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "input_requests": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
         }
       },
       "required": [
