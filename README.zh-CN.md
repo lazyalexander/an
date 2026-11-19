@@ -10,4 +10,6 @@ Agent 通过 MCP 连接 An，使用工作区中的 spool。每个 spool 都是�
 
 一个 spool 可以把产物快照定向交给另一个 spool，也可以将它发布到工作区。需要用户授权时，由 harness 发起确认。开发者自行维护 spool 镜像。
 
+运行 `cargo build --release --locked` 构建 Rust CLI 和 stdio MCP 网关。运行 spool 需要 Apple Container。
+
 [Spool 镜像规范](docs/spool-images.md) · [工作区绑定](docs/workspaces.md) · [权限机制](docs/permissions.md)

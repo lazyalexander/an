@@ -4,3 +4,18 @@ version = "0.5.0"
 edition = "2021"
 description = "Task-scoped MCP gateway and OCI spool scheduler"
 license = "Apache-2.0"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "4", features = ["derive"] }
+rusqlite = { version = "0.36", features = ["bundled"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+sha2 = "0.10"
+base64 = "0.22"
+rmcp = { version = "3.7", default-features = false, features = ["server","client","transport-io","transport-child-process"] }
+tokio = { version="1", features=["rt-multi-thread","time","process"] }
+yaml-rust2 = "0.11"
+tar = "0.4"
+libc = "0.2"
+regex = "1"

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import sys
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "headless"))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "reference"))
 import kernel as k
 import workspaces as w
 

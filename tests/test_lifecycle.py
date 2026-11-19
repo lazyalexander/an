@@ -7,7 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "headless"))
+sys.path.insert(0, str(Path(__file__).resolve().parent / "reference"))
 sandbox = tempfile.TemporaryDirectory()
 os.environ["AN_HOME"] = sandbox.name
 import kernel

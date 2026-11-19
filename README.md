@@ -10,4 +10,6 @@ An connects an agent to a workspace of spools through MCP. Each spool is a conta
 
 A spool can pass a frozen artifact directly to another spool or publish it to the workspace. The harness handles user approval. Developers maintain their own spool images.
 
+Build the Rust CLI and stdio MCP gateway with `cargo build --release --locked`. Spool execution uses Apple Container.
+
 [Spool image format](docs/spool-images.md) · [Workspace bindings](docs/workspaces.md) · [Permissions](docs/permissions.md)
