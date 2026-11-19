@@ -93,6 +93,8 @@ def resolve(args, fresh=False):
             ]
             if active:
                 raise ValueError(f"Unload instances first: {active}")
+        if old:
+            k.put(db, "turn", old, None, True)
         wid = binding["workspace"]
         cfg = k.get(db, "workspace", wid)
         task = k.task_new(db, cfg["images"], cfg["editable"], {})

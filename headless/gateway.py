@@ -158,6 +158,7 @@ BUILTINS = {
             for name, desc in [
                 ("status", "Inspect a run"),
                 ("log", "Read run log"),
+                ("publish", "Publish frozen run outputs"),
                 ("cancel", "Request cancellation"),
             ]
         ],
@@ -170,11 +171,17 @@ async def serve(task, binding=None):
 
     api = Server("an", version="0.5.0")
     with connect() as db:
-        record = get(db, "task", task)
-        grants = record.get("tools", {})
+        task_record = get(db, "task", task)
+        grants = task_record.get("tools", {})
         builtins = dict(BUILTINS)
-        if not record.get("workspace"):
+        if not task_record.get("workspace"):
             builtins.pop("an_deliveries")
+    for tool in builtins.values():
+        if tool.name in ("an_log", "an_publish", "an_run"):
+            tool.inputSchema["properties"]["request_id"] = string
+    bootstrap = not os.environ.get("AN_TURN")
+    if bootstrap:
+        grants = {}
     routes = {}
     peers = {}
     states = {}
@@ -196,10 +203,13 @@ async def serve(task, binding=None):
                 for raw, tool in (await catalog(session)).items():
                     if raw in permitted:
                         alias = tool_name(name, raw)
+                        if "_an_request_id" in tool.inputSchema.get("properties", {}):
+                            continue
+                        tool.inputSchema.setdefault("properties", {})["_an_request_id"] = string
                         routes[alias] = (
                             name,
                             raw,
-                            tool.model_copy(update={"name": alias}),
+                            tool.model_copy(update={"name": alias, "outputSchema": None}),
                         )
                 peers[name] = session
                 states[name] = "connected"
@@ -225,6 +235,8 @@ async def serve(task, binding=None):
             return visible_tools()
 
     def visible_tools():
+        if bootstrap:
+            return [builtins["an_state"]]
         return [
             *builtins.values(),
             *[
@@ -240,6 +252,13 @@ async def serve(task, binding=None):
             return await dispatch(name, arguments)
 
     async def dispatch(name, arguments):
+        import permissions
+
+        if bootstrap and name == "an_state":
+            identity = {"task": task, "workspace": task_record.get("workspace")}
+            return [types.TextContent(type="text", text=json.dumps(identity))]
+        with connect() as db:
+            permissions.current(db, task)
         if name in builtins:
             result = await asyncio.to_thread(
                 call, task, name[3:], {"input": None, "outputs": [], **arguments}
@@ -273,6 +292,12 @@ async def serve(task, binding=None):
             raise ValueError("Tool grant is stale")
         if states.get(server) != "connected" or server not in peers:
             raise ValueError("Downstream disconnected; reconnect the task session")
+        arguments = dict(arguments)
+        request = arguments.pop("_an_request_id", None)
+        with connect() as db:
+            pending = permissions.gate(db, task, "mcp", [server, raw, grants[f"{server}/{raw}"], arguments], {}, request)
+        if pending:
+            return [types.TextContent(type="text", text=json.dumps(pending))]
         key = uid()
         record = dict(
             task=task,

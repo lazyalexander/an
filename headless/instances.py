@@ -1,6 +1,7 @@
 """Task-owned Apple containers. Serialize control decisions per task."""
 
 import base64
+import hashlib
 import fcntl
 import json
 import os
@@ -11,6 +12,7 @@ import time
 from contextlib import contextmanager
 from pathlib import Path
 
+import permissions
 import admission
 import kernel as k
 
@@ -235,6 +237,8 @@ def worker(run, lease):
                         "Could not confirm owned running instance before exec"
                     )
                 path = k.ROOT / "instances" / i["id"]
+                if r.get("source") is not None:
+                    permissions.current(db, task)
                 reset_folder(path / "input", k.get(db, "revision", r["input"]))
                 reset_folder(path / "output", {})
                 reset_folder(path / "work", k.get(db, "revision", r["work"]))
@@ -269,7 +273,9 @@ def worker(run, lease):
                     if p.resolve() != p or not p.is_file():
                         raise ValueError(f"Missing or invalid output: {name}")
                     files[name] = k.blob(p.read_bytes())
-                r.update(status="delivered", output=k.revision(db, files))
+                r.update(status="awaiting_publication" if files else "completed")
+                if files:
+                    r["candidate"] = k.revision(db, files)
                 if r["editable"]:
                     t = k.get(db, "task", task)
                     r["result_work"] = k.revision(db, k.snapshot(path / "work"))
@@ -333,6 +339,11 @@ def submit(db, i, args):
         from workspaces import upstream
 
         inp = upstream(db, i["task"], source)
+    if source is not None:
+        pending = permissions.gate(db, i["task"], "input", [source, inp, i["spool"]], [i["id"], argv, outputs], args.get("request_id"))
+        if pending:
+            db.commit()
+            return pending
     run = k.uid()
     path = k.ROOT / "runs" / run
     path.mkdir(parents=True)
@@ -397,14 +408,37 @@ def call(task, op, args):
                 "instances": items,
                 "runs": runs,
             }
-        if op in ("status", "log", "cancel"):
+        if op in ("status", "log", "cancel", "publish"):
             r = k.owned(db, task, args["run"])
+            if op == "publish":
+                if r["status"] != "awaiting_publication":
+                    raise ValueError("Expected private candidate")
+                files = k.get(db, "revision", r["candidate"])
+                manifest = []
+                for name, blob in sorted(files.items()):
+                    data = base64.b64decode(blob)
+                    manifest.append([name, len(data), hashlib.sha256(data).hexdigest()])
+                destination = t.get("workspace") or task
+                pending = permissions.gate(db, task, op, [r["spool"], sorted(files), destination], [r["id"], manifest], args.get("request_id"))
+                if pending:
+                    return pending
+                r.update(output=r.pop("candidate"), status="delivered")
+                save(db, "run", r)
+                return {"status": "delivered", "run": r["id"]}
             if op == "log":
-                return (
-                    (k.ROOT / "runs" / args["run"] / "log")
-                    .read_bytes()[-65536:]
-                    .decode(errors="replace")
-                )
+                pending = permissions.gate(db, task, op, [r["id"], "agent"], {}, args.get("request_id"))
+                if pending:
+                    return pending
+                path = k.ROOT / "runs" / args["run"] / "log"
+                try:
+                    with path.open("rb") as log:
+                        log.seek(max(0, os.fstat(log.fileno()).st_size - 65536))
+                        content = log.read(65536).decode(errors="replace")
+                except FileNotFoundError:
+                    content = ""
+                if r.get("error"):
+                    return f"{content}\nAn: {r['error']}".lstrip("\n")
+                return content
             if "instance" not in r:
                 return k.legacy_status(db, r, args["run"], op)
             i = k.get(db, "instance", r["instance"])
@@ -414,7 +448,8 @@ def call(task, op, args):
                 k.put(db, "run", args["run"], r, True)
                 save(db, "instance", i)
             reconcile(db, i, lock)
-            return k.owned(db, task, args["run"])
+            result = k.owned(db, task, args["run"])
+            return {key: result[key] for key in ("id", "status", "spool") if key in result}
         if args.get("instance"):
             i = k.get(db, "instance", args["instance"])
             if i["task"] != task or (args.get("spool") and args["spool"] != i["spool"]):
