@@ -187,6 +187,7 @@ def main():
         return worker(sys.argv[2], int(sys.argv[3]))
     parser = argparse.ArgumentParser()
     sub = parser.add_subparsers(dest="cmd", required=True)
+    sub.add_parser("check").add_argument("path", type=Path)
     control = sub.add_parser("permission")
     control.add_argument("action", choices=["begin","end","pending","decide","policy","effect"])
     control.add_argument("--file", type=Path)
@@ -262,6 +263,17 @@ def main():
     resume.add_argument("delivery")
     resume.add_argument("--editable", action="append", default=[])
     a = parser.parse_args()
+    if a.cmd == "check":
+        import manifest
+        try:
+            if not a.path.is_file():
+                raise ValueError("Expected regular manifest file")
+            with a.path.open("rb") as stream:
+                result = manifest.check(stream.read(manifest.LIMIT + 1))
+        except (OSError, ValueError) as exc:
+            parser.exit(1, f"{a.path}: {exc}\n")
+        print(result["name"])
+        return
     import permissions
     if a.cmd == "permission":
         with connect() as db:

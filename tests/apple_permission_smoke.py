@@ -1,11 +1,16 @@
+"""Pass a local spool image with a valid /spool/spool.yaml."""
+import argparse
 import os,tempfile,subprocess,json,time
 from pathlib import Path
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("image")
+args = parser.parse_args()
 with tempfile.TemporaryDirectory(dir="/private/tmp") as tmp:
     os.environ["AN_HOME"]=tmp
     def cli(*args):
         return subprocess.check_output(["target/debug/an",*args],text=True).strip()
     def call(*args): return json.loads(cli(*args))
-    image=cli("register","an-spool-v05:v1")
+    image=cli("register", args.image)
     src=Path(tmp)/"seed"
     src.write_text("round trip")
     task=call("task","new","--spool",image,"--input",str(src))["task"]

@@ -8,13 +8,16 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "headless"))
 import admission
 
 
-def layout(skill=b"Run main", code=b"x", link=None):
+VALID = b"schema: an.spool/v1\nname: example\nsummary: Example\ninputs: []\noutputs: []\n"
+
+def layout(skill=b"Run main", code=b"x", link=None, manifest=VALID):
     buf = io.BytesIO()
     with tarfile.open(fileobj=buf, mode="w") as tar:
         for name, content in [
             ("spool", None),
             ("spool/code", None),
             ("spool/SKILL.md", skill),
+            ("spool/spool.yaml", manifest),
             ("spool/code/main", code),
         ]:
             if content is False:
@@ -34,7 +37,7 @@ def layout(skill=b"Run main", code=b"x", link=None):
 
 class LayoutTest(unittest.TestCase):
     def test_minimum(self):
-        self.assertEqual(layout(), "Run main")
+        self.assertEqual(layout()[0], "Run main")
 
     def test_layout_budget(self):
         from unittest.mock import patch
@@ -54,7 +57,7 @@ class LayoutTest(unittest.TestCase):
             return original(archive)
 
         with patch.object(tarfile.TarFile, "next", check_cache):
-            self.assertEqual(layout(), "Run main")
+            self.assertEqual(layout()[0], "Run main")
 
     def test_runtime_platform(self):
         platform = {"os": "linux", "architecture": "arm64"}
@@ -65,6 +68,10 @@ class LayoutTest(unittest.TestCase):
 
     def test_invalid_members(self):
         for kwargs in [
+            dict(manifest=False),
+            dict(manifest=b"x"*65537),
+            dict(manifest=VALID+b"name: duplicate"),
+            dict(manifest=VALID+b"unknown: true"),
             dict(skill=False),
             dict(skill=b" \n"),
             dict(skill=b"\xff"),
@@ -73,7 +80,7 @@ class LayoutTest(unittest.TestCase):
             dict(code=b""),
         ] + [
             dict(link=p)
-            for p in ("spool", "spool/code", "spool/code/main", "spool/SKILL.md")
+            for p in ("spool/spool.yaml", "spool", "spool/code", "spool/code/main", "spool/SKILL.md")
         ]:
             with self.subTest(kwargs=list(kwargs)), self.assertRaises(ValueError):
                 layout(**kwargs)
@@ -99,7 +106,7 @@ class LayoutTest(unittest.TestCase):
                 db,
                 "admission",
                 image.split("@")[-1],
-                dict(spec=admission.SPEC, **platform),
+                dict(spec=admission.SPEC, manifest={"name":"example","summary":"Example"}, manifest_digest="a"*64, **platform),
             )
             db.commit()
             with patch.object(admission.subprocess, "check_output") as cli:

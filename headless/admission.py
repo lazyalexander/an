@@ -9,7 +9,9 @@ import tarfile
 from pathlib import PurePosixPath
 import kernel as k
 
-SPEC = "spool/v1"
+import manifest
+
+SPEC = "spool/v2"
 MAX_SPOOL_ENTRIES = 16384
 MAX_PATH_BYTES = 4096
 MAX_SPOOL_PATH_BYTES = 4 * 1024 * 1024
@@ -18,6 +20,7 @@ MAX_SPOOL_PATH_BYTES = 4 * 1024 * 1024
 def inspect_layout(stream):
     dirs = set()
     members = {}
+    interface = None
     skill = None
     spool_path_bytes = 0
     with tarfile.open(fileobj=stream, mode="r|*") as archive:
@@ -38,6 +41,12 @@ def inspect_layout(stream):
             members[path] = entry.isfile() and entry.size > 0
             if entry.isdir():
                 dirs.add(path)
+            if path == PurePosixPath("spool/spool.yaml"):
+                if not entry.isfile() or entry.size > manifest.LIMIT:
+                    raise ValueError("Expected regular spool.yaml of at most 64 KiB")
+                raw = archive.extractfile(entry).read()
+                interface = manifest.check(raw)
+                manifest_digest = hashlib.sha256(raw).hexdigest()
             if path == PurePosixPath("spool/SKILL.md"):
                 if not entry.isfile() or not 0 < entry.size <= 262144:
                     raise ValueError("Expected regular SKILL.md of at most 256 KiB")
@@ -54,7 +63,9 @@ def inspect_layout(stream):
         raise ValueError(
             "Expected real /spool/code directory with a nonempty regular file"
         )
-    return skill
+    if interface is None:
+        raise ValueError("Missing /spool/spool.yaml: add the manifest and rebuild the image")
+    return skill, interface, manifest_digest
 
 
 def runtime_args(image, name, labels, path, editable, platform):
@@ -109,12 +120,15 @@ def record(db, image):
         (image.split("@")[-1],),
     ).fetchone()
     data = json.loads(row[0]) if row else {}
-    return {**data, "image": image} if data.get("spec") == SPEC else {}
+    return {**data, "image": image} if data.get("spec") == SPEC and data.get("manifest") and data.get("manifest_digest") else {}
 
 
 def summary(db, image):
     data = record(db, image)
     data.pop("skill", None)
+    interface = data.pop("manifest", None)
+    if interface:
+        data.update(name=interface["name"], summary=interface["summary"])
     return {**data, "status": "admitted" if data else "needs_admission"}
 
 
@@ -205,7 +219,7 @@ def check(db, image):
                 pass_fds=(lock.fileno(),),
             ) as process:
                 try:
-                    skill = inspect_layout(process.stdout)
+                    skill, interface, manifest_digest = inspect_layout(process.stdout)
                 finally:
                     process.stdout.close()
                 if process.wait():
@@ -236,6 +250,8 @@ def check(db, image):
             image.split("@")[-1],
             dict(
                 spec=SPEC,
+                manifest=interface,
+                manifest_digest=manifest_digest,
                 image=image,
                 **info,
                 skill=skill,
