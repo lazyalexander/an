@@ -1,4 +1,6 @@
 /target
 /state
+/.worktrees/
+/lab/
 __pycache__/
 *.pyc
