@@ -2,7 +2,7 @@
 
 Date: 2026-11-20
 Branch: `dev-benchmark`
-Status: proposed
+Status: executed — see [Execution amendments](#execution-amendments-2026-11-21) for the differences between this design and what was built and gated.
 
 ## Intent
 
@@ -212,3 +212,16 @@ Measured locally on 2026-11-20; the user may correct these values:
 ## Builder decisions
 
 The builder may choose the lab's internal module layout, pinned base images and in-image document tools, exact deterministic fixture contents, command-line flags, and result schema field names. These choices must preserve the workload and measurement contracts above and must not add product dependencies.
+
+## Execution amendments (2026-11-21)
+
+The harness was built and matured on `dev-benchmark`; this section records where the executed benchmark deviates from the design above. The full audit trail (rulings, deferred minors, run records) lives in the session ledger; the curated baseline lives in the public docs repo.
+
+- **B1 dimensions reduced.** Separate instance stop/start and a dedicated Demo A cold/warm lifecycle pair were excluded: the public CLI exposes unload/reload rather than stop/start, and Demo A has its own end-to-end suite. B1 covers cold/warm load, first/subsequent runs, status polling, cancellation, and unload.
+- **B5 worker-launch-failure uses a `product_unit_test` oracle.** The public CLI exposes no deterministic, non-destructive way to make the shipped `container exec` launch fail, so that case verifies against the existing Rust unit test rather than the release binary. The other four B5 cases exercise the release binary directly.
+- **B5 partial skip fails.** A case skipped mid-suite (e.g. container services down) makes the suite exit non-zero; only an all-skipped suite reports `skipped`. The spec's "skipped is not passed" is enforced inside the suite, not only by the gate wrapper.
+- **B2 32 MiB single-file case is a known limit, not a pass.** It fails at the 300-second bridge timeout boundary (~109 KiB/s end-to-end through the demo bridge). This is a product/demo throughput characteristic to fix, not flake; B2 stays out of every automated tier and runs manually before release with human adjudication.
+- **B0 `mcp_route` is a composite window.** It includes stdio session setup, tool listing, the call, and — when approval is required — the permission decision and retry. The spec's separate approval timing holds for the B2-approved paths (`approval_ms` is recorded there); B0's number must be read as route-plus-approval cost. The fast-gate baseline band is built on this composite, so it is consistent gate-to-gate.
+- **B3 scaling is a coarse composite metric.** Each worker's image build, load, one unlabeled warmup run (counted in successes), and one Demo C end-to-end all sit inside the level window. Ratios are meaningful as same-direction scaling; absolute `runs_per_second` is not comparable to B1 run timings, and image cache state affects the window.
+- **Gate thresholds are relative to a rebaselineable file.** The fast gate (`lab/benchmark/ci_fast.sh` + `gate_policy.py`) fails on any skip, on a B0 median >20% over `baselines.json`, or on B3 scaling >20% over baseline at any level. Baselines were captured on the reference machine (macOS 27.2.0, arm64, 18 CPUs, Apple Container 1.7.1); deliberate environment changes require a stated ledger entry to rebaseline. The 20% band is an operational choice, not a statistical confidence bound.
+- **Acceptance checks use `assert`.** Running the lab under `python -O` silently disables them; the gate and suite commands run without it.
