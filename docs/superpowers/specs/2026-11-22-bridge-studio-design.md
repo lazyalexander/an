@@ -50,6 +50,11 @@ The user interacts with the studio window on an **iPad with Apple
 Pencil via Sidecar**. Krita handles tablet input natively; our job is
 to verify that path, not to implement it.
 
+The user plans to eventually unify the several GUI windows of this
+flow into one window, the way browser tabs unify pages. This design
+does not build that window, but it leaves a deliberate opening for it
+— see **Presentation layer** under Architecture.
+
 ## Goals
 
 - One visible studio window: stock Krita plus our plugin. We build no
@@ -78,6 +83,9 @@ to verify that path, not to implement it.
 - Any GUI of our own: no shell, no canvas, no viewport, no second
   window. (Revised: the previous revision made the GUI our own governed
   product; the pivot removes it entirely.)
+- The unified "stage" window itself. The opening for it (phase state +
+  window roster interface, see Architecture) is part of this design;
+  the shell is a later milestone.
 - Modeling inside the studio flow. The user models in their own
   CAD/modeler; we are not a DCC. Models enter only as exported files.
 - Live drag-follow sync (60 Hz). Sync happens on lock, not during the
@@ -95,6 +103,11 @@ to verify that path, not to implement it.
   any use of the user's own browser profile.
 - Ambient shared state between components: default isolation, explicit
   flow, as in the bridge spec.
+- Screen-capture streaming of an app into a window of ours with
+  forwarded synthetic input: the spike measured that synthetic input
+  cannot carry pressure (CGEvent reaches the view with pressure 0),
+  so this architecture would silently kill a hard requirement.
+  Rejected on evidence, not taste.
 - Any part of the adapter, pipeline, or orchestrator living outside
   product governance (no lab rules, no untracked scratch code).
 
@@ -183,6 +196,24 @@ to verify that path, not to implement it.
   the same panel. While locked, the import pipeline is frozen at the
   current scene snapshot — the model never drifts under the brush.
   Unlocking re-syncs to whatever the watch folder has since delivered.
+- **Presentation layer (opening for a future unified window).** The
+  orchestrator exposes two things beyond the pipeline triggers: the
+  **phase state** and a **window roster** (which real window the user
+  should face in each phase — the modeler during adjustment, Krita
+  while locked). Today's presentation layer is trivial: the two stock
+  windows exist side by side and the user switches between them by
+  hand, consistent with the roster's semantics. Tomorrow's unified
+  window — a thin "stage" shell with browser-style tabs — subscribes
+  to the same interface and manages only visibility and placement of
+  the same stock windows (Accessibility-level move/resize/hide; no
+  forks, no embedding, no input forwarding). Because all data flow
+  already crosses the orchestrator, the stage shell is a pure
+  presentation add-on: carriers, pipeline, and the native pressure
+  path are untouched. The phase machine makes tab switching a
+  first-class behavior of that shell — lock raises the painting tab,
+  unlock raises the modeling tab. When built, it enters governance
+  like everything else (spec/plan/test/review); until built, nothing
+  in this milestone depends on it.
 - **Pose-keyed archive, simplified by the carrier.** The Krita document
   *is* the archive: strokes live on layers, layers live in per-pose
   groups, `.kra` saves them natively. No stroke-event capture is needed
