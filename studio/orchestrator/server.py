@@ -1,16 +1,35 @@
 import json
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from adapter.core.archive import list_versions, read_thumbnail
+
 from .app import Orchestrator
+from .ledger import Ledger
+from .macro.manifest import MANIFEST
+from .macro.state import build_state
 from .phase import InvalidTransition, NoPose
+from .scenes import SceneStore
 
 GATED_PREFIXES = ("/api/decision/", "/api/macro/")
 
 
 def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
-                ui_token: str | None = None) -> ThreadingHTTPServer:
+                ui_token: str | None = None, archives_dir: Path | None = None,
+                ledger: Ledger | None = None, scenes: SceneStore | None = None,
+                preview_path: Path | None = None) -> ThreadingHTTPServer:
+    if archives_dir is None:
+        archives_dir = getattr(app, "_archives_dir", None)
+    if ledger is None:
+        ledger = getattr(app, "_ledger", None)
+    if scenes is None:
+        scenes = getattr(app, "_scenes", None)
+    if preview_path is None:
+        run_dir = getattr(app, "_run_dir", None)
+        preview_path = (Path(run_dir) / "preview" / "current.png"
+                        if run_dir is not None else None)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):  # the ledger is the record
@@ -23,6 +42,13 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
             self.send_header("Content-Length", str(len(body)))
             self.end_headers()
             self.wfile.write(body)
+
+        def _send_bytes(self, code: int, data: bytes, content_type: str) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
 
         def _read_json(self) -> dict:
             length = int(self.headers.get("Content-Length") or 0)
@@ -65,12 +91,50 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
                 self._send(404, {"error": "not found"})
 
         def do_GET(self) -> None:
-            if self.path == "/api/status":
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if path.startswith(GATED_PREFIXES) and not self._authorized():
+                self._send(403, {"error": "bad key"})
+                return
+            if path == "/api/status":
                 self._send(200, app.status())
-            elif self.path == "/api/session/layers":
+            elif path == "/api/session/layers":
                 self._layers()
+            elif path == "/api/macro/manifest":
+                self._send(200, MANIFEST)
+            elif path == "/api/macro/state":
+                self._state()
+            elif path == "/api/macro/preview.png":
+                self._preview_png()
+            elif path == "/api/macro/archive-thumb":
+                self._archive_thumb(parsed)
             else:
                 self._send(404, {"error": "not found"})
+
+        def _state(self) -> None:
+            self._send(200, build_state(app, archives_dir, ledger, scenes))
+
+        def _preview_png(self) -> None:
+            if preview_path is None or not Path(preview_path).is_file():
+                self._send(404, {"error": "no preview"})
+                return
+            self._send_bytes(200, Path(preview_path).read_bytes(), "image/png")
+
+        def _archive_thumb(self, parsed) -> None:
+            ids = parse_qs(parsed.query).get("id", [])
+            if not ids or not ids[0]:
+                self._send(400, {"error": "missing id"})
+                return
+            version = next((v for v in list_versions(archives_dir)
+                            if v["id"] == ids[0]), None)
+            if version is None:
+                self._send(404, {"error": "unknown version"})
+                return
+            data = read_thumbnail(version["kra"])
+            if data is None:
+                self._send(404, {"error": "no thumbnail"})
+                return
+            self._send_bytes(200, data, "image/png")
 
         def _pose(self) -> None:
             try:
