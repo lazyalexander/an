@@ -22,8 +22,8 @@ def main(argv=None) -> None:
         pipeline = FakePipeline()
     else:
         try:
-            from pipeline.docker_pipeline import DockerPipeline
-            pipeline = DockerPipeline()
+            from pipeline.container_pipeline import ContainerPipeline
+            pipeline = ContainerPipeline()
         except ImportError:
             parser.error("real pipeline unavailable; pass --fake")
     app = Orchestrator(ledger, pipeline, (args.width, args.height), run_dir=run_dir)
