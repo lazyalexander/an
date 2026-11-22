@@ -7,13 +7,26 @@ any pipeline build starts (design doc, Risks).
 
 ## Status
 
-**Gate FAIL on the plain-Sidecar route. Recovery route selected:
-driver-level injector (Codonic Pad). Retest pending.**
+**Gate PASS on the injector route (2026-11-22). Pipeline work is
+unblocked.**
 
-Pipeline work remains blocked on this gate. Nothing in this document
-changes the approved design; the design revision it implies
-(Sidecar → injector wording, dependency list) is deferred until the
-retest passes and is subject to re-approval.
+Retest outcome (evidence: `studio/spikes/sidecar-pressure/RESULTS.md`,
+"Route B retest"; screenshot `tester-pass.jpg`; OS-layer log
+`probe/probe-padmac-os-pass.log`):
+
+- After TCC re-grant and PadMac relaunch, the native OS probe received
+  full `tabletPoint` delivery (pressure 0.078→0.81, real tilt,
+  `deviceID` present, proximity events).
+- After a Krita restart (Qt tablet device cache — see Failure
+  handling), the Krita Tablet Tester showed blue tablet-event lines on
+  all three protocol strokes: light `P=` 1.2%–14.5%, heavy
+  7.8%–52.5%, ramp 1.2%→76.1%, live tilt 23–28°. The pass criterion
+  (blue lines + `P=` spanning ~0.2–0.9) is met with margin.
+
+The design revision this implies (Sidecar → injector wording,
+dependency list, Risks) is applied to the design document in the same
+change and is subject to user re-approval (HARD-GATE) before Plan 1
+is written.
 
 ## What was measured
 
@@ -85,20 +98,25 @@ latency is recorded as a remark only.
 
 ## Failure handling
 
-On FAIL, in order: verify the Accessibility permission (Screen
-Recording alone yields picture without input) → quit and relaunch the
-host → retest once. Still failing: Astropad Slate under the same
-protocol. Still failing: hardware tablet, and the iPad input premise
-is dropped from this milestone.
+On FAIL, in order: remove and re-grant **both** PadMac permissions
+(Accessibility + Screen Recording — the System Settings toggle can
+show "on" while the TCC binding is silently dead; observed in retest
+run 1) → quit and relaunch the host → **restart Krita** (Qt caches
+tablet devices at startup; symptom of a stale cache: other apps and
+the OS probe show pressure while Krita logs plain mouse) → retest
+once. Still failing: Astropad Slate under the same protocol. Still
+failing: hardware tablet, and the iPad input premise is dropped from
+this milestone.
 
 ## Consequences of a pass
 
-1. Minor design-doc revision: input route wording Sidecar → injector,
-   dependency list gains injector host/client names and versions,
-   Risks updated (Sidecar-pressure risk closes; new risk: third-party
-   host with elevated entitlements).
-2. User re-approval of the design (HARD-GATE).
-3. New Plan 1 written against the approved design.
+1. ~~Minor design-doc revision~~ — **done**: input route wording
+   Sidecar → injector, injector dependency constraint added, Risks
+   updated (Sidecar-pressure risk closed; three operational risks
+   recorded).
+2. User re-approval of the design (HARD-GATE) — **pending**.
+3. New Plan 1 written against the approved design — after
+   re-approval.
 
 ## Defense and privacy notes
 

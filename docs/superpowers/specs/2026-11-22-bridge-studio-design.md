@@ -1,8 +1,10 @@
 # Bridge Studio — one painting window on the software bridge
 
-Date: 2026-11-22 (revised 2026-11-22: carrier pivot)
+Date: 2026-11-22 (revised 2026-11-22: carrier pivot; revised 2026-11-22:
+input route Sidecar → injector, gate passed)
 Branch: `dev-bridge-studio`
-Status: approved (2026-11-22, carrier revision incl. presentation-layer opening)
+Status: carrier revision approved (2026-11-22, incl. presentation-layer
+opening); input-route revision pending re-approval (HARD-GATE)
 Builds on: `docs/superpowers/specs/2026-11-22-software-bridge-design.md`
 (spike report: `docs/superpowers/reports/2026-11-22-software-bridge-spike-report.md`,
 branch `dev-software-bridge`)
@@ -16,6 +18,18 @@ branch `dev-software-bridge`)
 > history; its remaining question (stylus pressure) is re-posed against
 > Krita as a new gate. This revision supersedes the shell/canvas design;
 > the old text remains in git history.
+
+> **Revision note (2026-11-22, input route).** The pressure gate failed
+> on the plain-Sidecar route (phase report:
+> `2026-11-22-bridge-studio-pressure-gate.md`; evidence:
+> `studio/spikes/sidecar-pressure/RESULTS.md`): macOS delivers the
+> Sidecar Pencil to ordinary apps as a plain mouse. The user selected
+> the recovery route — a **driver-level injector** (Codonic Pad: PadMac
+> host + PadPad iPad client) — and the retest **passed** on the
+> reference machine (same evidence file, "Route B retest": blue tablet
+> lines, pressure 1.2%–76.1%, live tilt). This revision switches the
+> input route from Sidecar to the injector; carrier, pipeline, and
+> phase architecture are unchanged.
 
 ## Intent and why
 
@@ -47,8 +61,9 @@ The flow has two phases:
   adjustment.
 
 The user interacts with the studio window on an **iPad with Apple
-Pencil via Sidecar**. Krita handles tablet input natively; our job is
-to verify that path, not to implement it.
+Pencil via a driver-level injector** (Codonic Pad: PadMac host on the
+Mac, PadPad client on the iPad). Krita handles tablet input natively;
+our job is to verify that path, not to implement it.
 
 The user plans to eventually unify the several GUI windows of this
 flow into one window, the way browser tabs unify pages. This design
@@ -107,7 +122,11 @@ does not build that window, but it leaves a deliberate opening for it
   forwarded synthetic input: the spike measured that synthetic input
   cannot carry pressure (CGEvent reaches the view with pressure 0),
   so this architecture would silently kill a hard requirement.
-  Rejected on evidence, not taste.
+  Rejected on evidence, not taste. (The injector chosen for pen input
+  is not this architecture: it injects driver-level tablet events that
+  arrive as genuine NSEvent `tabletPoint` input — verified at the OS
+  layer in the spike — not synthetic CGEvents, and the window being
+  streamed is Krita's own, not a window of ours.)
 - Any part of the adapter, pipeline, or orchestrator living outside
   product governance (no lab rules, no untracked scratch code).
 
@@ -116,12 +135,18 @@ does not build that window, but it leaves a deliberate opening for it
 - macOS with Retina displays: rendering and capture must be
   native-pixel correct (2×), as verified in the spike.
 - Pressure input is Krita's native tablet handling with Apple Pencil
-  over iPad Sidecar. This is the stack's main risk and is gate-tested
-  on the reference machine before the pipeline is built (see Risks).
+  delivered by the injector (PadMac host + PadPad client). **Gate
+  passed** on the reference machine before pipeline work begins
+  (`studio/spikes/sidecar-pressure/RESULTS.md`, "Route B retest").
 - Krita is a pinned external dependency (reference machine: 5.3.4).
   The adapter uses only the official Python API (`krita` module,
   LibKis). If a needed capability is missing from the API, the answer
   is a design change on our side, not a Krita patch.
+- The injector pair (PadMac host, PadPad iPad client) is a pinned
+  external input dependency, granted Screen Recording + Accessibility
+  on the reference machine; exact versions live in the spike
+  RESULTS.md, requirements in the phase-gate report's Preconditions
+  table.
 - The spine framework layer keeps its zero-domain-knowledge rule; the
   adapter and pipeline are product surfaces above adapters, not part of
   the spine.
@@ -142,7 +167,8 @@ does not build that window, but it leaves a deliberate opening for it
 ### Painting carrier (decided)
 
 - **Krita — CHOSEN.** Professional brush engine with first-class
-  pressure/tilt/rotation and a mature Sidecar path; official Python
+  pressure/tilt/rotation and a mature tablet-input path (verified
+  end-to-end through the injector on the reference machine); official Python
   scripting API gives a real adapter (document and layer CRUD, pixel
   read/write, native `.kra` save) rather than DOM hacks; `.kra` (zip +
   layers + metadata) maps near-directly onto the pose-keyed archive
@@ -151,8 +177,9 @@ does not build that window, but it leaves a deliberate opening for it
 - **Self-hosted Kleki (web).** The bridge spike already validated the
   automation path (~1.2 s push) and owning the source would dissolve
   the governance problem. Rejected: basic brush engine, weak layers, no
-  project file format, and — decisively — the web-on-Sidecar pressure
-  path is unverified, a viability risk against a hard requirement.
+  project file format, and — decisively — the web-carrier pressure
+  path (browser tablet events through any input route considered) is
+  unverified, a viability risk against a hard requirement.
 - **Self-built shell + canvas (previous revision's choice).** Rejected
   by the carrier pivot: full ownership in exchange for building a
   painting application ourselves. The user chose not to build a GUI.
@@ -257,12 +284,28 @@ does not build that window, but it leaves a deliberate opening for it
 
 ## Risks
 
-- **Pressure over Sidecar** (main gate): Apple Pencil pressure through
-  iPad Sidecar into Krita's tablet handling must be verified on the
-  reference machine (draw test + Krita's tablet event log) before
-  pipeline work begins. If it fails, the fallback is a native input
-  path decision (e.g., direct USB/Bluetooth stylus or a different
-  carrier), which reopens this section — the gate exists to fail early.
+- **Pressure input — CLOSED (gate passed 2026-11-22).** The original
+  Sidecar-pressure risk failed its gate: macOS delivers the Sidecar
+  Pencil to ordinary apps as a plain mouse (analysis in
+  `2026-11-22-bridge-studio-pressure-gate.md`). The recovery route —
+  driver-level injector (Codonic Pad: PadMac host + PadPad client) —
+  passed the same protocol on the reference machine: blue tablet-event
+  lines on all three protocol strokes, pressure spanning 1.2%–76.1%,
+  live tilt (`studio/spikes/sidecar-pressure/RESULTS.md`, "Route B
+  retest"). Three operational risks succeed it:
+  - **Third-party host with elevated entitlements.** PadMac needs
+    Screen Recording + Accessibility. Both are revocable in System
+    Settings; revoke them if this route is abandoned. The vendor
+    states pen/canvas traffic stays local (no cloud relay).
+  - **TCC permission binding can silently die** when PadMac is
+    relaunched repeatedly: System Settings shows the toggle on while
+    injection has already degraded to a plain mouse — the exact FAIL
+    signature of the first retest run. Recovery: remove and re-grant
+    both permissions for PadMac, then relaunch PadMac.
+  - **Qt tablet device cache.** After injector or device changes,
+    Krita keeps receiving plain mouse events until restarted (symptom:
+    other apps show pressure, Krita does not). Recovery: restart
+    Krita.
 - **Krita API surface**: document/layer CRUD, pixel transfer, and
   docker UI are documented and sufficient on paper; the thin vertical
   slice (create document → push layers → save/reopen) doubles as the
