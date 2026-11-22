@@ -1,5 +1,5 @@
 # Blender ships no linux-arm64 build; use the official linux-x64 tarball under
-# Docker Desktop's amd64 emulation on Apple Silicon (ledger Ruling 2026-11-22).
+# Apple Container's amd64 emulation (--rosetta) on Apple Silicon.
 FROM --platform=linux/amd64 ubuntu:24.04
 
 ARG BLENDER_VERSION=5.2.3
