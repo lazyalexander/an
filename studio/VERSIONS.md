@@ -7,7 +7,7 @@
 | Python (orchestrator + tests) | 3.13.12 | `python3` on PATH (miniconda); shims target Krita's bundled Python 3.10 and Blender's bundled Python |
 | PadMac (injector host) | 1.3.3 | `/Applications/PadMac.app`; TCC permissions per `docs/superpowers/specs/2026-11-22-bridge-studio-pressure-gate.md` |
 | PadPad (injector client) | version on device | iPad; paired with PadMac during gate PASS 2026-11-22 |
-| Docker Desktop | present; daemon off when idle | `docker version`; required for pipeline tasks (STUDIO_DOCKER=1) |
+| Apple Container (pipeline runtime) | 1.7.1 | `container --version`; service must be running (`container system status`); required for pipeline tasks (STUDIO_CONTAINER=1); amd64 runs use `--rosetta` |
 
 Install notes live with their components: the Krita plugin installs via
 `studio/adapter/install.sh` (Task 7); the Blender addon installs as a symlink

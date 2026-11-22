@@ -5,11 +5,11 @@ import pytest
 
 
 def pytest_collection_modifyitems(config, items):
-    if os.environ.get("STUDIO_DOCKER") == "1":
+    if os.environ.get("STUDIO_CONTAINER") == "1":
         return
-    skip = pytest.mark.skip(reason="requires STUDIO_DOCKER=1 and a running Docker daemon")
+    skip = pytest.mark.skip(reason="requires STUDIO_CONTAINER=1 and the Apple Container service")
     for item in items:
-        if "docker" in item.keywords:
+        if "container" in item.keywords:
             item.add_marker(skip)
 
 
