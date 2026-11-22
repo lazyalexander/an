@@ -89,7 +89,8 @@ def set_version_status(kra_path: Path, status: str, restored_from: str | None = 
     sidecar = _sidecar_path(kra_path)
     payload = _load_payload(sidecar)
     payload["status"] = status
-    payload["restored_from"] = restored_from
+    if restored_from is not None:
+        payload["restored_from"] = restored_from
     sidecar.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 

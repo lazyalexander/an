@@ -93,6 +93,15 @@ def test_set_version_status_rejects_unknown(tmp_path):
         set_version_status(kra, "deleted")
 
 
+def test_status_only_update_preserves_restored_from(tmp_path):
+    kra = make_version(tmp_path, "pose_r2.kra", "2026-11-23T04:00:00+00:00")
+    set_version_status(kra, "pushed", restored_from="s1")
+    set_version_status(kra, "adopted")
+    v = read_version(kra)
+    assert v["status"] == "adopted"
+    assert v["restored_from"] == "s1"
+
+
 def test_list_versions_sorted_and_skips_broken(tmp_path):
     # three sidecars, one malformed; expect two entries sorted by created
     make_version(tmp_path, "pose_b.kra", "2026-11-23T02:00:00+00:00")
