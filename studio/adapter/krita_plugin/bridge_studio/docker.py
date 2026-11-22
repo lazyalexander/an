@@ -61,13 +61,15 @@ class RealDocument:
         return node
 
     def layer_from_png(self, name, parent, png_path):
+        from adapter.core.pixels import rgba8888_to_krita_u8
         layer = self._doc.createNode(name, "paintlayer")
         (parent or self._doc.rootNode()).addChildNode(layer, None)
         image = QImage(str(png_path)).convertToFormat(QImage.Format_RGBA8888)
         ptr = image.bits()
         ptr.setsize(image.byteCount())
-        layer.setPixelData(ptr.asstring(image.byteCount()), 0, 0,
-                           image.width(), image.height())
+        layer.setPixelData(
+            rgba8888_to_krita_u8(ptr.asstring(image.byteCount())), 0, 0,
+            image.width(), image.height())
         return layer
 
     def set_locked(self, node, locked):
@@ -128,20 +130,24 @@ class BridgeDocker(DockWidget):
         if self._broken:
             return
         try:
-            status = _get("/api/status")
-        except OSError:
+            from adapter.core.statusview import lock_enabled, parse_status
+            status = parse_status(_get("/api/status"))
+        except (OSError, ValueError):
+            self._set_offline()
+            return
+        if status is None:
             self._set_offline()
             return
         phase = status["phase"]
-        session = status.get("session")
-        age = status.get("pose_age_ms")
+        session = status["session"]
+        age = status["pose_age_ms"]
         text = "phase={}".format(phase)
         if age is not None:
             text += " pose_age={}ms".format(age)
         if session:
             text += " session={}".format(session["state"])
         self._status_label.setText(text)
-        self._lock_button.setEnabled(phase == "ADJUSTMENT" and age is not None)
+        self._lock_button.setEnabled(lock_enabled(phase, age))
         self._unlock_button.setEnabled(phase == "LOCKED")
         if (phase == "LOCKED" and session and session["state"] == "rendered"
                 and session["id"] not in self._pushed):
@@ -153,7 +159,7 @@ class BridgeDocker(DockWidget):
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")
             self._status_label.setText("lock refused: {}".format(detail))
-        except OSError:
+        except (OSError, ValueError):
             self._set_offline()
 
     def _on_unlock(self):
@@ -162,7 +168,7 @@ class BridgeDocker(DockWidget):
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode(errors="replace")
             self._status_label.setText("unlock refused: {}".format(detail))
-        except OSError:
+        except (OSError, ValueError):
             self._set_offline()
 
     def _push(self, session):
@@ -177,6 +183,10 @@ class BridgeDocker(DockWidget):
             kra = push_session(RealKis(), session, layers, archives)
             self._pushed.add(session["id"])
             self._status_label.setText("pushed {}".format(kra.name))
+        except FileExistsError:  # the user's painted archive wins; never clobber
+            self._pushed.add(session["id"])
+            self._status_label.setText(
+                "archive kept: pose_{}.kra".format(session["id"]))
         except Exception as exc:  # never raise into Krita
             self._pushed.add(session["id"])  # no retry storm on the 500ms tick
             self._status_label.setText("push failed: {}".format(exc))

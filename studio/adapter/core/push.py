@@ -13,6 +13,11 @@ def push_session(kis: Kis, session: dict, layers: list[LayerSpec],
                  archives_dir: pathlib.Path) -> pathlib.Path:
     """Build the Krita document for a rendered session and save its archive."""
     width, height = session["resolution"]
+    archives_dir = pathlib.Path(archives_dir)
+    kra = archives_dir / f"pose_{session['id']}.kra"
+    if kra.exists():
+        raise FileExistsError(
+            f"archive {kra} already exists; keeping the user's document")
     for layer in layers:
         size = pngutil.read_size(layer.png_path)
         if size != (width, height):
@@ -25,9 +30,7 @@ def push_session(kis: Kis, session: dict, layers: list[LayerSpec],
         doc.layer_from_png(layer_name(layer.part), model, layer.png_path)
     doc.set_locked(model, True)
     doc.group(pose_group_name(session["id"]))
-    archives_dir = pathlib.Path(archives_dir)
     archives_dir.mkdir(parents=True, exist_ok=True)
-    kra = archives_dir / f"pose_{session['id']}.kra"
     doc.save(kra)
     record = PoseRecord(
         pose=session["pose"],

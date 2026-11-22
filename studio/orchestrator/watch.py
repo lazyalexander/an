@@ -66,8 +66,15 @@ class Watcher:
         shutil.move(str(path), dest)
         self._ledger.record("file_drop", "{} -> {}".format(path.name, snapshot.id),
                             bytes_moved=size, snapshot=snapshot.id)
-        self._import_asset(dest, snapshot.dir)
-        parts = json.loads((snapshot.dir / "parts.json").read_text())["parts"]
+        try:
+            self._import_asset(dest, snapshot.dir)
+            parts = json.loads((snapshot.dir / "parts.json").read_text())["parts"]
+        except Exception as exc:  # failure is data; the loop must survive
+            self._ledger.record(
+                "import_failed", "{}: {}".format(snapshot.id, exc),
+                bytes_moved=size, snapshot=snapshot.id,
+                latency_ms=(time.monotonic() - t0) * 1000)
+            return
         snapshot.parts = list(parts)
         self._store.current = snapshot
         self._ledger.record(
