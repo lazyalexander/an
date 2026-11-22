@@ -42,14 +42,17 @@ def write_sidecar(kra_path: Path, poses: dict[str, PoseRecord]) -> Path:
     return sidecar
 
 
-def read_sidecar(kra_path: Path) -> dict[str, PoseRecord]:
-    sidecar = _sidecar_path(kra_path)
-    if not sidecar.exists():
-        return {}
+VALID_STATUSES = frozenset({"pushed", "adopted", "superseded"})
+
+
+def _load_payload(sidecar: Path) -> dict:
     try:
-        payload = json.loads(sidecar.read_text(encoding="utf-8"))
+        return json.loads(sidecar.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise ValueError(f"malformed sidecar {sidecar}: {exc}") from exc
+
+
+def _parse_poses(payload: dict) -> dict[str, PoseRecord]:
     records = {}
     for pose_id, raw in payload.get("poses", {}).items():
         records[pose_id] = PoseRecord(
@@ -59,6 +62,59 @@ def read_sidecar(kra_path: Path) -> dict[str, PoseRecord]:
             created=raw["created"],
         )
     return records
+
+
+def read_sidecar(kra_path: Path) -> dict[str, PoseRecord]:
+    sidecar = _sidecar_path(kra_path)
+    if not sidecar.exists():
+        return {}
+    return _parse_poses(_load_payload(sidecar))
+
+
+def read_version(kra_path: Path) -> dict:
+    sidecar = _sidecar_path(kra_path)
+    if not sidecar.exists():
+        return {"poses": {}, "status": "pushed", "restored_from": None}
+    payload = _load_payload(sidecar)
+    return {
+        "poses": _parse_poses(payload),
+        "status": payload.get("status", "pushed"),
+        "restored_from": payload.get("restored_from"),
+    }
+
+
+def set_version_status(kra_path: Path, status: str, restored_from: str | None = None) -> None:
+    if status not in VALID_STATUSES:
+        raise ValueError(f"unknown version status {status!r}; expected one of {sorted(VALID_STATUSES)}")
+    sidecar = _sidecar_path(kra_path)
+    payload = _load_payload(sidecar)
+    payload["status"] = status
+    payload["restored_from"] = restored_from
+    sidecar.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def list_versions(archives_dir: Path) -> list[dict]:
+    archives_dir = Path(archives_dir)
+    if not archives_dir.is_dir():
+        return []
+    versions = []
+    for sidecar in archives_dir.glob("*.bridge.json"):
+        try:
+            payload = _load_payload(sidecar)
+        except (OSError, ValueError):
+            continue
+        base = sidecar.name[: -len(".bridge.json")]
+        poses = payload.get("poses", {})
+        created = min((raw.get("created", "") for raw in poses.values()), default="")
+        versions.append({
+            "id": base.removeprefix("pose_"),
+            "kra": sidecar.with_name(base + ".kra"),
+            "created": created,
+            "status": payload.get("status", "pushed"),
+            "restored_from": payload.get("restored_from"),
+        })
+    versions.sort(key=lambda version: version["created"])
+    return versions
 
 
 def inspect_kra(kra_path: Path) -> KraInfo:
