@@ -133,8 +133,18 @@ class Orchestrator:
             latency_ms = (time.monotonic() - t0) * 1000
             nbytes = sum(l.png_path.stat().st_size for l in layers if l.png_path.exists())
             with self._guard:
-                self._layers = layers
-                session.state = "rendered"
+                if self._session is not session:
+                    orphaned = True
+                else:
+                    orphaned = False
+                    self._layers = layers
+                    session.state = "rendered"
+            if orphaned:  # unlock/re-lock superseded this session mid-render
+                self._ledger.record(
+                    "render_orphaned",
+                    f"session {session.id}: superseded before render finished",
+                    bytes_moved=nbytes, latency_ms=latency_ms, session=session.id)
+                return
             self._ledger.record("render_done",
                                 f"session {session.id}: {len(layers)} layers",
                                 bytes_moved=nbytes, latency_ms=latency_ms,

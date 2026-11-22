@@ -1,3 +1,4 @@
+import json
 import threading
 import time
 
@@ -87,6 +88,32 @@ def test_lock_without_scene_raises(tmp_path):
     app.submit_pose({"matrix": [1.0] * 16, "location": [0, 0, 0]})
     with pytest.raises(InvalidTransition):
         app.lock()
+
+
+def test_failed_import_is_data_and_watcher_survives(tmp_path):
+    store = SceneStore(tmp_path / "scene")
+    ledger = Ledger(tmp_path / "l.jsonl")
+    calls = []
+
+    def fail_first(src, out):
+        calls.append(src.name)
+        if len(calls) == 1:
+            raise RuntimeError("container service stopped")
+        (out / "parts.json").write_text(json.dumps({"parts": ["cube_a"]}))
+
+    w = Watcher(tmp_path / "inbox", store, fail_first, ledger,
+                poll_s=0.05, settle_s=0.05)
+    (tmp_path / "inbox").mkdir(exist_ok=True)
+    w.start()
+    (tmp_path / "inbox" / "bad.obj").write_text("o bad\n")
+    wait_until(lambda: any(e["kind"] == "import_failed"
+                           for e in ledger.read_all()), timeout=3)
+    (tmp_path / "inbox" / "good.obj").write_text("o good\n")
+    wait_until(lambda: store.current is not None, timeout=3)  # loop alive
+    w.stop()
+    assert calls == ["bad.obj", "good.obj"]
+    snap_ids = sorted(p.name for p in store.root.iterdir())
+    assert snap_ids == ["snap-0001", "snap-0002"]  # nothing overwritten
 
 
 def test_lock_binds_current_snapshot(tmp_path):

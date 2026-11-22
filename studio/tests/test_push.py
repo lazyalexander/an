@@ -39,3 +39,17 @@ def test_push_rejects_size_mismatch(tmp_path):
     layers = [LayerSpec("cube_a", layers_dir / "cube_a.png")]
     with pytest.raises(ValueError):
         push_session(FakeKis(), _session(), layers, tmp_path / "arch")
+
+
+def test_push_refuses_to_clobber_existing_archive(tmp_path):
+    layers_dir = tmp_path / "layers"
+    layers_dir.mkdir()
+    pngutil.write_solid(layers_dir / "cube_a.png", 1600, 1200, (255, 0, 0))
+    layers = [LayerSpec("cube_a", layers_dir / "cube_a.png")]
+    kra = push_session(FakeKis(), _session(), layers, tmp_path / "arch")
+    kra.write_bytes(b"user-painted-content")  # the user painted and saved
+    kis = FakeKis()
+    with pytest.raises(FileExistsError):
+        push_session(kis, _session(), layers, tmp_path / "arch")
+    assert kra.read_bytes() == b"user-painted-content"
+    assert kis.documents == []  # no half-built document left in Krita
