@@ -2,7 +2,7 @@
 
 Date: 2026-11-22 (revised 2026-11-22: carrier pivot)
 Branch: `dev-bridge-studio`
-Status: proposed (revision pending user approval)
+Status: approved (2026-11-22, carrier revision incl. presentation-layer opening)
 Builds on: `docs/superpowers/specs/2026-11-22-software-bridge-design.md`
 (spike report: `docs/superpowers/reports/2026-11-22-software-bridge-spike-report.md`,
 branch `dev-software-bridge`)
