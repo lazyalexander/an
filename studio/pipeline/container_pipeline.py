@@ -12,12 +12,16 @@ from orchestrator.pipeline_api import LayerSpec
 
 
 class ContainerPipeline:
-    def __init__(self, image: str = "bridge-studio-blender:5.2.3"):
+    def __init__(self, image: str = "bridge-studio-blender:5.2.3",
+                 memory: str = "4g", cpus: int = 4):
         self.image = image
+        self.memory = memory
+        self.cpus = cpus
         self._scripts = pathlib.Path(__file__).resolve().parent
 
     def _run(self, blender_args, mounts):
-        cmd = ["container", "run", "--rm", "--platform", "linux/amd64", "--rosetta"]
+        cmd = ["container", "run", "--rm", "--platform", "linux/amd64", "--rosetta",
+               "--memory", self.memory, "--cpus", str(self.cpus)]
         for host, container in mounts:
             cmd += ["-v", "{}:{}".format(host, container)]
         cmd += ["-v", "{}:/opt/bridge".format(self._scripts)]

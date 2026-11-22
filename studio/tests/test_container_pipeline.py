@@ -32,6 +32,23 @@ def test_imported_scene_has_camera(tmp_path):
 
 
 @pytest.mark.container
+def test_render_at_production_resolution(tmp_path):
+    from orchestrator.pipeline_api import Session
+    from pipeline.container_pipeline import ContainerPipeline
+
+    pipe = ContainerPipeline()
+    scene_dir = tmp_path / "scene"
+    pipe.import_asset(FIXTURE_OBJ, scene_dir)
+    session = Session(id="t-full",
+                      pose={"matrix": TEST_POSE_4X4, "location": [0, -6, 2]},
+                      resolution=(1600, 1200), snapshot_id="snap-0001",
+                      state="rendering")
+    layers = pipe.render(session, scene_dir, tmp_path / "layers")
+    assert [pngutil.read_size(layer.png_path) for layer in layers] == \
+        [(1600, 1200), (1600, 1200)]
+
+
+@pytest.mark.container
 def test_import_and_render_two_parts(tmp_path):
     from orchestrator.pipeline_api import Session
     from pipeline.container_pipeline import ContainerPipeline
