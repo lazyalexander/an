@@ -18,6 +18,11 @@ class KraInfo:
     width: int
     height: int
     groups: dict[str, list[str]]  # group-layer name -> direct child layer names; "" = top level
+    locked_groups: frozenset[str]  # group-layer names with locked="1"
+
+
+def _local(tag: str) -> str:
+    return tag.rsplit("}", 1)[-1]
 
 
 def _sidecar_path(kra_path: Path) -> Path:
@@ -57,25 +62,37 @@ def read_sidecar(kra_path: Path) -> dict[str, PoseRecord]:
 
 
 def inspect_kra(kra_path: Path) -> KraInfo:
+    """Parse a real Krita maindoc.xml (DOC > IMAGE > layers tree, any xmlns)."""
     with zipfile.ZipFile(Path(kra_path)) as archive:
         maindoc = archive.read("maindoc.xml")
-    root = ElementTree.fromstring(maindoc)
-    width = int(root.attrib["image-width"])
-    height = int(root.attrib["image-height"])
+    doc = ElementTree.fromstring(maindoc)
+    image = next((el for el in doc.iter() if _local(el.tag) == "IMAGE"), None)
+    if image is None:
+        raise ValueError("maindoc.xml has no IMAGE element")
+    width = int(image.attrib["width"])
+    height = int(image.attrib["height"])
 
     groups: dict[str, list[str]] = {"": []}
-    layers_el = root.find("layers")
+    locked_groups: set[str] = set()
+    layers_el = next((c for c in image if _local(c.tag) == "layers"), None)
 
     def walk(parent_el, group_name: str) -> None:
-        for layer in parent_el.findall("layer"):
-            node_type = layer.attrib.get("node-type", "")
+        for layer in parent_el:
+            if _local(layer.tag) != "layer":
+                continue
+            node_type = layer.attrib.get("nodetype", "")
             name = layer.attrib.get("name", "")
             if node_type == "grouplayer":
                 groups.setdefault(name, [])
-                walk(layer, name)
+                if layer.attrib.get("locked") == "1":
+                    locked_groups.add(name)
+                children = next((c for c in layer if _local(c.tag) == "layers"), None)
+                if children is not None:
+                    walk(children, name)
             elif node_type == "paintlayer":
                 groups.setdefault(group_name, []).append(name)
 
     if layers_el is not None:
         walk(layers_el, "")
-    return KraInfo(width=width, height=height, groups=groups)
+    return KraInfo(width=width, height=height, groups=groups,
+                   locked_groups=frozenset(locked_groups))
