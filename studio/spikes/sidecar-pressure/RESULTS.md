@@ -102,3 +102,65 @@ governance for a speculative payoff — rejected without a build.
 
 Remaining routes: driver-level injector (virtual tablet), hardware
 tablet, iPad-native drawing + file bridge, or pressureless v1.
+
+## Route B retest (Codonic Pad injector): PASS
+
+Same day, route B executed. Injector: PadMac host + PadPad iPad
+client (Codonic Pad). Sidecar disconnected for the whole retest
+(single input path).
+
+### Timeline and root-cause chain
+
+1. **Retest run 1 — FAIL signature.** Three protocol strokes in the
+   Tablet Tester arrived as plain `Mouse` events, red lines, no `P=`.
+   Cause isolated to the Mac side: PadMac had been relaunched several
+   times after install, and macOS ties TCC permissions to the app
+   signature — the Accessibility grant went silently stale, and
+   PadMac's injection degraded to plain mouse fallback. (Documented
+   PadMac failure mode; the System Settings toggle *looks* on.)
+2. **Permission repair.** Removed and re-added both PadMac entries
+   (Accessibility + Screen Recording), quit and relaunched PadMac.
+3. **OS-layer verification — PASS.** The native probe (same binary as
+   the Sidecar probe) received one heavy stroke as full tablet input:
+   `subtype=tabletPoint` on down/drag/up, pressure 0.078→0.81→0.0
+   (1/256 quantization), real tilt `(0.282,-0.330)`,
+   `deviceID=33059`, proximity events. Log: `probe/probe-padmac-os-pass.log`.
+   The injector delivers exactly what the gate needs at the OS layer.
+4. **Krita still mouse — Qt device cache.** Same injector, same era:
+   the Krita Tester still logged `Mouse` events. Krita had been
+   running since before PadMac's install/relaunch cycle; Qt's tablet
+   device handling did not pick up the re-granted injector.
+5. **Krita restart — PASS.** Fresh Krita, fresh Tester, three
+   protocol strokes. Full evidence below. Screenshot: `tester-pass.jpg`.
+
+### Tester evidence (post-restart, three strokes)
+
+All three strokes are tablet events: blue lines, each bracketed by
+`Pen tip brought near` / `Pen tip taken away`, `TX,TY` tilt live
+(23–25 / 25–28°), sub-pixel coordinates.
+
+- **Stroke 1 (light):** `P=` 1.2%–14.5% (mostly 5–11%).
+- **Stroke 2 (heavy):** `P=` 7.8%–52.5%, plateau 40–52%.
+- **Stroke 3 (ramp):** `P=` 1.2% → 76.1% continuous climb, then
+  release through 49.4%.
+
+Pass criterion (blue tablet lines + light/heavy `P=` spanning
+~0.2–0.9): met. Observed span 1.2%–76.1% covers the criterion band;
+light stroke sits far below 0.2, ramp peaks inside the upper band.
+
+Latency/feel: not measured (explicitly outside gate criteria).
+
+### Operational lessons (carry into design Risks)
+
+- After any PadMac reinstall/permission change: remove and re-add
+  both TCC entries, then relaunch. A "looks on" toggle can be stale.
+- After any injector/device change: **restart Krita** (Qt tablet
+  device cache). Symptom of a stale cache is exactly "other apps get
+  tablet events, Krita gets mouse".
+- The probe + Tester two-layer protocol isolates injector vs carrier
+  in minutes; keep both instruments.
+
+Gate verdict: **PASS — pressure path is Pad injector, not Sidecar.**
+Design revision (Sidecar→injector wording, dependency list gains
+PadMac/PadPad versions, Risks update) proceeds per the phase-gate
+document, then Plan 1.
