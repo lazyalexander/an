@@ -231,6 +231,8 @@ class Orchestrator:
                 "phase": self._phase.name,
                 "pose_age_ms": pose_age_ms,
                 "session": asdict(self._session) if self._session else None,
+                "pending_restore": (dict(self._pending_restore)
+                                    if self._pending_restore is not None else None),
                 "snapshot_id": (self._scenes.current.id
                                 if self._scenes is not None and self._scenes.current
                                 else None),

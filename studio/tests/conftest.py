@@ -57,7 +57,7 @@ def running_server(tmp_path):
 
     app = Orchestrator(Ledger(tmp_path / "l.jsonl"), FakePipeline(), (1600, 1200),
                        run_dir=tmp_path / "run")
-    srv = make_server(app, port=0)
+    srv = make_server(app, port=0, ui_token="testkey")
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1])
@@ -74,8 +74,9 @@ def get(conn, path):
     return response.status, json.loads(response.read())
 
 
-def post(conn, path, body):
+def post(conn, path, body, headers=None):
     import json
-    conn.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+    conn.request("POST", path, json.dumps(body),
+                 {"Content-Type": "application/json", **(headers or {})})
     response = conn.getresponse()
     return response.status, json.loads(response.read())
