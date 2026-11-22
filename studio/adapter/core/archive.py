@@ -71,6 +71,14 @@ def read_sidecar(kra_path: Path) -> dict[str, PoseRecord]:
     return _parse_poses(_load_payload(sidecar))
 
 
+def read_thumbnail(kra_path: Path) -> bytes | None:
+    try:
+        with zipfile.ZipFile(Path(kra_path)) as archive:
+            return archive.read("mergedimage.png")
+    except (OSError, zipfile.BadZipFile, KeyError):
+        return None
+
+
 def read_version(kra_path: Path) -> dict:
     sidecar = _sidecar_path(kra_path)
     if not sidecar.exists():

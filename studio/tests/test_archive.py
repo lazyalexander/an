@@ -7,6 +7,7 @@ from adapter.core.archive import (
     inspect_kra,
     list_versions,
     read_sidecar,
+    read_thumbnail,
     read_version,
     set_version_status,
     write_sidecar,
@@ -59,6 +60,16 @@ def make_version(tmp_path, name, created):
     write_sidecar(kra, {"s1": PoseRecord(pose={}, resolution=(1600, 1200),
                                          snapshot_id="", created=created)})
     return kra
+
+
+def test_read_thumbnail_from_kra_zip(tmp_path):
+    kra = tmp_path / "a.kra"
+    with zipfile.ZipFile(kra, "w") as z:
+        z.writestr("mergedimage.png", b"\x89PNG fake")
+    assert read_thumbnail(kra) == b"\x89PNG fake"
+    assert read_thumbnail(tmp_path / "missing.kra") is None
+    (tmp_path / "notzip.kra").write_bytes(b"nope")
+    assert read_thumbnail(tmp_path / "notzip.kra") is None
 
 
 def test_set_version_status_roundtrip(tmp_path):
