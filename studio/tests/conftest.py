@@ -31,3 +31,16 @@ class FakeClock:
 
     def advance(self, seconds):
         self._t += seconds
+
+
+class FakePipeline:
+    def __init__(self, barrier=None):
+        self.calls = []
+        self.barrier = barrier
+
+    def render(self, session, scene_dir, out_dir):
+        from orchestrator.pipeline_api import LayerSpec
+        self.calls.append(session)
+        if self.barrier:
+            self.barrier.wait(2)
+        return [LayerSpec(part="cube_a", png_path=out_dir / "cube_a.png")]
