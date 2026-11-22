@@ -13,6 +13,8 @@ def main(argv=None) -> None:
                         help="wire the deterministic FakePipeline")
     parser.add_argument("--width", type=int, default=1600)
     parser.add_argument("--height", type=int, default=1200)
+    parser.add_argument("--inbox", type=Path, default=DEFAULT_RUN_DIR / "inbox")
+    parser.add_argument("--scene-root", type=Path, default=DEFAULT_RUN_DIR / "scene")
     args = parser.parse_args(argv)
 
     run_dir = DEFAULT_RUN_DIR
@@ -26,13 +28,24 @@ def main(argv=None) -> None:
             pipeline = ContainerPipeline()
         except ImportError:
             parser.error("real pipeline unavailable; pass --fake")
-    app = Orchestrator(ledger, pipeline, (args.width, args.height), run_dir=run_dir)
+    from .scenes import SceneStore
+    scenes = SceneStore(args.scene_root)
+    app = Orchestrator(ledger, pipeline, (args.width, args.height), run_dir=run_dir,
+                       scenes=scenes)
+    watcher = None
+    if hasattr(pipeline, "import_asset"):
+        from .watch import Watcher
+        watcher = Watcher(args.inbox, scenes, pipeline.import_asset, ledger)
+        watcher.start()
     server = make_server(app, port=args.port)
     print(f"orchestrator on 127.0.0.1:{args.port} (fake={args.fake})")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
         pass
+    finally:
+        if watcher is not None:
+            watcher.stop()
 
 
 if __name__ == "__main__":
