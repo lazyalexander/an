@@ -3,7 +3,7 @@
 Date: 2026-11-23
 Branch: `dev-macro-ui` (stacks on PR #2 `dev-bridge-studio`; retarget to
 `dev` once #2 merges)
-Status: draft — builder check resolved, pending final approval
+Status: approved (2026-11-23)
 Builds on: `docs/superpowers/specs/2026-11-22-bridge-studio-design.md`
 
 > **Revision note (2026-11-23, builder check).** A builder check raised
