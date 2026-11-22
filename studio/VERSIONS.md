@@ -10,5 +10,7 @@
 | Docker Desktop | present; daemon off when idle | `docker version`; required for pipeline tasks (STUDIO_DOCKER=1) |
 
 Install notes live with their components: the Krita plugin installs via
-`studio/adapter/install.sh` (Task 7); the Blender addon installs via
-Blender → Preferences → Add-ons → Install → `studio/blender_addon/__init__.py` (Task 8).
+`studio/adapter/install.sh` (Task 7); the Blender addon installs as a symlink
+so the package's `from .pose import` resolves (Task 8):
+`ln -sfn "$PWD/studio/blender_addon" "$HOME/Library/Application Support/Blender/5.2/scripts/addons/blender_addon"`,
+then enable "Bridge Studio Pose Stream" in Edit → Preferences → Add-ons.
