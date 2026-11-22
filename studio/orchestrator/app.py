@@ -15,12 +15,14 @@ POSE_WINDOW_S = 1.0
 
 class Orchestrator:
     def __init__(self, ledger: Ledger, pipeline: Pipeline, resolution: tuple[int, int],
-                 now: Callable[[], float] = time.time, run_dir: Path = DEFAULT_RUN_DIR):
+                 now: Callable[[], float] = time.time, run_dir: Path = DEFAULT_RUN_DIR,
+                 scenes=None):
         self._ledger = ledger
         self._pipeline = pipeline
         self._resolution = tuple(resolution)
         self._now = now
         self._run_dir = Path(run_dir)
+        self._scenes = scenes
         self._guard = threading.Lock()
         self._phase = Phase.ADJUSTMENT
         self._session: Session | None = None
@@ -58,12 +60,17 @@ class Orchestrator:
                 raise InvalidTransition("already locked")
             if self._current_pose is None:
                 raise NoPose("no current pose")
+            snapshot_id = ""
+            if self._scenes is not None:
+                if self._scenes.current is None:
+                    raise InvalidTransition("no scene imported")
+                snapshot_id = self._scenes.current.id
             self._flush_pose_window_locked()
             session = Session(
                 id=time.strftime("%Y%m%d-%H%M%S") + "-" + uuid.uuid4().hex[:6],
                 pose=dict(self._current_pose),
                 resolution=self._resolution,
-                snapshot_id="",
+                snapshot_id=snapshot_id,
                 state="rendering",
             )
             self._session = session
@@ -100,7 +107,9 @@ class Orchestrator:
                 "phase": self._phase.name,
                 "pose_age_ms": pose_age_ms,
                 "session": asdict(self._session) if self._session else None,
-                "snapshot_id": None,
+                "snapshot_id": (self._scenes.current.id
+                                if self._scenes is not None and self._scenes.current
+                                else None),
                 "roster": {"adjustment": "Blender", "locked": "Krita"},
             }
 
@@ -113,7 +122,10 @@ class Orchestrator:
 
     def _render(self, session: Session) -> None:
         out_dir = self._run_dir / "sessions" / session.id / "layers"
-        scene_dir = self._run_dir / "scene"
+        if self._scenes is not None and session.snapshot_id:
+            scene_dir = self._scenes.root / session.snapshot_id
+        else:
+            scene_dir = self._run_dir / "scene"
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
             t0 = time.monotonic()
