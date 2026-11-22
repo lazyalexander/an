@@ -18,6 +18,20 @@ TEST_POSE_4X4 = [
 
 
 @pytest.mark.container
+def test_imported_scene_has_camera(tmp_path):
+    from pipeline.container_pipeline import ContainerPipeline
+
+    pipe = ContainerPipeline()
+    scene_dir = tmp_path / "scene"
+    pipe.import_asset(FIXTURE_OBJ, scene_dir)
+    pipe._run(
+        ["/scene/scene.blend", "--python-exit-code", "1", "--python-expr",
+         "import bpy; assert bpy.context.scene.camera is not None, "
+         "'imported scene has no camera — pose stream cannot start'"],
+        [(scene_dir, "/scene")])
+
+
+@pytest.mark.container
 def test_import_and_render_two_parts(tmp_path):
     from orchestrator.pipeline_api import Session
     from pipeline.container_pipeline import ContainerPipeline
