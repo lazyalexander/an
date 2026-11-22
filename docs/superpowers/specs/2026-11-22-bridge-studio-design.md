@@ -3,8 +3,8 @@
 Date: 2026-11-22 (revised 2026-11-22: carrier pivot; revised 2026-11-22:
 input route Sidecar → injector, gate passed)
 Branch: `dev-bridge-studio`
-Status: carrier revision approved (2026-11-22, incl. presentation-layer
-opening); input-route revision pending re-approval (HARD-GATE)
+Status: approved (2026-11-22, carrier revision incl. presentation-layer
+opening; input-route revision re-approved 2026-11-22)
 Builds on: `docs/superpowers/specs/2026-11-22-software-bridge-design.md`
 (spike report: `docs/superpowers/reports/2026-11-22-software-bridge-spike-report.md`,
 branch `dev-software-bridge`)

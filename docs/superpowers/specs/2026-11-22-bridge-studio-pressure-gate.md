@@ -114,7 +114,8 @@ this milestone.
    Sidecar → injector, injector dependency constraint added, Risks
    updated (Sidecar-pressure risk closed; three operational risks
    recorded).
-2. User re-approval of the design (HARD-GATE) — **pending**.
+2. User re-approval of the design (HARD-GATE) — **granted
+   2026-11-22** (design Status flipped to approved).
 3. New Plan 1 written against the approved design — after
    re-approval.
 
