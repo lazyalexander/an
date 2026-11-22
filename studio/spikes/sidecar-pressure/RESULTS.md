@@ -84,3 +84,21 @@ restoring pressure requires leaving the plain-Sidecar route — options
 are a driver-level injector (virtual tablet device), a hardware
 tablet, or PencilKit (the only first-party API that receives Sidecar
 pencil pressure; using it means a thin native canvas shell).
+
+## Route A probe (PencilKit): platform-dead
+
+Follow-up, same day: the user's choice was to verify the PencilKit
+route. `probe/probe_pencilkit.swift` (PKCanvasView + stroke-level
+pressure/tilt dump) fails to compile: `PKCanvasView` and
+`PKCanvasViewDelegate` do not exist in the macOS SDK. Verified at the
+source level — the macOS PencilKit swiftinterface
+(`PencilKit.swiftmodule/arm64e-apple-macos.swiftinterface`, SDK
+MacOSX27.2) contains zero occurrences of `PKCanvasView`; the macOS
+module only carries auxiliary types. Route A (native thin shell with
+PKCanvasView on macOS) is dead at the platform level. A Mac Catalyst
+detour would receive input through the same mouse-event delivery the
+native probe already measured (no pressure) and adds signing/toolchain
+governance for a speculative payoff — rejected without a build.
+
+Remaining routes: driver-level injector (virtual tablet), hardware
+tablet, iPad-native drawing + file bridge, or pressureless v1.
