@@ -44,3 +44,38 @@ class FakePipeline:
         if self.barrier:
             self.barrier.wait(2)
         return [LayerSpec(part="cube_a", png_path=out_dir / "cube_a.png")]
+
+
+@pytest.fixture
+def running_server(tmp_path):
+    import http.client
+    import threading
+
+    from orchestrator.app import Orchestrator
+    from orchestrator.ledger import Ledger
+    from orchestrator.server import make_server
+
+    app = Orchestrator(Ledger(tmp_path / "l.jsonl"), FakePipeline(), (1600, 1200),
+                       run_dir=tmp_path / "run")
+    srv = make_server(app, port=0)
+    thread = threading.Thread(target=srv.serve_forever, daemon=True)
+    thread.start()
+    conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1])
+    yield conn, app
+    conn.close()
+    srv.shutdown()
+    srv.server_close()
+
+
+def get(conn, path):
+    import json
+    conn.request("GET", path)
+    response = conn.getresponse()
+    return response.status, json.loads(response.read())
+
+
+def post(conn, path, body):
+    import json
+    conn.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+    response = conn.getresponse()
+    return response.status, json.loads(response.read())
