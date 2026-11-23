@@ -58,7 +58,7 @@ def _ui_token():
         return None
     try:
         return (_STUDIO / "run" / "ui_token").read_text().strip() or None
-    except OSError:
+    except (OSError, ValueError):  # ValueError covers corrupt non-UTF-8
         return None
 
 
@@ -82,8 +82,10 @@ def _flattened_png_bytes(doc):
             duplicate.close()
     buffer = QBuffer()
     buffer.open(QIODevice.WriteOnly)
-    image.save(buffer, "PNG")
+    saved = image.save(buffer, "PNG")
     buffer.close()
+    if not saved:
+        raise RuntimeError("preview PNG encode failed")
     return bytes(buffer.data())
 
 
