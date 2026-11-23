@@ -19,6 +19,22 @@ Builds on: `docs/superpowers/specs/2026-11-22-bridge-studio-design.md`
 >    anti-goal. See *Relationship to the Krita docker*.
 > 3. **Behavior inference scope (user).** Record-only in this
 >    milestone. See *Intent channel*.
+>
+> **Revision note (2026-11-23, interaction protocol).** A review found
+> that adopt, re-render and unlock were applied by the orchestrator
+> without the adapter ever saving the live Krita document. The archive
+> sidecar could therefore say "adopted" about the pre-paint render, and
+> re-render could supersede a file that did not contain the painter's
+> strokes. Those three decisions now follow the same request → ack
+> pattern as restore: the orchestrator queues, the adapter saves the
+> live canvas over the archive, and only the ack advances the phase or
+> the sidecar. Unlock and re-render close the saved document; adopt
+> keeps it open. The adapter heartbeats the live document (name, dirty,
+> session) so the page can show unsaved work, and the preview is
+> exported only from the adapter's own session document (never an
+> unrelated tab), downscaled to an 800 px long edge. A decision may be
+> applied immediately only when the adapter is offline, where no
+> unsaved canvas can exist.
 
 ## Intent and why
 

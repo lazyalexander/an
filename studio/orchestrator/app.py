@@ -14,6 +14,7 @@ from .pipeline_api import LayerSpec, Pipeline, Session
 
 DEFAULT_RUN_DIR = Path(__file__).resolve().parents[1] / "run"
 POSE_WINDOW_S = 1.0
+ADAPTER_LIVE_MS = 3000
 
 
 class Orchestrator:
@@ -39,6 +40,8 @@ class Orchestrator:
         self._lock_ts: float | None = None
         self._render_done_ts: float | None = None
         self._pending_restore: dict | None = None
+        self._pending_decision: dict | None = None
+        self._document: dict | None = None
         self._last_heartbeat_ts: float | None = None
 
     @property
@@ -93,43 +96,93 @@ class Orchestrator:
         thread.start()
         return session
 
-    def unlock(self) -> None:
-        with self._guard:
-            if self._phase is not Phase.LOCKED:
-                raise InvalidTransition("not locked")
-            session_id = self._session.id if self._session else ""
-            lock_duration_ms = self._lock_duration_ms_locked()
-            self._phase = Phase.ADJUSTMENT
-            self._session = None
-            self._layers = None
-            self._lock_ts = None
-            self._ledger.record("unlock", f"session {session_id} released",
-                                session=session_id, lock_duration_ms=lock_duration_ms)
+    def unlock(self, force: bool = False) -> dict:
+        return self._request_decision("unlock", force)
 
-    def adopt(self) -> None:
+    def adopt(self) -> dict:
+        return self._request_decision("adopt")
+
+    def rerender(self, force: bool = False) -> dict:
+        return self._request_decision("re-render", force)
+
+    def _request_decision(self, kind: str, force: bool = False) -> dict:
+        """Queue an action that only the adapter can perform on the live document.
+
+        The orchestrator must not claim an archive is adopted (or discard a
+        session) before the adapter has saved the open canvas. The adapter
+        polls, saves, then acks; only the ack advances the state.
+
+        With `force`, a decision that would otherwise deadlock behind an
+        offline adapter is applied immediately: no live adapter means no
+        unsaved canvas to preserve.
+        """
         with self._guard:
-            if self._phase is not Phase.LOCKED or self._session is None:
+            if self._pending_decision is not None:
+                raise InvalidTransition(
+                    f"decision pending: {self._pending_decision['kind']}")
+            if self._pending_restore is not None:
+                raise InvalidTransition("restore pending")
+            if self._phase is not Phase.LOCKED:
                 raise InvalidTransition("not locked")
             session = self._session
-            if session.state != "rendered":
-                raise InvalidTransition(
-                    f"session {session.id} is {session.state}, not rendered")
-            kra = self._archives_dir / f"pose_{session.id}.kra"
-            if not kra.exists():
-                raise InvalidTransition("archive not pushed yet")
-            status = read_version(kra)["status"]
-            if status != "pushed":
-                raise InvalidTransition(f"archive already {status}")
-            set_version_status(kra, "adopted")
-            self._ledger.record("decision", f"session {session.id} adopted",
-                                latency_ms=self._decision_latency_ms_locked(),
-                                decision="adopt", session=session.id)
+            session_id = session.id if session is not None else ""
+            if kind == "adopt":
+                if session is None:
+                    raise InvalidTransition("not locked")
+                if session.state != "rendered":
+                    raise InvalidTransition(
+                        f"session {session.id} is {session.state}, not rendered")
+                kra = self._archives_dir / f"pose_{session.id}.kra"
+                if not kra.exists():
+                    raise InvalidTransition("archive not pushed yet")
+                status = read_version(kra)["status"]
+                if status != "pushed":
+                    raise InvalidTransition(f"archive already {status}")
+            self._pending_decision = {"kind": kind, "session": session_id}
+            self._ledger.record("decision_request",
+                                f"session {session_id}: {kind} requested",
+                                decision=kind, session=session_id)
+            if force and kind in ("unlock", "re-render") and self._adapter_stale():
+                self._ledger.record("decision_forced",
+                                    f"session {session_id}: {kind} forced "
+                                    "(adapter offline)",
+                                    decision=kind, session=session_id)
+                return self._apply_decision_locked(kind)
+            return dict(self._pending_decision)
 
-    def rerender(self) -> None:
+    def ack_decision(self, kind: str, ok: bool = True,
+                     detail: str | None = None) -> dict:
+        """Apply a decision the adapter executed on the live document."""
         with self._guard:
-            if self._phase is not Phase.LOCKED:
-                raise InvalidTransition("not locked")
-            session_id = self._session.id if self._session else ""
+            return self._apply_decision_locked(kind, ok, detail)
+
+    def _apply_decision_locked(self, kind: str, ok: bool = True,
+                               detail: str | None = None) -> dict:
+        pending = self._pending_decision
+        if pending is None or pending["kind"] != kind:
+            raise InvalidTransition("no matching pending decision")
+        self._pending_decision = None
+        session_id = pending["session"]
+        if not ok:
+            self._ledger.record("decision_failed",
+                                f"session {session_id}: {kind} failed"
+                                + (f": {detail}" if detail else ""),
+                                decision=kind, session=session_id,
+                                detail=detail)
+            return {"ok": False}
+        if kind == "adopt":
+            kra = self._archives_dir / f"pose_{session_id}.kra"
+            if not kra.exists() or read_version(kra)["status"] != "pushed":
+                self._ledger.record(
+                    "decision_failed",
+                    f"session {session_id}: adopt failed: archive changed",
+                    decision=kind, session=session_id)
+                return {"ok": False}
+            set_version_status(kra, "adopted")
+            self._ledger.record("decision", f"session {session_id} adopted",
+                                latency_ms=self._decision_latency_ms_locked(),
+                                decision="adopt", session=session_id)
+        elif kind == "re-render":
             if self._session is not None:
                 kra = self._archives_dir / f"pose_{self._session.id}.kra"
                 if kra.exists():
@@ -140,10 +193,20 @@ class Orchestrator:
             self._session = None
             self._layers = None
             self._lock_ts = None
-            self._ledger.record("decision",
-                                f"session {session_id} re-render: back to adjustment",
-                                latency_ms=latency_ms, decision="re-render",
-                                session=session_id, lock_duration_ms=lock_duration_ms)
+            self._ledger.record(
+                "decision", f"session {session_id} re-render: back to adjustment",
+                latency_ms=latency_ms, decision="re-render",
+                session=session_id, lock_duration_ms=lock_duration_ms)
+        else:  # unlock
+            lock_duration_ms = self._lock_duration_ms_locked()
+            self._phase = Phase.ADJUSTMENT
+            self._session = None
+            self._layers = None
+            self._lock_ts = None
+            self._ledger.record("unlock", f"session {session_id} released",
+                                session=session_id,
+                                lock_duration_ms=lock_duration_ms)
+        return {"ok": True}
 
     def retry(self) -> None:
         with self._guard:
@@ -163,6 +226,8 @@ class Orchestrator:
 
     def restore(self, version_id: str) -> dict:
         with self._guard:
+            if self._pending_decision is not None:
+                raise InvalidTransition("decision pending")
             versions = {v["id"]: v for v in list_versions(self._archives_dir)}
             version = versions.get(version_id)
             if version is None:
@@ -194,15 +259,32 @@ class Orchestrator:
         with self._guard:
             self._pending_restore = None
 
-    def note_heartbeat(self) -> None:
+    def note_heartbeat(self, document: dict | None = None) -> None:
         with self._guard:
             self._last_heartbeat_ts = self._now()
+            self._document = document
+
+    @property
+    def pending_decision(self) -> dict | None:
+        with self._guard:
+            return (dict(self._pending_decision)
+                    if self._pending_decision is not None else None)
+
+    @property
+    def document(self) -> dict | None:
+        with self._guard:
+            return dict(self._document) if self._document is not None else None
 
     def heartbeat_age_ms(self) -> int | None:
         with self._guard:
             if self._last_heartbeat_ts is None:
                 return None
             return int((self._now() - self._last_heartbeat_ts) * 1000)
+
+    def _adapter_stale(self) -> bool:
+        if self._last_heartbeat_ts is None:
+            return True
+        return (self._now() - self._last_heartbeat_ts) * 1000 > ADAPTER_LIVE_MS
 
     def _lock_duration_ms_locked(self) -> int:
         if self._lock_ts is None:
@@ -233,10 +315,13 @@ class Orchestrator:
                 "session": asdict(self._session) if self._session else None,
                 "pending_restore": (dict(self._pending_restore)
                                     if self._pending_restore is not None else None),
+                "pending_decision": (dict(self._pending_decision)
+                                     if self._pending_decision is not None else None),
+                "document": (dict(self._document)
+                             if self._document is not None else None),
                 "snapshot_id": (self._scenes.current.id
                                 if self._scenes is not None and self._scenes.current
                                 else None),
-                "roster": {"adjustment": "Blender", "locked": "Krita"},
             }
 
     def _flush_pose_window_locked(self) -> None:

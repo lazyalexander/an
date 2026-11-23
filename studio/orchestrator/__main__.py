@@ -6,6 +6,8 @@ from pathlib import Path
 from .app import DEFAULT_RUN_DIR, Orchestrator
 from .fake_pipeline import FakePipeline
 from .ledger import Ledger
+from .macro.instances import load as load_instance
+from .macro.instances import names as instance_names
 from .server import make_server
 
 
@@ -20,6 +22,9 @@ def main(argv=None) -> None:
     parser.add_argument("--scene-root", type=Path, default=DEFAULT_RUN_DIR / "scene")
     parser.add_argument("--open-ui", action="store_true",
                         help="open the macro UI in the default browser")
+    parser.add_argument("--instance", default="bridge-studio",
+                        choices=instance_names(),
+                        help="macro UI instance manifest to serve")
     args = parser.parse_args(argv)
 
     run_dir = DEFAULT_RUN_DIR
@@ -48,7 +53,8 @@ def main(argv=None) -> None:
     server = make_server(app, host="127.0.0.1", port=args.port, ui_token=token,
                          archives_dir=run_dir / "archives", ledger=ledger,
                          scenes=scenes,
-                         preview_path=run_dir / "preview" / "current.png")
+                         preview_path=run_dir / "preview" / "current.png",
+                         instance=load_instance(args.instance))
     url = f"http://127.0.0.1:{server.server_address[1]}/ui?key={token}"
     print(f"orchestrator on 127.0.0.1:{args.port} (fake={args.fake})", flush=True)
     print(f"macro UI: {url}", flush=True)

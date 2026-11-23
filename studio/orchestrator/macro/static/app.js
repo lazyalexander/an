@@ -10,17 +10,6 @@ const POLL_MS = 1000;
 
 const DOTS = {done: "✓", running: "●", waiting: "○", failed: "✕"};
 
-// state.pending kinds -> the buttons they surface.
-const DECISIONS = {
-  adopt_or_rerender: [
-    {id: "adopt", path: "/api/decision/adopt"},
-    {id: "rerender", path: "/api/decision/rerender"},
-  ],
-  retry: [
-    {id: "retry", path: "/api/decision/retry"},
-  ],
-};
-
 let manifest = null;
 
 const $ = (id) => document.getElementById(id);
@@ -74,12 +63,33 @@ function render(state) {
 
 function renderHeader(state) {
   $("phase").textContent = state.phase;
+  const active = (state.surfaces || []).find((surface) => surface.active);
+  $("surface").textContent = active
+    ? (active.app ? active.label + " · " + active.app : active.label)
+    : "";
+  const documentChannel = state.document;
+  const documentCopy = manifest.document || {};
+  $("document").textContent = documentChannel
+    ? (documentChannel.dirty
+       ? (documentCopy.dirty || "")
+       : (documentCopy.saved || ""))
+    : "";
   const button = $("lock-toggle");
   const locked = state.phase === "LOCKED";
   button.textContent = locked ? "解锁" : "锁定";
   // Locking freezes the pose stream, so it is offered only while it is live.
-  button.disabled = !locked && !(state.health && state.health.pose.ok);
-  button.onclick = () => act(locked ? "/api/unlock" : "/api/lock", {}, false);
+  // Instances without a pose channel (no state.health.pose) are not gated.
+  const poseChannel = state.health && state.health.pose;
+  const adapterChannel = state.health && state.health.adapter;
+  const busy = !!state.pending_decision;
+  button.disabled = busy || (!locked && !!poseChannel && !poseChannel.ok);
+  // Unlocking persists the live canvas, so it is an adapter-acked decision;
+  // locking only freezes a pose and stays on the plain channel. When the
+  // adapter is offline there is no canvas at risk, so the decision is forced.
+  button.onclick = () => act(
+    locked ? "/api/decision/unlock" : "/api/lock",
+    locked ? {force: !(adapterChannel && adapterChannel.ok)} : {},
+    locked);
 }
 
 function renderStages(state) {
@@ -122,35 +132,74 @@ function renderPreview(state) {
   if (url) img.src = url;
 }
 
-function renderDecisions(state) {
-  const visible = new Set();
-  for (const pending of state.pending || []) {
-    for (const def of DECISIONS[pending.kind] || []) visible.add(def.id);
+function pendingActions(state) {
+  const kinds = new Set((state.pending || []).map((item) => item.kind));
+  const actions = [];
+  for (const decision of manifest.decisions || []) {
+    if (!kinds.has(decision.kind)) continue;
+    for (const action of decision.actions || []) actions.push(action);
   }
-  for (const buttons of Object.values(DECISIONS)) {
-    for (const def of buttons) {
-      const button = $(def.id);
-      button.hidden = !visible.has(def.id);
-      button.onclick = () => act(def.path, {}, true);
+  return actions;
+}
+
+function renderDecisions(state) {
+  const bar = $("decision-bar");
+  const note = $("decision-note");
+  for (const button of bar.querySelectorAll("button[data-action]")) {
+    button.remove();
+  }
+  const pendingDecision = state.pending_decision;
+  if (!pendingDecision) {
+    for (const action of pendingActions(state)) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.action = action.action;
+      button.textContent = action.label;
+      if (action.style) button.className = action.style;
+      button.onclick = () => {
+        const body = Object.assign({}, action.body || {});
+        if (action.force_when_adapter_down) {
+          const adapter = state.health && state.health.adapter;
+          body.force = !(adapter && adapter.ok);
+        }
+        act(action.path, body, true);
+      };
+      bar.insertBefore(button, note);
     }
+  }
+  // While the adapter is persisting the canvas, show why nothing happens;
+  // ordinary refusals from act() stay visible until the next press.
+  if (pendingDecision) {
+    note.textContent = manifest.pending_decision || "正在保存…";
+    note.dataset.pending = "1";
+  } else if (note.dataset.pending === "1") {
+    note.textContent = "";
+    delete note.dataset.pending;
   }
 
   const health = state.health || {};
+  const copy = manifest.health || {};
   const problems = [];
-  if (health.adapter && !health.adapter.ok) problems.push("Krita 未连接");
-  if (health.pipeline && !health.pipeline.ok) problems.push("容器管线不可用");
-  if (health.pose && !health.pose.ok) problems.push("位姿流已断开");
+  for (const [channel, value] of Object.entries(health)) {
+    if (value && value.ok === false) problems.push(copy[channel] || channel);
+  }
   $("health-banner").hidden = problems.length === 0;
   $("health-text").textContent = problems.join(" · ");
+  const retry = (manifest.decisions || [])
+    .flatMap((decision) => decision.actions || [])
+    .find((action) => action.role === "retry");
   const failedSession = state.session && state.session.state === "failed";
   const bannerRetry = $("banner-retry");
-  bannerRetry.hidden = !(health.pipeline && !health.pipeline.ok && failedSession);
-  bannerRetry.onclick = () => act("/api/decision/retry", {}, true);
+  bannerRetry.hidden = !(health.pipeline && !health.pipeline.ok
+    && failedSession && retry);
+  if (retry) {
+    bannerRetry.textContent = retry.label;
+    bannerRetry.onclick = () => act(retry.path, {}, true);
+  }
 }
 
 function renderArchive(state) {
-  const archiveStage = manifest.stages.find((def) => def.id === "archive");
-  $("archive-title").textContent = archiveStage ? archiveStage.label : "";
+  $("archive-title").textContent = (manifest.archive && manifest.archive.label) || "";
   const rows = (state.archive || []).map((version) => {
     const row = document.createElement("li");
     row.className = "archive-row";
@@ -168,11 +217,15 @@ function renderArchive(state) {
     const lineage = version.restored_from ? " · ← " + version.restored_from : "";
     sub.textContent = version.created + " · " + version.status + lineage;
     meta.append(id, sub);
-    const restore = document.createElement("button");
-    restore.type = "button";
-    restore.textContent = "恢复";
-    restore.onclick = () => act("/api/decision/restore", {version: version.id}, true);
-    row.append(thumb, meta, restore);
+    const restore = manifest.restore;
+    if (restore) {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.textContent = restore.label;
+      button.onclick = () => act(restore.path, {version: version.id}, true);
+      row.append(button);
+    }
+    row.prepend(thumb, meta);
     return row;
   });
   $("archive-list").replaceChildren(...rows);

@@ -158,6 +158,7 @@ def _load_docker(monkeypatch, qimage_class=FakeQImage):
     qtcore.QBuffer = FakeQBuffer
     qtcore.QIODevice = FakeQIODevice
     qtcore.QTimer = object
+    qtcore.Qt = types.SimpleNamespace(IgnoreAspectRatio=1, SmoothTransformation=2)
     qtgui = types.ModuleType("PyQt5.QtGui")
     qtgui.QImage = qimage_class
     qtwidgets = types.ModuleType("PyQt5.QtWidgets")

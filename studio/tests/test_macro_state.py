@@ -98,6 +98,7 @@ def test_pending_cleared_after_adopt(tmp_path):
     session = _locked_rendered(rig)
     _write_archive(rig.archives, session.id)
     rig.app.adopt()
+    rig.app.ack_decision("adopt")
     state = rig.state()
     assert state["pending"] == []
     assert state["archive"][0]["status"] == "adopted"
@@ -140,17 +141,28 @@ def test_failed_render_stage_and_retry_pending(tmp_path):
 
 
 def test_manifest_shape():
-    assert MANIFEST == {
-        "instance": "bridge-studio",
-        "title": "Bridge Studio",
-        "stages": [{"id": "import", "label": "导入"},
-                   {"id": "pose", "label": "位姿"},
-                   {"id": "render", "label": "渲染"},
-                   {"id": "archive", "label": "建档"}],
-        "drawer": [{"id": "poses", "label": "位姿历史"},
-                   {"id": "snapshots", "label": "快照"},
-                   {"id": "failures", "label": "失败记录"}],
-    }
+    assert MANIFEST["instance"] == "bridge-studio"
+    assert MANIFEST["title"] == "Bridge Studio"
+    assert MANIFEST["stages"] == [
+        {"id": "import", "label": "导入", "kind": "headless"},
+        {"id": "pose", "label": "位姿", "kind": "interaction", "surface": "adjust"},
+        {"id": "render", "label": "渲染", "kind": "headless"},
+        {"id": "archive", "label": "建档", "kind": "artifact"},
+    ]
+    assert [surface["id"] for surface in MANIFEST["surfaces"]] == ["adjust", "paint"]
+    assert [decision["kind"] for decision in MANIFEST["decisions"]] == [
+        "adopt_or_rerender", "retry"]
+    assert MANIFEST["drawer"] == [
+        {"id": "poses", "label": "位姿历史", "kinds": ["pose_stream"],
+         "format": "summary"},
+        {"id": "snapshots", "label": "快照",
+         "kinds": ["file_drop", "import_done"], "format": "summary"},
+        {"id": "failures", "label": "失败记录",
+         "kinds": ["render_failed", "import_failed"], "format": "entry"},
+    ]
+    assert MANIFEST["restore"] == {"label": "恢复",
+                                   "path": "/api/decision/restore"}
+    assert MANIFEST["archive"] == {"label": "建档"}
 
 
 def test_import_stage_failed_then_recovered(tmp_path):
@@ -230,6 +242,19 @@ def test_locked_pose_stage_is_never_waiting(tmp_path):
     assert stage["status"] != "waiting"
     assert stage == {"id": "pose", "status": "done", "detail": "frozen"}
     assert state["health"]["pose"]["ok"] is True
+
+
+def test_state_carries_document_and_pending_decision(tmp_path):
+    rig = _Rig(tmp_path)
+    document = {"name": "Bridge — s1", "dirty": True, "session": "s1"}
+    rig.app.note_heartbeat(document)
+    state = rig.state()
+    assert state["document"] == document
+    assert state["pending_decision"] is None
+    _locked_rendered(rig)
+    rig.app.rerender()
+    assert rig.state()["pending_decision"] == {
+        "kind": "re-render", "session": rig.app.session.id}
 
 
 def test_build_state_does_not_mutate(tmp_path):

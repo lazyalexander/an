@@ -8,7 +8,7 @@ from adapter.core.archive import list_versions, read_thumbnail
 
 from .app import Orchestrator
 from .ledger import Ledger
-from .macro.manifest import MANIFEST
+from .macro.instances import load as load_instance
 from .macro.state import build_state
 from .phase import InvalidTransition, NoPose
 from .scenes import SceneStore
@@ -20,10 +20,20 @@ STATIC_CONTENT_TYPES = {"index.html": "text/html",
                         "style.css": "text/css"}
 
 
+def _well_formed_document(document) -> bool:
+    return (isinstance(document, dict)
+            and isinstance(document.get("name"), str)
+            and isinstance(document.get("dirty"), bool)
+            and (document.get("session") is None
+                 or isinstance(document.get("session"), str)))
+
+
 def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
                 ui_token: str | None = None, archives_dir: Path | None = None,
                 ledger: Ledger | None = None, scenes: SceneStore | None = None,
-                preview_path: Path | None = None) -> ThreadingHTTPServer:
+                preview_path: Path | None = None, instance=None) -> ThreadingHTTPServer:
+    if instance is None:
+        instance = load_instance("bridge-studio")
     if archives_dir is None:
         archives_dir = getattr(app, "_archives_dir", None)
     if ledger is None:
@@ -77,18 +87,20 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
                 self._pose()
             elif path == "/api/lock":
                 self._lock()
-            elif path == "/api/unlock":
-                self._unlock()
+            elif path == "/api/decision/unlock":
+                self._decision(app.unlock, accepts_force=True)
             elif path == "/api/decision/adopt":
                 self._decision(app.adopt)
             elif path == "/api/decision/rerender":
-                self._decision(app.rerender)
+                self._decision(app.rerender, accepts_force=True)
             elif path == "/api/decision/retry":
                 self._decision(app.retry)
             elif path == "/api/decision/restore":
                 self._restore()
             elif path == "/api/decision/restore-ack":
                 self._restore_ack()
+            elif path == "/api/decision/ack":
+                self._ack()
             elif path == "/api/macro/heartbeat":
                 self._heartbeat()
             else:
@@ -105,7 +117,7 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
             elif path == "/api/session/layers":
                 self._layers()
             elif path == "/api/macro/manifest":
-                self._send(200, MANIFEST)
+                self._send(200, instance.MANIFEST)
             elif path == "/api/macro/state":
                 self._state()
             elif path == "/api/macro/preview.png":
@@ -120,7 +132,8 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
                 self._send(404, {"error": "not found"})
 
         def _state(self) -> None:
-            self._send(200, build_state(app, archives_dir, ledger, scenes))
+            self._send(200, build_state(app, archives_dir, ledger, scenes,
+                                        instance=instance))
 
         def _static(self, name: str) -> None:
             content_type = STATIC_CONTENT_TYPES.get(name)
@@ -183,21 +196,47 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
                 return
             self._send(200, asdict(session))
 
-        def _unlock(self) -> None:
+        def _decision(self, action, accepts_force: bool = False) -> None:
             try:
-                app.unlock()
-            except InvalidTransition as exc:
-                self._send(409, {"error": str(exc)})
+                body = self._read_json()
+            except json.JSONDecodeError:
+                self._send(400, {"error": "invalid json"})
                 return
-            self._send(200, {"ok": True})
-
-        def _decision(self, action) -> None:
+            force = body.get("force", False)
+            if not isinstance(force, bool):
+                self._send(400, {"error": "force must be a boolean"})
+                return
             try:
-                action()
+                result = action(force=force) if accepts_force else action()
             except (InvalidTransition, ValueError) as exc:
                 self._send(409, {"error": str(exc)})
                 return
-            self._send(200, {"ok": True})
+            self._send(200, result or {"ok": True})
+
+        def _ack(self) -> None:
+            try:
+                body = self._read_json()
+            except json.JSONDecodeError:
+                self._send(400, {"error": "invalid json"})
+                return
+            kind = body.get("kind")
+            ok = body.get("ok", True)
+            detail = body.get("detail")
+            if not isinstance(kind, str) or not kind:
+                self._send(400, {"error": "ack needs a decision kind"})
+                return
+            if not isinstance(ok, bool):
+                self._send(400, {"error": "ack ok must be a boolean"})
+                return
+            if detail is not None and not isinstance(detail, str):
+                self._send(400, {"error": "ack detail must be text"})
+                return
+            try:
+                result = app.ack_decision(kind, ok, detail)
+            except (InvalidTransition, ValueError) as exc:
+                self._send(409, {"error": str(exc)})
+                return
+            self._send(200, result)
 
         def _restore(self) -> None:
             try:
@@ -226,7 +265,16 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
             self._send(200, {"ok": True})
 
         def _heartbeat(self) -> None:
-            app.note_heartbeat()
+            try:
+                body = self._read_json()
+            except json.JSONDecodeError:
+                self._send(400, {"error": "invalid json"})
+                return
+            document = body.get("document")
+            if document is not None and not _well_formed_document(document):
+                self._send(400, {"error": "document needs name, dirty, session"})
+                return
+            app.note_heartbeat(document)
             self._send(200, {"ok": True})
 
         def _layers(self) -> None:

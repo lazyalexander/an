@@ -1,4 +1,15 @@
-from adapter.core.preview import atomic_write, due
+from adapter.core.preview import atomic_write, due, scaled_size
+
+
+def test_scaled_size_keeps_small_documents_untouched():
+    assert scaled_size(640, 480) == (640, 480)
+    assert scaled_size(800, 800) == (800, 800)
+
+
+def test_scaled_size_clamps_the_long_edge():
+    assert scaled_size(1600, 1200) == (800, 600)
+    assert scaled_size(1200, 1600) == (600, 800)
+    assert scaled_size(1, 10000) == (1, 800)
 
 
 def test_atomic_write_replaces(tmp_path):

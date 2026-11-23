@@ -1,4 +1,9 @@
-"""Pure macro-state builder: one JSON dict per poll.
+"""Generic macro-state builder: one JSON dict per poll.
+
+The builder knows the kernel (phase, session, ledger, archives, health,
+preview) but no instance. Stage statuses and pending decisions come from the
+instance module; labels, surfaces, decisions, drawer sections and health copy
+come from its manifest.
 
 Single `ledger.read_all()` and one `list_versions()` per call; never mutates
 the app or the ledger.
@@ -13,90 +18,61 @@ from adapter.core.archive import list_versions
 from ..app import Orchestrator
 from ..ledger import Ledger
 from ..scenes import SceneStore
+from .context import Context
+from .instances import load as load_instance
 
-POSE_LIVE_MS = 2000
-ADAPTER_LIVE_MS = 3000
 PREVIEW_URL = "/api/macro/preview.png"
-
-_RENDER_STAGE = {"rendering": "running", "rendered": "done", "failed": "failed"}
-_SNAPSHOT_KINDS = frozenset({"file_drop", "import_done"})
-_FAILURE_KINDS = frozenset({"render_failed", "import_failed"})
 
 
 def build_state(app: Orchestrator, archives_dir: Path, ledger: Ledger,
-                scenes: SceneStore | None, now: Callable[[], float] = time.time,
+                scenes: SceneStore | None, instance=None,
+                now: Callable[[], float] = time.time,
                 max_events: int = 200) -> dict:
+    if instance is None:
+        instance = load_instance("bridge-studio")
+    manifest = instance.MANIFEST
     status = app.status()
     versions = list_versions(archives_dir)
     entries = ledger.read_all()
     window = entries[-max_events:] if max_events > 0 else []
-    session = status["session"]
+    ctx = Context(app=app, status=status, entries=entries, versions=versions,
+                  scenes=scenes, now=now())
+    surfaces = _surfaces(manifest, status)
     return {
-        "stages": _stages(entries, versions, scenes, status),
+        "instance": manifest.get("instance"),
+        "stages": instance.stages(ctx),
+        "surfaces": surfaces,
+        "ports": _ports(manifest, surfaces),
         "phase": status["phase"],
         "pose_age_ms": status["pose_age_ms"],
-        "session": session,
-        "pending": _pending(status, session, versions),
+        "session": status["session"],
+        "pending_decision": status.get("pending_decision"),
+        "document": status.get("document"),
+        "pending": instance.pending(ctx),
         "archive": [_archive_entry(version) for version in versions],
-        "drawer": _drawer(window),
-        "health": _health(app, status),
+        "drawer": _drawer(window, manifest.get("drawer", [])),
+        "health": instance.health(ctx),
+        "health_copy": manifest.get("health", {}),
         "preview": _preview(app),
     }
 
 
-def _stages(entries, versions, scenes, status) -> list[dict]:
-    return [
-        _import_stage(entries, scenes),
-        _pose_stage(status["phase"], status["pose_age_ms"]),
-        _render_stage(status["session"]),
-        {"id": "archive", "status": "done" if versions else "waiting",
-         "detail": len(versions)},
-    ]
+def _surfaces(manifest, status) -> list[dict]:
+    surfaces = []
+    for declared in manifest.get("surfaces", []):
+        surface = {key: declared[key] for key in
+                   ("id", "label", "kind", "app", "inputs") if key in declared}
+        surface["active"] = declared.get("phase") == status["phase"]
+        surfaces.append(surface)
+    return surfaces
 
 
-def _import_stage(entries, scenes) -> dict:
-    last_done = last_failed = None
-    for entry in entries:
-        if entry["kind"] == "import_done":
-            last_done = entry
-        elif entry["kind"] == "import_failed":
-            last_failed = entry
-    if last_failed is not None and (last_done is None
-                                    or last_failed["ts"] > last_done["ts"]):
-        return {"id": "import", "status": "failed", "detail": last_failed["summary"]}
-    current = getattr(scenes, "current", None)
-    if current is not None:
-        return {"id": "import", "status": "done", "detail": current.id}
-    return {"id": "import", "status": "waiting", "detail": None}
-
-
-def _pose_stage(phase, pose_age_ms) -> dict:
-    if phase == "LOCKED":  # the pose stream is frozen by design, not lost
-        return {"id": "pose", "status": "done", "detail": "frozen"}
-    live = pose_age_ms is not None and pose_age_ms <= POSE_LIVE_MS
-    return {"id": "pose", "status": "running" if live else "waiting",
-            "detail": pose_age_ms}
-
-
-def _render_stage(session) -> dict:
-    if session is None:
-        return {"id": "render", "status": "waiting", "detail": None}
-    return {"id": "render",
-            "status": _RENDER_STAGE.get(session["state"], "waiting"),
-            "detail": session["id"]}
-
-
-def _pending(status, session, versions) -> list[dict]:
-    if status["phase"] != "LOCKED" or session is None:
-        return []
-    if session["state"] == "failed":
-        return [{"kind": "retry", "session": session["id"]}]
-    if session["state"] == "rendered":
-        version = next((v for v in versions if v["id"] == session["id"]), None)
-        if (version is not None and version["status"] == "pushed"
-                and Path(version["kra"]).exists()):
-            return [{"kind": "adopt_or_rerender", "session": session["id"]}]
-    return []
+def _ports(manifest, surfaces) -> dict:
+    declared = manifest.get("ports", {})
+    active = next((s["id"] for s in surfaces if s["active"]), None)
+    return {"input": list(declared.get("input", [])),
+            "output": list(declared.get("output", [])),
+            "active_surface": active}
 
 
 def _archive_entry(version) -> dict:
@@ -110,43 +86,18 @@ def _archive_entry(version) -> dict:
     }
 
 
-def _drawer(entries) -> dict:
-    drawer = {"poses": [], "snapshots": [], "failures": []}
-    for entry in reversed(entries):  # newest first
-        kind = entry["kind"]
-        if kind == "pose_stream":
-            drawer["poses"].append(entry["summary"])
-        elif kind in _SNAPSHOT_KINDS:
-            drawer["snapshots"].append(entry["summary"])
-        elif kind in _FAILURE_KINDS:
-            drawer["failures"].append(entry)
+def _drawer(entries, sections) -> dict:
+    drawer = {}
+    for section in sections:
+        kinds = set(section.get("kinds", []))
+        as_entry = section.get("format") == "entry"
+        items = []
+        for entry in reversed(entries):  # newest first
+            if entry["kind"] not in kinds:
+                continue
+            items.append(entry if as_entry else entry["summary"])
+        drawer[section["id"]] = items
     return drawer
-
-
-def _health(app, status) -> dict:
-    adapter_age = app.heartbeat_age_ms()
-    pose_age_ms = status["pose_age_ms"]
-    # while LOCKED the pose stream is frozen by design — stillness is not
-    # a disconnect, so it must not raise the banner
-    pose_ok = (status["phase"] == "LOCKED"
-               or (pose_age_ms is not None and pose_age_ms <= POSE_LIVE_MS))
-    return {
-        "adapter": {"ok": adapter_age is not None and adapter_age <= ADAPTER_LIVE_MS,
-                    "stale_ms": adapter_age},
-        "pose": {"ok": pose_ok},
-        "pipeline": _pipeline_health(app),
-    }
-
-
-def _pipeline_health(app) -> dict:
-    health = getattr(getattr(app, "_pipeline", None), "health", None)
-    if health is None:
-        return {"ok": True, "detail": "unmonitored"}
-    try:
-        return health()
-    except Exception as exc:  # noqa: BLE001 — failure is data, like app._render:
-        # a health probe must degrade the poll, never break it
-        return {"ok": False, "detail": str(exc)}
 
 
 def _preview(app) -> str | None:

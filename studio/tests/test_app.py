@@ -13,7 +13,7 @@ from adapter.core.archive import (
 )
 from orchestrator.app import Orchestrator
 from orchestrator.ledger import Ledger
-from orchestrator.phase import InvalidTransition, NoPose, Phase
+from orchestrator.phase import InvalidTransition, Phase
 from orchestrator.pipeline_api import LayerSpec
 
 from conftest import FakeClock, FakePipeline, wait_until
@@ -98,12 +98,15 @@ def test_pose_aggregation(tmp_path):
     assert streams[0]["count"] == 25 and streams[1]["count"] == 1
 
 
-def test_unlock_returns_to_adjustment(tmp_path):
+def test_unlock_is_an_adapter_acked_decision(tmp_path):
     app = Orchestrator(Ledger(tmp_path / "l.jsonl"), FakePipeline(), (1600, 1200))
     app.submit_pose({"matrix": [1.0] * 16, "location": [0, 0, 0]})
     app.lock()
     wait_until(lambda: app.session is not None and app.session.state == "rendered")
-    app.unlock()
+    assert app.unlock() == {"kind": "unlock", "session": app.session.id}
+    # the phase must not move before the adapter has saved the live canvas
+    assert app.phase is Phase.LOCKED and app.session is not None
+    app.ack_decision("unlock")
     assert app.phase is Phase.ADJUSTMENT and app.session is None
 
 
@@ -116,6 +119,7 @@ def test_orphaned_render_does_not_overwrite_new_session(tmp_path):
     s1 = app.lock()
     wait_until(lambda: len(pipe.calls) == 1)  # s1's thread is inside render
     app.unlock()
+    app.ack_decision("unlock")
     app.submit_pose({"matrix": [2.0] * 16, "location": [1, 1, 1]})
     s2 = app.lock()
     wait_until(lambda: s2.state == "rendered")
@@ -125,7 +129,7 @@ def test_orphaned_render_does_not_overwrite_new_session(tmp_path):
     assert s1.state != "rendered"
 
 
-def test_adopt_marks_sidecar_and_ledgers(tmp_path):
+def test_adopt_is_an_adapter_acked_decision(tmp_path):
     clock = FakeClock()
     led = Ledger(tmp_path / "l.jsonl")
     archives = tmp_path / "archives"
@@ -136,10 +140,15 @@ def test_adopt_marks_sidecar_and_ledgers(tmp_path):
     wait_until(lambda: s.state == "rendered")
     kra = _write_archive(archives, s.id)
     clock.advance(1.5)
-    app.adopt()
+    assert app.adopt() == {"kind": "adopt", "session": s.id}
+    # request only: the painted archive is still untouched
+    assert read_version(kra)["status"] == "pushed"
+    app.ack_decision("adopt")
     assert read_version(kra)["status"] == "adopted"
-    decisions = [e for e in led.read_all() if e["kind"] == "decision"]
-    assert len(decisions) == 1
+    entries = led.read_all()
+    assert [e["kind"] for e in entries if e["kind"].startswith("decision")] == [
+        "decision_request", "decision"]
+    decisions = [e for e in entries if e["kind"] == "decision"]
     assert decisions[0]["decision"] == "adopt"
     assert decisions[0]["session"] == s.id
     assert decisions[0]["latency_ms"] >= 0
@@ -164,11 +173,44 @@ def test_adopt_refuses_second_adopt(tmp_path):
     wait_until(lambda: s.state == "rendered")
     _write_archive(archives, s.id)
     app.adopt()
+    with pytest.raises(InvalidTransition, match="decision pending"):
+        app.adopt()
+    app.ack_decision("adopt")
     with pytest.raises(InvalidTransition, match="already adopted"):
         app.adopt()
 
 
-def test_rerender_supersedes_archive_and_returns_to_adjustment(tmp_path):
+def test_decision_requires_a_matching_request(tmp_path):
+    archives = tmp_path / "archives"
+    app = Orchestrator(Ledger(tmp_path / "l.jsonl"), FakePipeline(), (1600, 1200),
+                       run_dir=tmp_path / "run", archives_dir=archives)
+    with pytest.raises(InvalidTransition, match="no matching pending decision"):
+        app.ack_decision("unlock")
+    app.submit_pose({"matrix": [1.0] * 16, "location": [0, 0, 0]})
+    s = app.lock()
+    wait_until(lambda: s.state == "rendered")
+    _write_archive(archives, s.id)
+    app.adopt()
+    with pytest.raises(InvalidTransition, match="no matching pending decision"):
+        app.ack_decision("unlock")
+
+
+def test_failed_ack_clears_pending_and_records(tmp_path):
+    led = Ledger(tmp_path / "l.jsonl")
+    app = Orchestrator(led, FakePipeline(), (1600, 1200),
+                       run_dir=tmp_path / "run", archives_dir=tmp_path / "archives")
+    app.submit_pose({"matrix": [1.0] * 16, "location": [0, 0, 0]})
+    s = app.lock()
+    wait_until(lambda: s.state == "rendered")
+    app.rerender()
+    assert app.ack_decision("re-render", False, "save failed") == {"ok": False}
+    assert app.pending_decision is None
+    assert app.phase is Phase.LOCKED  # nothing advanced on failure
+    failed = [e for e in led.read_all() if e["kind"] == "decision_failed"]
+    assert failed and "save failed" in failed[0]["summary"]
+
+
+def test_rerender_is_adapter_acked_and_returns_to_adjustment(tmp_path):
     led = Ledger(tmp_path / "l.jsonl")
     archives = tmp_path / "archives"
     app = Orchestrator(led, FakePipeline(), (1600, 1200),
@@ -177,7 +219,11 @@ def test_rerender_supersedes_archive_and_returns_to_adjustment(tmp_path):
     s = app.lock()
     wait_until(lambda: s.state == "rendered")
     kra = _write_archive(archives, s.id)
-    app.rerender()
+    assert app.rerender() == {"kind": "re-render", "session": s.id}
+    # nothing moves until the adapter has preserved the painted canvas
+    assert app.phase is Phase.LOCKED and app.session is not None
+    assert read_version(kra)["status"] == "pushed"
+    app.ack_decision("re-render")
     assert app.phase is Phase.ADJUSTMENT
     assert app.session is None
     assert read_version(kra)["status"] == "superseded"
@@ -199,6 +245,7 @@ def test_rerender_records_lock_duration(tmp_path):
     wait_until(lambda: s.state == "rendered")
     clock.advance(2)
     app.rerender()
+    app.ack_decision("re-render")
     decisions = [e for e in led.read_all() if e["kind"] == "decision"]
     assert decisions[0]["decision"] == "re-render"
     assert decisions[0]["lock_duration_ms"] > 0
@@ -250,7 +297,29 @@ def test_restore_unknown_version_refused(tmp_path):
         app.restore("nope")
 
 
-def test_heartbeat_staleness(tmp_path):
+def test_force_unlock_applies_when_the_adapter_is_offline(tmp_path):
+    led = Ledger(tmp_path / "l.jsonl")
+    app = Orchestrator(led, FakePipeline(), (1600, 1200))
+    app.submit_pose({"matrix": [1.0] * 16, "location": [0, 0, 0]})
+    app.lock()
+    wait_until(lambda: app.session is not None and app.session.state == "rendered")
+    assert app.unlock(force=True) == {"ok": True}
+    assert app.phase is Phase.ADJUSTMENT and app.session is None
+    assert app.pending_decision is None
+    kinds = [e["kind"] for e in led.read_all()]
+    assert "decision_forced" in kinds and "unlock" in kinds
+
+
+def test_force_unlock_does_not_bypass_a_live_adapter(tmp_path):
+    app = Orchestrator(Ledger(tmp_path / "l.jsonl"), FakePipeline(), (1600, 1200))
+    app.note_heartbeat(None)
+    app.submit_pose({"matrix": [1.0] * 16, "location": [0, 0, 0]})
+    app.lock()
+    wait_until(lambda: app.session is not None and app.session.state == "rendered")
+    assert app.unlock(force=True)["kind"] == "unlock"
+    assert app.phase is Phase.LOCKED  # a live adapter must save first
+    app.ack_decision("unlock")
+    assert app.phase is Phase.ADJUSTMENT
     clock = FakeClock()
     app = Orchestrator(Ledger(tmp_path / "l.jsonl"), FakePipeline(), (1600, 1200),
                        now=clock.now)
@@ -270,6 +339,7 @@ def test_unlock_records_lock_duration(tmp_path):
     wait_until(lambda: app.session is not None and app.session.state == "rendered")
     clock.advance(3)
     app.unlock()
+    app.ack_decision("unlock")
     unlocks = [e for e in led.read_all() if e["kind"] == "unlock"]
     assert len(unlocks) == 1
     assert unlocks[0]["lock_duration_ms"] == 3000

@@ -5,10 +5,23 @@ def test_parse_status_accepts_well_formed():
     parsed = parse_status({"phase": "ADJUSTMENT", "pose_age_ms": 42,
                            "session": None})
     assert parsed == {"phase": "ADJUSTMENT", "pose_age_ms": 42,
-                      "session": None, "pending_restore": None}
+                      "session": None, "pending_restore": None,
+                      "pending_decision": None}
     parsed = parse_status({"phase": "LOCKED", "pose_age_ms": None,
                            "session": {"id": "s-1", "state": "rendered"}})
     assert parsed["session"]["id"] == "s-1"
+
+
+def test_parse_status_passes_pending_decision():
+    base = {"phase": "LOCKED", "pose_age_ms": 5,
+            "session": {"id": "s-1", "state": "rendered"}}
+    parsed = parse_status({**base, "pending_decision": {
+        "kind": "adopt", "session": "s-1"}})
+    assert parsed["pending_decision"] == {"kind": "adopt", "session": "s-1"}
+    for bad in ("adopt", 42, {"kind": "publish", "session": "s-1"},
+                {"kind": "adopt"}, {"kind": "adopt", "session": 1}):
+        parsed = parse_status({**base, "pending_decision": bad})
+        assert parsed["pending_decision"] is None
 
 
 def test_parse_status_rejects_garbage():

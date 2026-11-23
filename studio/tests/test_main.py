@@ -5,7 +5,7 @@ import sys
 import threading
 from pathlib import Path
 
-from conftest import get_text, wait_until
+from conftest import get, get_text, wait_until
 
 STUDIO = Path(__file__).resolve().parent.parent
 
@@ -16,6 +16,8 @@ def test_help_exits_zero():
         cwd=STUDIO, capture_output=True, text=True, timeout=30)
     assert proc.returncode == 0, proc.stderr
     assert "--inbox" in proc.stdout
+    assert "--instance" in proc.stdout
+    assert "cad-animation" in proc.stdout
 
 
 def _accepts(port):
@@ -62,6 +64,41 @@ def test_main_writes_token_and_prints_url(tmp_path, capsys, monkeypatch):
         conn = http.client.HTTPConnection("127.0.0.1", port)
         assert get_text(conn, "/ui")[0] == 403
         assert get_text(conn, f"/ui?key={token}")[0] == 200
+        conn.close()
+    finally:
+        _stop(servers, thread)
+
+
+def test_main_serves_the_selected_instance(tmp_path, monkeypatch):
+    import orchestrator.__main__ as boot
+
+    servers = []
+    real_make_server = boot.make_server
+
+    def capturing_make_server(*args, **kwargs):
+        srv = real_make_server(*args, **kwargs)
+        servers.append(srv)
+        return srv
+
+    monkeypatch.setattr(boot, "DEFAULT_RUN_DIR", tmp_path / "run")
+    monkeypatch.setattr(boot, "make_server", capturing_make_server)
+    thread = threading.Thread(
+        target=boot.main,
+        args=(["--fake", "--port", "0", "--instance", "cad-animation"],),
+        daemon=True)
+    thread.start()
+    try:
+        wait_until(lambda: bool(servers))
+        port = servers[0].server_address[1]
+        wait_until(lambda: _accepts(port))
+        token = (tmp_path / "run" / "ui_token").read_text().strip()
+        conn = http.client.HTTPConnection("127.0.0.1", port)
+        code, manifest = get(conn, f"/api/macro/manifest?key={token}")
+        assert code == 200 and manifest["instance"] == "cad-animation"
+        code, state = get(conn, f"/api/macro/state?key={token}")
+        assert code == 200
+        assert [stage["id"] for stage in state["stages"]] == [
+            "import", "rig", "animate", "export"]
         conn.close()
     finally:
         _stop(servers, thread)

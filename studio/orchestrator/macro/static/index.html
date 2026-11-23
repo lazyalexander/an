@@ -8,8 +8,10 @@
 <body>
 
 <header id="topbar">
-  <h1 id="title">Bridge Studio</h1>
+  <h1 id="title"></h1>
   <span id="phase"></span>
+  <span id="surface"></span>
+  <span id="document"></span>
   <button id="lock-toggle" type="button">锁定</button>
 </header>
 
@@ -35,12 +37,9 @@
 <footer id="decision-area">
   <p id="health-banner" hidden>
     <span id="health-text"></span>
-    <button id="banner-retry" type="button" hidden>重试</button>
+    <button id="banner-retry" type="button" hidden></button>
   </p>
   <div id="decision-bar">
-    <button id="adopt" type="button" hidden>采用</button>
-    <button id="rerender" type="button" hidden>重渲</button>
-    <button id="retry" type="button" hidden>重试</button>
     <span id="decision-note" role="status"></span>
   </div>
 </footer>

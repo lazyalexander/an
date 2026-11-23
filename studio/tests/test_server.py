@@ -26,7 +26,11 @@ def test_full_http_cycle(running_server):
     wait_until(lambda: get(c, "/api/status")[1]["session"]["state"] == "rendered")
     code, layers = get(c, "/api/session/layers")
     assert code == 200 and layers["layers"][0]["part"] == "cube_a"
-    assert post(c, "/api/unlock", {})[0] == 200
+    code, pending = post(c, "/api/decision/unlock?key=testkey", {})
+    assert code == 200 and pending["kind"] == "unlock"
+    code, ack = post(c, "/api/decision/ack?key=testkey", {"kind": "unlock"})
+    assert code == 200 and ack == {"ok": True}
+    assert get(c, "/api/status")[1]["phase"] == "ADJUSTMENT"
 
 
 def test_lock_without_pose_is_409(running_server):
@@ -62,12 +66,30 @@ def test_adopt_rerender_cycle_over_http(running_server, tmp_path):
     wait_until(lambda: get(c, "/api/status")[1]["session"]["state"] == "rendered")
     kra = _write_archive(tmp_path / "run" / "archives", session["id"])
     code, body = post(c, "/api/decision/adopt?key=testkey", {})
+    assert code == 200 and body == {"kind": "adopt", "session": session["id"]}
+    assert read_version(kra)["status"] == "pushed"  # not applied before the ack
+    code, body = post(c, "/api/decision/ack?key=testkey", {"kind": "adopt"})
     assert code == 200 and body == {"ok": True}
     assert read_version(kra)["status"] == "adopted"
     code, body = post(c, "/api/decision/rerender?key=testkey", {})
+    assert code == 200 and body["kind"] == "re-render"
+    code, body = post(c, "/api/decision/ack?key=testkey", {"kind": "re-render"})
     assert code == 200 and body == {"ok": True}
     assert read_version(kra)["status"] == "superseded"
     assert get(c, "/api/status")[1]["phase"] == "ADJUSTMENT"
+
+
+def test_force_unlock_applies_when_no_adapter_is_connected(running_server):
+    c, _ = running_server
+    assert post(c, "/api/pose", {"matrix": [1.0] * 16,
+                                 "location": [0, 0, 0]})[0] == 200
+    assert post(c, "/api/lock", {})[0] == 200
+    wait_until(lambda: get(c, "/api/status")[1]["session"]["state"] == "rendered")
+    code, body = post(c, "/api/decision/unlock?key=testkey", {"force": True})
+    assert code == 200 and body == {"ok": True}
+    assert get(c, "/api/status")[1]["phase"] == "ADJUSTMENT"
+    assert post(c, "/api/decision/unlock?key=testkey",
+                {"force": "yes"})[0] == 400
 
 
 def test_restore_flow_over_http(running_server, tmp_path):
@@ -95,6 +117,26 @@ def test_heartbeat_over_http(running_server):
     code, body = post(c, "/api/macro/heartbeat?key=testkey", {})
     assert code == 200 and body == {"ok": True}
     assert app.heartbeat_age_ms() is not None
+
+
+def test_heartbeat_carries_document_state(running_server):
+    c, _ = running_server
+    document = {"name": "Bridge — s1", "dirty": True, "session": "s1"}
+    code, _ = post(c, "/api/macro/heartbeat?key=testkey", {"document": document})
+    assert code == 200
+    assert get(c, "/api/status")[1]["document"] == document
+    assert post(c, "/api/macro/heartbeat?key=testkey",
+                {"document": {"name": 1}})[0] == 400
+    assert post(c, "/api/macro/heartbeat?key=testkey",
+                {"document": {"name": "x", "dirty": "yes"}})[0] == 400
+
+
+def test_ack_requires_key_and_a_pending_decision(running_server):
+    c, _ = running_server
+    assert post(c, "/api/decision/ack", {"kind": "adopt"})[0] == 403
+    assert post(c, "/api/decision/ack?key=testkey", {})[0] == 400
+    code, body = post(c, "/api/decision/ack?key=testkey", {"kind": "adopt"})
+    assert code == 409 and "no matching pending decision" in body["error"]
 
 
 def test_manifest_and_state_endpoints(running_server):
@@ -177,7 +219,8 @@ def test_ui_and_static_served_with_key(running_server):
     c, _ = running_server
     assert get(c, "/ui")[0] == 403
     code, body = get_text(c, "/ui?key=testkey")  # helper reading raw body
-    assert code == 200 and b"Bridge Studio" in body
+    assert code == 200 and b'id="stages"' in body
+    assert b"/static/app.js" in body
     assert get_text(c, "/static/app.js?key=testkey")[0] == 200
 
 
