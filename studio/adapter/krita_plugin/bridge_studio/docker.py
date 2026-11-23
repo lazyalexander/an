@@ -68,6 +68,11 @@ def _flattened_png_bytes(doc):
     doc.pixelData() reads the composited projection without touching the
     user's document (Krita 5's Document has no projection()/duplicate()).
 
+    Only RGBA/U8 documents are read — anything else raises before QImage
+    sees the bytes: PyQt5's QImage(data, ...) does no length validation,
+    so a shorter buffer (e.g. GRAYA/U8 at 2 bytes/pixel) would read out
+    of bounds at save() time. The byte count is double-checked too.
+
     Byte order: an RGBA/U8 document returns B,G,R,A per pixel (see
     adapter/core/pixels.py; api.kde.org notes the channel order is "most
     often BGR"). QImage.Format_ARGB32 is 0xAARRGGBB in a native uint32,
@@ -75,9 +80,17 @@ def _flattened_png_bytes(doc):
     endianness Krita 5 ships (x86_64/arm64) — so the bytes hand over
     with no swap. Alpha is straight (non-premultiplied) on both sides.
     """
+    if doc.colorModel() != "RGBA" or doc.colorDepth() != "U8":
+        raise RuntimeError(
+            f"preview needs an RGBA/U8 document, "
+            f"got {doc.colorModel()}/{doc.colorDepth()}")
     width = doc.width()
     height = doc.height()
     data = doc.pixelData(0, 0, width, height)
+    if len(data) != width * height * 4:
+        raise RuntimeError(
+            f"preview pixel data is {len(data)} bytes, "
+            f"expected {width * height * 4}")
     image = QImage(data, width, height, QImage.Format_ARGB32)
     if image.isNull():
         raise RuntimeError("preview projection read failed")

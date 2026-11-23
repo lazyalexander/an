@@ -92,6 +92,11 @@ class FailingQImage(FakeQImage):
         return False
 
 
+class NullQImage(FakeQImage):
+    def isNull(self):
+        return True
+
+
 class FakeQBuffer:
     def __init__(self):
         self._data = bytearray()
@@ -116,11 +121,14 @@ class FakeQIODevice:
 class FakeKritaDocument:
     """Krita 5.x Document surface: pixelData yes; projection/duplicate no."""
 
-    def __init__(self, width, height, pixels=b"", raises=None):
+    def __init__(self, width, height, pixels=b"", raises=None,
+                 color_model="RGBA", color_depth="U8"):
         self._width = width
         self._height = height
         self._pixels = pixels
         self._raises = raises
+        self._color_model = color_model
+        self._color_depth = color_depth
         self.reads = []
 
     def width(self):
@@ -128,6 +136,12 @@ class FakeKritaDocument:
 
     def height(self):
         return self._height
+
+    def colorModel(self):
+        return self._color_model
+
+    def colorDepth(self):
+        return self._color_depth
 
     def pixelData(self, x, y, w, h):
         self.reads.append((x, y, w, h))
@@ -182,8 +196,45 @@ def test_flattened_png_propagates_pixel_read_failure(monkeypatch):
         docker._flattened_png_bytes(doc)
 
 
+def _counting_qimage(builds):
+    class CountingQImage(FakeQImage):
+        def __init__(self, *args):
+            builds.append(args)
+            super().__init__(*args)
+    return CountingQImage
+
+
+def test_flattened_png_rejects_non_rgba_document(monkeypatch):
+    # GRAYA/U8 pixelData is w*h*2 bytes: 4 here, where BGRA expects 8.
+    # PyQt5's QImage(data, ...) does no length validation — constructing
+    # it from this buffer would read out of bounds at save() time.
+    builds = []
+    docker = _load_docker(monkeypatch, qimage_class=_counting_qimage(builds))
+    doc = FakeKritaDocument(2, 1, bytes([128, 255, 64, 255]),
+                            color_model="GRAYA", color_depth="U8")
+    with pytest.raises(RuntimeError, match="RGBA/U8"):
+        docker._flattened_png_bytes(doc)
+    assert builds == []  # QImage must never see the short buffer
+
+
+def test_flattened_png_rejects_short_pixel_data(monkeypatch):
+    builds = []
+    docker = _load_docker(monkeypatch, qimage_class=_counting_qimage(builds))
+    doc = FakeKritaDocument(2, 1, bytes([0, 0, 255]))  # 3 bytes, expected 8
+    with pytest.raises(RuntimeError, match="bytes"):
+        docker._flattened_png_bytes(doc)
+    assert builds == []
+
+
 def test_flattened_png_raises_when_encode_fails(monkeypatch):
     docker = _load_docker(monkeypatch, qimage_class=FailingQImage)
     doc = FakeKritaDocument(1, 1, bytes([1, 2, 3, 4]))
     with pytest.raises(RuntimeError, match="encode"):
+        docker._flattened_png_bytes(doc)
+
+
+def test_flattened_png_raises_when_projection_read_is_null(monkeypatch):
+    docker = _load_docker(monkeypatch, qimage_class=NullQImage)
+    doc = FakeKritaDocument(1, 1, bytes([1, 2, 3, 4]))
+    with pytest.raises(RuntimeError, match="preview projection read failed"):
         docker._flattened_png_bytes(doc)
