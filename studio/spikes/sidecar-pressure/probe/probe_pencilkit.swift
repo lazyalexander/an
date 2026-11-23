@@ -1,7 +1,7 @@
 import AppKit
 import PencilKit
 
-let logPath = "~/Desktop/an-agent/An/studio/spikes/sidecar-pressure/probe/probe-pencilkit.log"
+let logPath = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("probe-pencilkit.log").path
 
 func log(_ s: String) {
     let line = s + "\n"

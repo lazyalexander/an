@@ -55,9 +55,11 @@ def running_server(tmp_path):
     from orchestrator.ledger import Ledger
     from orchestrator.server import make_server
 
-    app = Orchestrator(Ledger(tmp_path / "l.jsonl"), FakePipeline(), (1600, 1200),
-                       run_dir=tmp_path / "run")
-    srv = make_server(app, port=0)
+    run_dir = tmp_path / "run"
+    ledger = Ledger(tmp_path / "l.jsonl")
+    app = Orchestrator(ledger, FakePipeline(), (1600, 1200), run_dir=run_dir)
+    srv = make_server(app, port=0, ui_token="testkey",
+                      ledger=ledger, scenes=None)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1])
@@ -74,8 +76,21 @@ def get(conn, path):
     return response.status, json.loads(response.read())
 
 
-def post(conn, path, body):
+def get_bytes(conn, path):
+    conn.request("GET", path)
+    response = conn.getresponse()
+    return response.status, response.headers.get("Content-Type"), response.read()
+
+
+def get_text(conn, path):
+    conn.request("GET", path)
+    response = conn.getresponse()
+    return response.status, response.read()
+
+
+def post(conn, path, body, headers=None):
     import json
-    conn.request("POST", path, json.dumps(body), {"Content-Type": "application/json"})
+    conn.request("POST", path, json.dumps(body),
+                 {"Content-Type": "application/json", **(headers or {})})
     response = conn.getresponse()
     return response.status, json.loads(response.read())

@@ -1,12 +1,42 @@
 import json
 from dataclasses import asdict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from .app import Orchestrator
-from .phase import InvalidTransition, NoPose
+from .ledger import Ledger
+from .macro.instances import load as load_instance
+from .macro.ports import BadRequest, force
+from .macro.state import build_state
+from .phase import InvalidTransition
+from .scenes import SceneStore
+
+GATED_PREFIXES = ("/api/action/", "/api/input/", "/api/read/",
+                  "/api/macro/", "/ui", "/static/")
+STATIC_DIR = Path(__file__).parent / "macro" / "static"
+STATIC_CONTENT_TYPES = {"index.html": "text/html",
+                        "app.js": "text/javascript",
+                        "style.css": "text/css"}
 
 
-def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791) -> ThreadingHTTPServer:
+def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
+                ui_token: str | None = None,
+                ledger: Ledger | None = None, scenes: SceneStore | None = None,
+                instance=None) -> ThreadingHTTPServer:
+    if instance is None:
+        instance = load_instance("bridge-studio")
+    if ledger is None:
+        ledger = getattr(app, "_ledger", None)
+    if scenes is None:
+        scenes = getattr(app, "_scenes", None)
+    # The phase machine is core: every instance gets lock/unlock. An
+    # instance may override them, and adds its own actions/inputs/reads.
+    actions = {"lock": lambda body: asdict(app.lock()),
+               "unlock": lambda body: app.unlock(force=force(body))}
+    actions.update(getattr(instance, "actions", lambda app: {})(app))
+    inputs = getattr(instance, "inputs", lambda app: {})(app)
+    reads = getattr(instance, "reads", lambda app: {})(app)
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format, *args):  # the ledger is the record
@@ -20,83 +50,131 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791) ->
             self.end_headers()
             self.wfile.write(body)
 
+        def _send_bytes(self, code: int, data: bytes, content_type: str) -> None:
+            self.send_response(code)
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
         def _read_json(self) -> dict:
             length = int(self.headers.get("Content-Length") or 0)
             if length == 0:
                 return {}
             return json.loads(self.rfile.read(length))
 
+        def _authorized(self) -> bool:
+            if ui_token is None:
+                return True
+            keys = parse_qs(urlparse(self.path).query).get("key", [])
+            if keys and keys[0] == ui_token:
+                return True
+            return self.headers.get("X-Bridge-Key") == ui_token
+
+        def _guarded(self, path: str) -> bool:
+            if path.startswith(GATED_PREFIXES) and not self._authorized():
+                self._send(403, {"error": "bad key"})
+                return False
+            return True
+
         def do_POST(self) -> None:
-            if self.path == "/api/pose":
-                self._pose()
-            elif self.path == "/api/lock":
-                self._lock()
-            elif self.path == "/api/unlock":
-                self._unlock()
+            path = urlparse(self.path).path
+            if not self._guarded(path):
+                return
+            if path.startswith("/api/action/"):
+                self._dispatch(actions, path[len("/api/action/"):])
+            elif path.startswith("/api/input/"):
+                self._dispatch(inputs, path[len("/api/input/"):])
             else:
                 self._send(404, {"error": "not found"})
 
         def do_GET(self) -> None:
-            if self.path == "/api/status":
+            parsed = urlparse(self.path)
+            path = parsed.path
+            if not self._guarded(path):
+                return
+            if path == "/api/status":
                 self._send(200, app.status())
-            elif self.path == "/api/session/layers":
-                self._layers()
+            elif path.startswith("/api/read/"):
+                self._dispatch_read(reads, path[len("/api/read/"):], parsed)
+            elif path == "/api/macro/manifest":
+                self._send(200, instance.MANIFEST)
+            elif path == "/api/macro/state":
+                self._send(200, build_state(app, ledger, scenes,
+                                            instance=instance))
+            elif path == "/api/macro/preview.png":
+                self._preview_png()
+            elif path == "/api/macro/archive-thumb":
+                self._archive_thumb(parsed)
+            elif path == "/ui":
+                self._static("index.html")
+            elif path.startswith("/static/"):
+                self._static(path[len("/static/"):])
             else:
                 self._send(404, {"error": "not found"})
 
-        def _pose(self) -> None:
+        def _dispatch(self, handlers, name: str) -> None:
+            handler = handlers.get(name)
+            if handler is None:
+                self._send(404, {"error": "unknown port"})
+                return
             try:
                 body = self._read_json()
             except json.JSONDecodeError:
                 self._send(400, {"error": "invalid json"})
                 return
-            matrix, location = body.get("matrix"), body.get("location")
-            numbers = lambda seq: all(isinstance(v, (int, float)) for v in seq)
-            if (not isinstance(matrix, list) or len(matrix) != 16 or not numbers(matrix)
-                    or not isinstance(location, list) or len(location) != 3
-                    or not numbers(location)):
-                self._send(400, {"error": "pose needs matrix[16] and location[3] of numbers"})
+            if not isinstance(body, dict):
+                self._send(400, {"error": "expected a JSON object"})
                 return
+            self._run(handler, body)
+
+        def _dispatch_read(self, handlers, name: str, parsed) -> None:
+            handler = handlers.get(name)
+            if handler is None:
+                self._send(404, {"error": "unknown port"})
+                return
+            self._run(handler, {key: values[0]
+                                for key, values in parse_qs(parsed.query).items()})
+
+        def _run(self, handler, argument) -> None:
             try:
-                app.submit_pose({"matrix": [float(v) for v in matrix],
-                                 "location": [float(v) for v in location]})
-            except InvalidTransition as exc:
+                result = handler(argument)
+            except BadRequest as exc:
+                self._send(400, {"error": str(exc)})
+                return
+            except (InvalidTransition, ValueError) as exc:
                 self._send(409, {"error": str(exc)})
                 return
-            self._send(200, {"ok": True})
+            except Exception as exc:  # noqa: BLE001 — instance failures are data
+                self._send(500, {"error": str(exc)})
+                return
+            self._send(200, result or {"ok": True})
 
-        def _lock(self) -> None:
-            try:
-                session = app.lock()
-            except NoPose:
-                self._send(409, {"error": "no current pose"})
+        def _static(self, name: str) -> None:
+            content_type = STATIC_CONTENT_TYPES.get(name)
+            if content_type is None:
+                self._send(404, {"error": "not found"})
                 return
-            except InvalidTransition as exc:
-                self._send(409, {"error": str(exc)})
-                return
-            self._send(200, asdict(session))
+            self._send_bytes(200, (STATIC_DIR / name).read_bytes(), content_type)
 
-        def _unlock(self) -> None:
-            try:
-                app.unlock()
-            except InvalidTransition as exc:
-                self._send(409, {"error": str(exc)})
+        def _preview_png(self) -> None:
+            preview = getattr(instance, "preview", None)
+            data = preview(app) if preview is not None else None
+            if data is None:
+                self._send(404, {"error": "no preview"})
                 return
-            self._send(200, {"ok": True})
+            self._send_bytes(200, data, "image/png")
 
-        def _layers(self) -> None:
-            session = app.session
-            if session is None:
-                self._send(409, {"error": "no session"})
+        def _archive_thumb(self, parsed) -> None:
+            ids = parse_qs(parsed.query).get("id", [])
+            if not ids or not ids[0]:
+                self._send(400, {"error": "missing id"})
                 return
-            if session.state == "rendering":
-                self._send(409, {"error": "rendering"})
+            thumb = getattr(instance, "thumbnail", None)
+            data = thumb(app, ids[0]) if thumb is not None else None
+            if data is None:
+                self._send(404, {"error": "no thumbnail"})
                 return
-            if session.state == "failed":
-                self._send(409, {"error": "render failed"})
-                return
-            layers = app.layers()
-            self._send(200, {"layers": [{"part": l.part, "png_path": str(l.png_path)}
-                                        for l in layers]})
+            self._send_bytes(200, data, "image/png")
 
     return ThreadingHTTPServer((host, port), Handler)

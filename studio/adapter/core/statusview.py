@@ -6,6 +6,7 @@ Krita.
 """
 
 LIVE_POSE_MAX_AGE_MS = 2000
+DECISION_KINDS = frozenset({"adopt", "re-render", "unlock"})
 
 
 def parse_status(data):
@@ -27,7 +28,26 @@ def parse_status(data):
             return None
         if not isinstance(session.get("state"), str):
             return None
-    return {"phase": phase, "pose_age_ms": age, "session": session}
+    pending = data.get("pending_restore")
+    if pending is not None and not _well_formed_pending(pending):
+        pending = None
+    decision = data.get("pending_decision")
+    if decision is not None and not _well_formed_decision(decision):
+        decision = None
+    return {"phase": phase, "pose_age_ms": age, "session": session,
+            "pending_restore": pending, "pending_decision": decision}
+
+
+def _well_formed_pending(pending):
+    return (isinstance(pending, dict)
+            and isinstance(pending.get("id"), str)
+            and isinstance(pending.get("kra"), str))
+
+
+def _well_formed_decision(decision):
+    return (isinstance(decision, dict)
+            and decision.get("kind") in DECISION_KINDS
+            and isinstance(decision.get("session"), str))
 
 
 def lock_enabled(phase, pose_age_ms, max_age_ms: int = LIVE_POSE_MAX_AGE_MS) -> bool:

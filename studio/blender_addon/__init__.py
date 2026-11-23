@@ -18,6 +18,7 @@ bl_info = {
 }
 
 import json
+import pathlib
 import urllib.request
 
 try:
@@ -34,6 +35,15 @@ INTERVAL_S = 0.1
 _last_ok = None
 
 
+def _ui_token():
+    """Per-boot token written next to the studio package, if present."""
+    try:
+        path = pathlib.Path(__file__).resolve().parents[1] / "run" / "ui_token"
+        return path.read_text().strip() or None
+    except (OSError, ValueError):
+        return None
+
+
 def _note(ok):
     global _last_ok
     if ok != _last_ok:
@@ -47,9 +57,13 @@ def _tick():
     if camera is not None:
         try:
             pose = matrix_to_pose(list(map(list, camera.matrix_world)))
+            headers = {"Content-Type": "application/json"}
+            token = _ui_token()
+            if token is not None:
+                headers["X-Bridge-Key"] = token
             request = urllib.request.Request(
-                BASE + "/api/pose", data=json.dumps(pose).encode(),
-                headers={"Content-Type": "application/json"})
+                BASE + "/api/input/pose", data=json.dumps(pose).encode(),
+                headers=headers)
             with urllib.request.urlopen(request, timeout=TIMEOUT_S):
                 pass
         except (OSError, ValueError):
