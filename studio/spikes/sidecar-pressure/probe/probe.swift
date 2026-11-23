@@ -1,6 +1,6 @@
 import AppKit
 
-let logPath = "~/Desktop/an-agent/An/studio/spikes/sidecar-pressure/probe/probe.log"
+let logPath = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("probe.log").path
 
 func log(_ s: String) {
     let line = s + "\n"
