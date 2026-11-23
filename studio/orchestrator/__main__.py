@@ -51,9 +51,7 @@ def main(argv=None) -> None:
         watcher = Watcher(args.inbox, scenes, pipeline.import_asset, ledger)
         watcher.start()
     server = make_server(app, host="127.0.0.1", port=args.port, ui_token=token,
-                         archives_dir=run_dir / "archives", ledger=ledger,
-                         scenes=scenes,
-                         preview_path=run_dir / "preview" / "current.png",
+                         ledger=ledger, scenes=scenes,
                          instance=load_instance(args.instance))
     url = f"http://127.0.0.1:{server.server_address[1]}/ui?key={token}"
     print(f"orchestrator on 127.0.0.1:{args.port} (fake={args.fake})", flush=True)

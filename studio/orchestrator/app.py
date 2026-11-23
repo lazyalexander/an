@@ -59,6 +59,10 @@ class Orchestrator:
         return self._archives_dir
 
     @property
+    def run_dir(self) -> Path:
+        return self._run_dir
+
+    @property
     def ledger(self) -> Ledger:
         return self._ledger
 

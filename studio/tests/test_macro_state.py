@@ -1,8 +1,7 @@
 import json
 
-from conftest import FakeClock, FakePipeline, wait_until
-
 from adapter.core.archive import PoseRecord, write_sidecar
+from conftest import FakeClock, FakePipeline, wait_until
 from orchestrator.app import Orchestrator
 from orchestrator.ledger import Ledger
 from orchestrator.macro.manifest import MANIFEST
@@ -30,7 +29,7 @@ class _Rig:
                                 archives_dir=self.archives)
 
     def state(self, **kwargs):
-        return build_state(self.app, self.archives, self.ledger, self.scenes,
+        return build_state(self.app, self.ledger, self.scenes,
                            now=self.clock.now, **kwargs)
 
 

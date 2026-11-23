@@ -28,7 +28,6 @@ def test_demo_instance_ports_are_generic(tmp_path):
     app = Orchestrator(ledger, FakePipeline(), (640, 480),
                        run_dir=tmp_path / "run")
     srv = make_server(app, port=0, ui_token="testkey",
-                      archives_dir=tmp_path / "run" / "archives",
                       ledger=ledger, scenes=None, instance=instance)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()

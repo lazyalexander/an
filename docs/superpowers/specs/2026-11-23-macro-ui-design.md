@@ -49,6 +49,15 @@ Builds on: `docs/superpowers/specs/2026-11-22-bridge-studio-design.md`
 > instance route. The cad-animation fixture exercises its own action,
 > input and read, so a new instance needs no framework change beyond a
 > module and a registry row.
+>
+> **Revision note (2026-11-23, output port).** Versions, artifacts and
+> the preview are instance-owned too: the framework calls
+> `versions(app)`, `outputs(ctx)` and `preview(app)` (plus
+> `thumbnail(app, id)`) and never reads a `.kra`, the archive directory
+> or the preview file itself. Bridge Studio supplies the Krita-backed
+> implementations; cad-animation returns an empty output. `build_state`
+> no longer takes an archives directory, and the server's preview route
+> delegates to the instance.
 
 ## Intent and why
 

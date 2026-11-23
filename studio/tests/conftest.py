@@ -59,9 +59,7 @@ def running_server(tmp_path):
     ledger = Ledger(tmp_path / "l.jsonl")
     app = Orchestrator(ledger, FakePipeline(), (1600, 1200), run_dir=run_dir)
     srv = make_server(app, port=0, ui_token="testkey",
-                      archives_dir=run_dir / "archives", ledger=ledger,
-                      scenes=None,
-                      preview_path=run_dir / "preview" / "current.png")
+                      ledger=ledger, scenes=None)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()
     conn = http.client.HTTPConnection("127.0.0.1", srv.server_address[1])

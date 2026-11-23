@@ -21,21 +21,15 @@ STATIC_CONTENT_TYPES = {"index.html": "text/html",
 
 
 def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
-                ui_token: str | None = None, archives_dir: Path | None = None,
+                ui_token: str | None = None,
                 ledger: Ledger | None = None, scenes: SceneStore | None = None,
-                preview_path: Path | None = None, instance=None) -> ThreadingHTTPServer:
+                instance=None) -> ThreadingHTTPServer:
     if instance is None:
         instance = load_instance("bridge-studio")
-    if archives_dir is None:
-        archives_dir = getattr(app, "_archives_dir", None)
     if ledger is None:
         ledger = getattr(app, "_ledger", None)
     if scenes is None:
         scenes = getattr(app, "_scenes", None)
-    if preview_path is None:
-        run_dir = getattr(app, "_run_dir", None)
-        preview_path = (Path(run_dir) / "preview" / "current.png"
-                        if run_dir is not None else None)
     # The phase machine is core: every instance gets lock/unlock. An
     # instance may override them, and adds its own actions/inputs/reads.
     actions = {"lock": lambda body: asdict(app.lock()),
@@ -106,7 +100,7 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
             elif path == "/api/macro/manifest":
                 self._send(200, instance.MANIFEST)
             elif path == "/api/macro/state":
-                self._send(200, build_state(app, archives_dir, ledger, scenes,
+                self._send(200, build_state(app, ledger, scenes,
                                             instance=instance))
             elif path == "/api/macro/preview.png":
                 self._preview_png()
@@ -164,10 +158,12 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
             self._send_bytes(200, (STATIC_DIR / name).read_bytes(), content_type)
 
         def _preview_png(self) -> None:
-            if preview_path is None or not Path(preview_path).is_file():
+            preview = getattr(instance, "preview", None)
+            data = preview(app) if preview is not None else None
+            if data is None:
                 self._send(404, {"error": "no preview"})
                 return
-            self._send_bytes(200, Path(preview_path).read_bytes(), "image/png")
+            self._send_bytes(200, data, "image/png")
 
         def _archive_thumb(self, parsed) -> None:
             ids = parse_qs(parsed.query).get("id", [])

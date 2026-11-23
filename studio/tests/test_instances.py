@@ -33,7 +33,7 @@ def _rig(tmp_path):
 
 def _state(tmp_path, instance):
     clock, ledger, scenes, app = _rig(tmp_path)
-    return build_state(app, tmp_path / "archives", ledger, scenes,
+    return build_state(app, ledger, scenes,
                        instance=instance, now=clock.now)
 
 
@@ -90,6 +90,9 @@ def test_every_instance_manifest_matches_the_contract(tmp_path, name):
     assert all(callable(h) for h in instance.inputs(app).values())
     assert all(callable(h) for h in instance.reads(app).values())
     assert callable(instance.thumbnail)
+    assert callable(instance.versions)
+    assert callable(instance.outputs)
+    assert callable(instance.preview)
 
     state = _state(tmp_path, instance)
     assert state["instance"] == name
@@ -115,7 +118,7 @@ def test_demo_drawer_uses_its_own_kinds(tmp_path):
     ledger.record("pose_stream", "8 poses in 1s window")
     ledger.record("file_drop", "a.obj -> snap-0001")
     ledger.record("import_done", "snap-0001: 2 parts")
-    state = build_state(app, tmp_path / "archives", ledger, scenes,
+    state = build_state(app, ledger, scenes,
                         instance=load("cad-animation"), now=clock.now)
     assert "poses" not in state["drawer"]
     assert state["drawer"]["imports"] == ["snap-0001: 2 parts",
@@ -125,13 +128,13 @@ def test_demo_drawer_uses_its_own_kinds(tmp_path):
 def test_surfaces_track_the_phase(tmp_path):
     clock, ledger, scenes, app = _rig(tmp_path)
     scenes.current = scenes.new_snapshot()
-    adjustment = build_state(app, tmp_path / "archives", ledger, scenes,
+    adjustment = build_state(app, ledger, scenes,
                              now=clock.now)
     assert [(s["id"], s["active"]) for s in adjustment["surfaces"]] == [
         ("adjust", True), ("paint", False)]
     app.submit_pose({"matrix": [1.0] * 16, "location": [0, 0, 0]})
     session = app.lock()
-    locked = build_state(app, tmp_path / "archives", ledger, scenes,
+    locked = build_state(app, ledger, scenes,
                          now=clock.now)
     from conftest import wait_until
     wait_until(lambda: session.state == "rendered")
@@ -164,6 +167,13 @@ def test_page_carries_no_instance_specific_paths():
         assert path not in html, path
 
 
+def test_state_builder_has_no_instance_output_knowledge():
+    source = (STATIC.parent / "state.py").read_text(encoding="utf-8")
+    for token in ("adapter.core.archive", "list_versions", "kra",
+                  "preview/current.png"):
+        assert token not in source, token
+
+
 def test_server_serves_the_injected_instance(tmp_path):
     instance = load("cad-animation")
     ledger = Ledger(tmp_path / "l.jsonl")
@@ -171,7 +181,6 @@ def test_server_serves_the_injected_instance(tmp_path):
                        run_dir=tmp_path / "run")
     from orchestrator.server import make_server
     srv = make_server(app, port=0, ui_token="testkey",
-                      archives_dir=tmp_path / "run" / "archives",
                       ledger=ledger, scenes=None, instance=instance)
     thread = threading.Thread(target=srv.serve_forever, daemon=True)
     thread.start()

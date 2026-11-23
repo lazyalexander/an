@@ -14,6 +14,8 @@ from ..context import Context
 from ..health import adapter, pipeline, pose
 from ..ports import BadRequest, force
 
+PREVIEW_URL = "/api/macro/preview.png"
+
 MANIFEST = {
     "instance": "bridge-studio",
     "title": "Bridge Studio",
@@ -101,6 +103,36 @@ def thumbnail(app, version_id: str) -> bytes | None:
     if version is None:
         return None
     return read_thumbnail(version["kra"])
+
+
+def versions(app) -> list[dict]:
+    return list_versions(app.archives_dir)
+
+
+def outputs(ctx: Context) -> dict:
+    preview = PREVIEW_URL if _preview_path(ctx.app).is_file() else None
+    return {"preview": preview,
+            "artifacts": [_archive_entry(version) for version in ctx.versions]}
+
+
+def preview(app) -> bytes | None:
+    path = _preview_path(app)
+    return path.read_bytes() if path.is_file() else None
+
+
+def _preview_path(app) -> Path:
+    return app.run_dir / "preview" / "current.png"
+
+
+def _archive_entry(version) -> dict:
+    return {
+        "id": version["id"],
+        "kra": str(version["kra"]),
+        "created": version["created"],
+        "status": version["status"],
+        "restored_from": version["restored_from"],
+        "thumb": f"/api/macro/archive-thumb?id={version['id']}",
+    }
 
 
 def _ok(value=None) -> dict:

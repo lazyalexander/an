@@ -63,6 +63,18 @@ def thumbnail(app, version_id: str):
     return None
 
 
+def versions(app) -> list[dict]:
+    return []
+
+
+def outputs(ctx: Context) -> dict:
+    return {"preview": None, "artifacts": []}
+
+
+def preview(app):
+    return None
+
+
 def _approve_rig(app) -> dict:
     app.ledger.record("rig_approved", "rig approved by the user")
     return {"ok": True}
