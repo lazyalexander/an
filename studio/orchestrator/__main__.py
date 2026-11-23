@@ -1,4 +1,6 @@
 import argparse
+import secrets
+import webbrowser
 from pathlib import Path
 
 from .app import DEFAULT_RUN_DIR, Orchestrator
@@ -16,10 +18,15 @@ def main(argv=None) -> None:
     parser.add_argument("--height", type=int, default=1200)
     parser.add_argument("--inbox", type=Path, default=DEFAULT_RUN_DIR / "inbox")
     parser.add_argument("--scene-root", type=Path, default=DEFAULT_RUN_DIR / "scene")
+    parser.add_argument("--open-ui", action="store_true",
+                        help="open the macro UI in the default browser")
     args = parser.parse_args(argv)
 
     run_dir = DEFAULT_RUN_DIR
     run_dir.mkdir(parents=True, exist_ok=True)
+    (run_dir / "preview").mkdir(parents=True, exist_ok=True)
+    token = secrets.token_urlsafe(8)
+    (run_dir / "ui_token").write_text(token)
     ledger = Ledger(run_dir / "ledger.jsonl")
     if args.fake:
         pipeline = FakePipeline()
@@ -32,14 +39,21 @@ def main(argv=None) -> None:
     from .scenes import SceneStore
     scenes = SceneStore(args.scene_root)
     app = Orchestrator(ledger, pipeline, (args.width, args.height), run_dir=run_dir,
-                       scenes=scenes)
+                       scenes=scenes, archives_dir=run_dir / "archives")
     watcher = None
     if hasattr(pipeline, "import_asset"):
         from .watch import Watcher
         watcher = Watcher(args.inbox, scenes, pipeline.import_asset, ledger)
         watcher.start()
-    server = make_server(app, port=args.port)
-    print(f"orchestrator on 127.0.0.1:{args.port} (fake={args.fake})")
+    server = make_server(app, host="127.0.0.1", port=args.port, ui_token=token,
+                         archives_dir=run_dir / "archives", ledger=ledger,
+                         scenes=scenes,
+                         preview_path=run_dir / "preview" / "current.png")
+    url = f"http://127.0.0.1:{server.server_address[1]}/ui?key={token}"
+    print(f"orchestrator on 127.0.0.1:{args.port} (fake={args.fake})", flush=True)
+    print(f"macro UI: {url}", flush=True)
+    if args.open_ui:
+        webbrowser.open(url)
     try:
         server.serve_forever()
     except KeyboardInterrupt:

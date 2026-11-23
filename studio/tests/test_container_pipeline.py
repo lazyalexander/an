@@ -7,6 +7,50 @@ from pipeline import pngutil
 
 FIXTURE_OBJ = pathlib.Path(__file__).parents[1] / "pipeline" / "fixtures" / "two_parts.obj"
 
+
+class _Proc:
+    def __init__(self, returncode=0, stdout="", stderr=""):
+        self.returncode = returncode
+        self.stdout = stdout
+        self.stderr = stderr
+
+
+def fake_ok_runner(cmd, **kwargs):
+    return _Proc(0, stdout="CONTAINER ID  IMAGE  COMMAND")
+
+
+def fake_failing_runner(cmd, **kwargs):
+    raise FileNotFoundError(2, "No such file or directory", "container")
+
+
+def test_container_health_ok_and_down():
+    from pipeline.container_pipeline import ContainerPipeline
+
+    ok = ContainerPipeline(memory="4g", cpus=4).health(runner=fake_ok_runner)
+    assert ok["ok"] is True
+    down = ContainerPipeline(memory="4g", cpus=4).health(runner=fake_failing_runner)
+    assert down["ok"] is False
+
+
+def test_container_health_probe_command_and_cache():
+    from pipeline.container_pipeline import ContainerPipeline
+
+    calls = []
+
+    def counting_runner(cmd, **kwargs):
+        calls.append((cmd, kwargs))
+        return _Proc(1, stderr="daemon not running")
+
+    pipe = ContainerPipeline(memory="4g", cpus=4)
+    first = pipe.health(runner=counting_runner)
+    assert first["ok"] is False and "daemon not running" in first["detail"]
+    second = pipe.health(runner=counting_runner)
+    assert second == first
+    assert len(calls) == 1  # second call served from the 10 s cache
+    cmd, kwargs = calls[0]
+    assert cmd[:2] == ["container", "ls"]
+    assert kwargs["timeout"] == 3
+
 # Camera at (0, -6, 2) looking at the origin (Blender -Z forward, +Y up),
 # computed offline and recorded as a literal.
 TEST_POSE_4X4 = [

@@ -7,11 +7,17 @@ amd64 runs go through its per-container lightweight VMs with --rosetta.
 import json
 import pathlib
 import subprocess
+import time
 
 from orchestrator.pipeline_api import LayerSpec
 
+HEALTH_PROBE_TIMEOUT_S = 3
+HEALTH_CACHE_S = 10
+
 
 class ContainerPipeline:
+    _health_cache = None  # (monotonic_ts, result); per-instance once written
+
     def __init__(self, image: str = "bridge-studio-blender:5.2.3",
                  memory: str = "4g", cpus: int = 4):
         self.image = image
@@ -33,6 +39,28 @@ class ContainerPipeline:
             raise RuntimeError(
                 "container run failed (exit {}): {}".format(proc.returncode, tail))
         return proc
+
+    def health(self, runner=subprocess.run) -> dict:
+        now = time.monotonic()
+        if (self._health_cache is not None
+                and now - self._health_cache[0] < HEALTH_CACHE_S):
+            return dict(self._health_cache[1])
+        try:
+            proc = runner(["container", "ls"], capture_output=True, text=True,
+                          timeout=HEALTH_PROBE_TIMEOUT_S)
+            if proc.returncode == 0:
+                result = {"ok": True, "detail": "container ls exit 0"}
+            else:
+                tail = "\n".join(
+                    (proc.stderr or proc.stdout or "").splitlines()[-5:])
+                detail = f"container ls exit {proc.returncode}"
+                if tail:
+                    detail += ": " + tail
+                result = {"ok": False, "detail": detail}
+        except Exception as exc:  # noqa: BLE001 — failure is data, like app._render
+            result = {"ok": False, "detail": str(exc)}
+        self._health_cache = (now, result)
+        return dict(result)
 
     def import_asset(self, src: pathlib.Path, out_dir: pathlib.Path) -> None:
         src = pathlib.Path(src).resolve()
