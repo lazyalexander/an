@@ -1,4 +1,8 @@
-"""Bridge docker — the only Bridge Studio UI inside Krita.
+"""Bridge docker — a pure agent inside Krita (no controls).
+
+The macro UI web page is the sole control surface; this docker pushes
+rendered sessions, sends a gated heartbeat, periodically exports a
+flattened preview PNG, and picks up restore requests from the page.
 
 Stdlib + krita + PyQt5 only (Krita 5.3.4 bundles Python 3.10: keep this
 file 3.10-compatible). Every orchestrator call fails soft into the
@@ -8,13 +12,13 @@ offline state; nothing raises into Krita.
 import json
 import pathlib
 import sys
-import urllib.error
+import time
 import urllib.request
 
 from krita import DockWidget, Krita
-from PyQt5.QtCore import QTimer
+from PyQt5.QtCore import QBuffer, QIODevice, QTimer
 from PyQt5.QtGui import QImage
-from PyQt5.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 DOCKER_ID = "bridge_studio_docker"
 BASE = "http://127.0.0.1:8791"
@@ -38,12 +42,49 @@ def _get(path):
         return json.loads(response.read())
 
 
-def _post(path, payload):
+def _post(path, payload, key=None):
+    headers = {"Content-Type": "application/json"}
+    if key is not None:
+        headers["X-Bridge-Key"] = key
     request = urllib.request.Request(
-        BASE + path, data=json.dumps(payload).encode(),
-        headers={"Content-Type": "application/json"})
+        BASE + path, data=json.dumps(payload).encode(), headers=headers)
     with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
         return json.loads(response.read())
+
+
+def _ui_token():
+    """Read the per-boot UI token; None means legacy mode (no gating)."""
+    if _STUDIO is None:
+        return None
+    try:
+        return (_STUDIO / "run" / "ui_token").read_text().strip() or None
+    except OSError:
+        return None
+
+
+def _flattened_png_bytes(doc):
+    """Read-only flattened PNG of the open document.
+
+    Prefers doc.projection(); if that yields nothing, flattens a
+    duplicate instead (the user's document is never touched).
+    """
+    image = None
+    try:
+        image = doc.projection()
+    except Exception:
+        image = None
+    if image is None or image.isNull():
+        duplicate = doc.duplicate()
+        try:
+            duplicate.flatten()
+            image = duplicate.projection()
+        finally:
+            duplicate.close()
+    buffer = QBuffer()
+    buffer.open(QIODevice.WriteOnly)
+    image.save(buffer, "PNG")
+    buffer.close()
+    return bytes(buffer.data())
 
 
 class RealDocument:
@@ -98,18 +139,15 @@ class BridgeDocker(DockWidget):
         super().__init__()
         self.setWindowTitle("Bridge")
         self._status_label = QLabel("orchestrator offline")
-        self._lock_button = QPushButton("Lock")
-        self._unlock_button = QPushButton("Unlock")
-        self._lock_button.clicked.connect(self._on_lock)
-        self._unlock_button.clicked.connect(self._on_unlock)
         layout = QVBoxLayout()
+        layout.addWidget(QLabel("Bridge agent — 控制请在宏UI页面进行"))
         layout.addWidget(self._status_label)
-        layout.addWidget(self._lock_button)
-        layout.addWidget(self._unlock_button)
         widget = QWidget()
         widget.setLayout(layout)
         self.setWidget(widget)
         self._pushed = set()
+        self._restored = set()
+        self._last_preview = 0.0
         self._broken = _STUDIO is None
         if self._broken:
             self._status_label.setText("install broken: not a symlink into the repo")
@@ -123,14 +161,12 @@ class BridgeDocker(DockWidget):
 
     def _set_offline(self):
         self._status_label.setText("orchestrator offline")
-        self._lock_button.setEnabled(False)
-        self._unlock_button.setEnabled(False)
 
     def _tick(self):
         if self._broken:
             return
         try:
-            from adapter.core.statusview import lock_enabled, parse_status
+            from adapter.core.statusview import parse_status
             status = parse_status(_get("/api/status"))
         except (OSError, ValueError):
             self._set_offline()
@@ -147,29 +183,51 @@ class BridgeDocker(DockWidget):
         if session:
             text += " session={}".format(session["state"])
         self._status_label.setText(text)
-        self._lock_button.setEnabled(lock_enabled(phase, age))
-        self._unlock_button.setEnabled(phase == "LOCKED")
         if (phase == "LOCKED" and session and session["state"] == "rendered"
                 and session["id"] not in self._pushed):
             self._push(session)
+        token = _ui_token()
+        if token is not None:
+            self._heartbeat(token)
+            pending = status["pending_restore"]
+            if pending is not None and pending["id"] not in self._restored:
+                self._restore(pending, token)
+        self._maybe_export_preview(time.monotonic())
 
-    def _on_lock(self):
+    def _heartbeat(self, token):
         try:
-            _post("/api/lock", {})
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")
-            self._status_label.setText("lock refused: {}".format(detail))
-        except (OSError, ValueError):
-            self._set_offline()
+            _post("/api/macro/heartbeat", {}, key=token)
+        except Exception:  # best-effort; the status GET owns offline state
+            pass
 
-    def _on_unlock(self):
+    def _restore(self, pending, token):
+        self._restored.add(pending["id"])  # no retry storm on the 500ms tick
         try:
-            _post("/api/unlock", {})
-        except urllib.error.HTTPError as exc:
-            detail = exc.read().decode(errors="replace")
-            self._status_label.setText("unlock refused: {}".format(detail))
-        except (OSError, ValueError):
-            self._set_offline()
+            app = Krita.instance()
+            doc = app.openDocument(pending["kra"])
+            window = app.activeWindow()
+            if window is not None:
+                window.addView(doc)
+            _post("/api/decision/restore-ack", {"id": pending["id"]},
+                  key=token)
+            self._status_label.setText(
+                "restored {}".format(pathlib.Path(pending["kra"]).name))
+        except Exception as exc:  # never raise into Krita
+            self._status_label.setText("restore failed: {}".format(exc))
+
+    def _maybe_export_preview(self, now):
+        try:
+            from adapter.core.preview import atomic_write, due
+            if not due(self._last_preview, now):
+                return
+            self._last_preview = now  # failures retry on the next 3s boundary
+            doc = Krita.instance().activeDocument()
+            if doc is None:
+                return
+            atomic_write(_STUDIO / "run" / "preview" / "current.png",
+                         _flattened_png_bytes(doc))
+        except Exception as exc:  # never raise into Krita
+            self._status_label.setText("preview failed: {}".format(exc))
 
     def _push(self, session):
         try:

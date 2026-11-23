@@ -27,7 +27,17 @@ def parse_status(data):
             return None
         if not isinstance(session.get("state"), str):
             return None
-    return {"phase": phase, "pose_age_ms": age, "session": session}
+    pending = data.get("pending_restore")
+    if pending is not None and not _well_formed_pending(pending):
+        pending = None
+    return {"phase": phase, "pose_age_ms": age, "session": session,
+            "pending_restore": pending}
+
+
+def _well_formed_pending(pending):
+    return (isinstance(pending, dict)
+            and isinstance(pending.get("id"), str)
+            and isinstance(pending.get("kra"), str))
 
 
 def lock_enabled(phase, pose_age_ms, max_age_ms: int = LIVE_POSE_MAX_AGE_MS) -> bool:
