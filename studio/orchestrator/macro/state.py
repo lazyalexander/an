@@ -32,23 +32,23 @@ def build_state(app: Orchestrator, archives_dir: Path, ledger: Ledger,
     window = entries[-max_events:] if max_events > 0 else []
     session = status["session"]
     return {
-        "stages": _stages(entries, versions, scenes, session, status["pose_age_ms"]),
+        "stages": _stages(entries, versions, scenes, status),
         "phase": status["phase"],
         "pose_age_ms": status["pose_age_ms"],
         "session": session,
         "pending": _pending(status, session, versions),
         "archive": [_archive_entry(version) for version in versions],
         "drawer": _drawer(window),
-        "health": _health(app, status["pose_age_ms"]),
+        "health": _health(app, status),
         "preview": _preview(app),
     }
 
 
-def _stages(entries, versions, scenes, session, pose_age_ms) -> list[dict]:
+def _stages(entries, versions, scenes, status) -> list[dict]:
     return [
         _import_stage(entries, scenes),
-        _pose_stage(pose_age_ms),
-        _render_stage(session),
+        _pose_stage(status["phase"], status["pose_age_ms"]),
+        _render_stage(status["session"]),
         {"id": "archive", "status": "done" if versions else "waiting",
          "detail": len(versions)},
     ]
@@ -70,7 +70,9 @@ def _import_stage(entries, scenes) -> dict:
     return {"id": "import", "status": "waiting", "detail": None}
 
 
-def _pose_stage(pose_age_ms) -> dict:
+def _pose_stage(phase, pose_age_ms) -> dict:
+    if phase == "LOCKED":  # the pose stream is frozen by design, not lost
+        return {"id": "pose", "status": "done", "detail": "frozen"}
     live = pose_age_ms is not None and pose_age_ms <= POSE_LIVE_MS
     return {"id": "pose", "status": "running" if live else "waiting",
             "detail": pose_age_ms}
@@ -121,12 +123,17 @@ def _drawer(entries) -> dict:
     return drawer
 
 
-def _health(app, pose_age_ms) -> dict:
+def _health(app, status) -> dict:
     adapter_age = app.heartbeat_age_ms()
+    pose_age_ms = status["pose_age_ms"]
+    # while LOCKED the pose stream is frozen by design — stillness is not
+    # a disconnect, so it must not raise the banner
+    pose_ok = (status["phase"] == "LOCKED"
+               or (pose_age_ms is not None and pose_age_ms <= POSE_LIVE_MS))
     return {
         "adapter": {"ok": adapter_age is not None and adapter_age <= ADAPTER_LIVE_MS,
                     "stale_ms": adapter_age},
-        "pose": {"ok": pose_age_ms is not None and pose_age_ms <= POSE_LIVE_MS},
+        "pose": {"ok": pose_ok},
         "pipeline": _pipeline_health(app),
     }
 

@@ -210,6 +210,28 @@ def test_health_adapter_live_then_stale(tmp_path):
     assert rig.state()["health"]["adapter"] == {"ok": False, "stale_ms": 4000}
 
 
+def test_locked_frozen_pose_stream_is_not_an_alarm(tmp_path):
+    rig = _Rig(tmp_path)
+    _locked_rendered(rig)
+    rig.clock.advance(200)  # pose stream frozen by design while LOCKED
+    state = rig.state()
+    assert state["phase"] == "LOCKED"
+    assert state["pose_age_ms"] == 200_000  # stale, yet not a disconnect
+    assert state["health"]["pose"] == {"ok": True}
+    assert _stages(state)["pose"] == {"id": "pose", "status": "done",
+                                      "detail": "frozen"}
+
+
+def test_locked_pose_stage_is_never_waiting(tmp_path):
+    rig = _Rig(tmp_path)
+    _locked_rendered(rig)  # fresh pose (age 0), still LOCKED
+    state = rig.state()
+    stage = _stages(state)["pose"]
+    assert stage["status"] != "waiting"
+    assert stage == {"id": "pose", "status": "done", "detail": "frozen"}
+    assert state["health"]["pose"]["ok"] is True
+
+
 def test_build_state_does_not_mutate(tmp_path):
     rig = _Rig(tmp_path)
     _imported(rig)
