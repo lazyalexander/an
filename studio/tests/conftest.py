@@ -84,6 +84,12 @@ def get_bytes(conn, path):
     return response.status, response.headers.get("Content-Type"), response.read()
 
 
+def get_text(conn, path):
+    conn.request("GET", path)
+    response = conn.getresponse()
+    return response.status, response.read()
+
+
 def post(conn, path, body, headers=None):
     import json
     conn.request("POST", path, json.dumps(body),

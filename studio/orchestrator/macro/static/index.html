@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bridge Studio</title>
+</head>
+<body>
+
+<header id="topbar">
+  <h1 id="title">Bridge Studio</h1>
+  <span id="phase"></span>
+  <button id="lock-toggle" type="button">锁定</button>
+</header>
+
+<nav id="stages" aria-label="stages"></nav>
+
+<main>
+  <section id="preview" aria-label="preview">
+    <img id="preview-img" alt="" hidden>
+    <p id="preview-empty">尚无画面</p>
+  </section>
+
+  <section id="archive" aria-label="archive">
+    <h2 id="archive-title"></h2>
+    <ul id="archive-list"></ul>
+  </section>
+
+  <details id="drawer">
+    <summary>🔧 排查/调整</summary>
+    <div id="drawer-sections"></div>
+  </details>
+</main>
+
+<footer id="decision-area">
+  <p id="health-banner" hidden>
+    <span id="health-text"></span>
+    <button id="banner-retry" type="button" hidden>重试</button>
+  </p>
+  <div id="decision-bar">
+    <button id="adopt" type="button" hidden>采用</button>
+    <button id="rerender" type="button" hidden>重渲</button>
+    <button id="retry" type="button" hidden>重试</button>
+    <span id="decision-note" role="status"></span>
+  </div>
+</footer>
+
+<script>
+// The page is served at /ui?key=... and every asset and API route needs the
+// same key, so the stylesheet and app script are injected here with the key
+// appended — static HTML cannot template it into <link>/<script> itself.
+(function () {
+  var key = new URLSearchParams(location.search).get("key") || "";
+  var suffix = key ? "?key=" + encodeURIComponent(key) : "";
+  var css = document.createElement("link");
+  css.rel = "stylesheet";
+  css.href = "/static/style.css" + suffix;
+  document.head.appendChild(css);
+  var app = document.createElement("script");
+  app.src = "/static/app.js" + suffix;
+  document.body.appendChild(app);
+})();
+</script>
+
+</body>
+</html>

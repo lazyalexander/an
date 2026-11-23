@@ -13,7 +13,11 @@ from .macro.state import build_state
 from .phase import InvalidTransition, NoPose
 from .scenes import SceneStore
 
-GATED_PREFIXES = ("/api/decision/", "/api/macro/")
+GATED_PREFIXES = ("/api/decision/", "/api/macro/", "/ui", "/static/")
+STATIC_DIR = Path(__file__).parent / "macro" / "static"
+STATIC_CONTENT_TYPES = {"index.html": "text/html",
+                        "app.js": "text/javascript",
+                        "style.css": "text/css"}
 
 
 def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
@@ -108,11 +112,22 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
                 self._preview_png()
             elif path == "/api/macro/archive-thumb":
                 self._archive_thumb(parsed)
+            elif path == "/ui":
+                self._static("index.html")
+            elif path.startswith("/static/"):
+                self._static(path[len("/static/"):])
             else:
                 self._send(404, {"error": "not found"})
 
         def _state(self) -> None:
             self._send(200, build_state(app, archives_dir, ledger, scenes))
+
+        def _static(self, name: str) -> None:
+            content_type = STATIC_CONTENT_TYPES.get(name)
+            if content_type is None:
+                self._send(404, {"error": "not found"})
+                return
+            self._send_bytes(200, (STATIC_DIR / name).read_bytes(), content_type)
 
         def _preview_png(self) -> None:
             if preview_path is None or not Path(preview_path).is_file():

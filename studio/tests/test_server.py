@@ -1,6 +1,6 @@
 import zipfile
 
-from conftest import get, get_bytes, post, wait_until
+from conftest import get, get_bytes, get_text, post, wait_until
 
 from adapter.core.archive import PoseRecord, read_version, write_sidecar
 
@@ -171,3 +171,30 @@ def test_macro_endpoints_reject_bad_key(running_server):
         assert code == 403 and body["error"] == "bad key", path
         code, body = get(c, path)
         assert code == 403 and body["error"] == "bad key", path
+
+
+def test_ui_and_static_served_with_key(running_server):
+    c, _ = running_server
+    assert get(c, "/ui")[0] == 403
+    code, body = get_text(c, "/ui?key=testkey")  # helper reading raw body
+    assert code == 200 and b"Bridge Studio" in body
+    assert get_text(c, "/static/app.js?key=testkey")[0] == 200
+
+
+def test_static_content_types(running_server):
+    c, _ = running_server
+    assert get(c, "/static/style.css")[0] == 403
+    code, content_type, _ = get_bytes(c, "/static/style.css?key=testkey")
+    assert code == 200 and content_type == "text/css"
+    code, content_type, _ = get_bytes(c, "/static/app.js?key=testkey")
+    assert code == 200 and content_type == "text/javascript"
+    code, content_type, _ = get_bytes(c, "/ui?key=testkey")
+    assert code == 200 and content_type == "text/html"
+
+
+def test_static_serves_only_whitelisted_names(running_server):
+    c, _ = running_server
+    assert get(c, "/static/../server.py?key=testkey")[0] == 404
+    assert get(c, "/static/manifest.py?key=testkey")[0] == 404
+    assert get(c, "/static/?key=testkey")[0] == 404
+    assert get_text(c, "/static/index.html?key=testkey")[0] == 200
