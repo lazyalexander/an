@@ -65,21 +65,22 @@ def _ui_token():
 def _flattened_png_bytes(doc):
     """Read-only flattened PNG of the open document.
 
-    Prefers doc.projection(); if that yields nothing, flattens a
-    duplicate instead (the user's document is never touched).
+    doc.pixelData() reads the composited projection without touching the
+    user's document (Krita 5's Document has no projection()/duplicate()).
+
+    Byte order: an RGBA/U8 document returns B,G,R,A per pixel (see
+    adapter/core/pixels.py; api.kde.org notes the channel order is "most
+    often BGR"). QImage.Format_ARGB32 is 0xAARRGGBB in a native uint32,
+    which in memory is exactly B,G,R,A on little-endian — the only
+    endianness Krita 5 ships (x86_64/arm64) — so the bytes hand over
+    with no swap. Alpha is straight (non-premultiplied) on both sides.
     """
-    image = None
-    try:
-        image = doc.projection()
-    except Exception:
-        image = None
-    if image is None or image.isNull():
-        duplicate = doc.duplicate()
-        try:
-            duplicate.flatten()
-            image = duplicate.projection()
-        finally:
-            duplicate.close()
+    width = doc.width()
+    height = doc.height()
+    data = doc.pixelData(0, 0, width, height)
+    image = QImage(data, width, height, QImage.Format_ARGB32)
+    if image.isNull():
+        raise RuntimeError("preview projection read failed")
     buffer = QBuffer()
     buffer.open(QIODevice.WriteOnly)
     saved = image.save(buffer, "PNG")
