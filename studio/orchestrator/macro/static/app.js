@@ -25,10 +25,10 @@ async function fetchJson(url) {
   return response.json();
 }
 
-// Decision endpoints are token-gated; the legacy lock/unlock pair is plain
-// (the docker channel) and must not carry the key.
-async function post(path, body, keyed) {
-  const response = await fetch(keyed ? withKey(path) : path, {
+// Every command goes through the instance action port; the page knows no
+// route beyond /api/action/<name>.
+async function post(action, body) {
+  const response = await fetch(withKey("/api/action/" + encodeURIComponent(action)), {
     method: "POST",
     headers: {"Content-Type": "application/json"},
     body: JSON.stringify(body || {}),
@@ -41,10 +41,10 @@ async function post(path, body, keyed) {
 
 // A button press: POST, show a refusal (e.g. "archive not pushed yet") in the
 // decision bar, and re-fetch state immediately either way.
-async function act(path, body, keyed) {
+async function act(action, body) {
   const note = $("decision-note");
   try {
-    await post(path, body, keyed);
+    await post(action, body);
     note.textContent = "";
   } catch (err) {
     note.textContent = err.message;
@@ -83,13 +83,12 @@ function renderHeader(state) {
   const adapterChannel = state.health && state.health.adapter;
   const busy = !!state.pending_decision;
   button.disabled = busy || (!locked && !!poseChannel && !poseChannel.ok);
-  // Unlocking persists the live canvas, so it is an adapter-acked decision;
-  // locking only freezes a pose and stays on the plain channel. When the
-  // adapter is offline there is no canvas at risk, so the decision is forced.
+  // Unlocking persists the live canvas, so the instance makes it an
+  // adapter-acked action; locking only freezes a pose. When the adapter is
+  // offline there is no canvas at risk, so the decision is forced.
   button.onclick = () => act(
-    locked ? "/api/decision/unlock" : "/api/lock",
-    locked ? {force: !(adapterChannel && adapterChannel.ok)} : {},
-    locked);
+    locked ? "unlock" : "lock",
+    locked ? {force: !(adapterChannel && adapterChannel.ok)} : {});
 }
 
 function renderStages(state) {
@@ -162,7 +161,7 @@ function renderDecisions(state) {
           const adapter = state.health && state.health.adapter;
           body.force = !(adapter && adapter.ok);
         }
-        act(action.path, body, true);
+        act(action.action, body);
       };
       bar.insertBefore(button, note);
     }
@@ -194,7 +193,7 @@ function renderDecisions(state) {
     && failedSession && retry);
   if (retry) {
     bannerRetry.textContent = retry.label;
-    bannerRetry.onclick = () => act(retry.path, {}, true);
+    bannerRetry.onclick = () => act(retry.action, {});
   }
 }
 
@@ -222,7 +221,7 @@ function renderArchive(state) {
       const button = document.createElement("button");
       button.type = "button";
       button.textContent = restore.label;
-      button.onclick = () => act(restore.path, {version: version.id}, true);
+      button.onclick = () => act(restore.action, {version: version.id});
       row.append(button);
     }
     row.prepend(thumb, meta);

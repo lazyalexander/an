@@ -160,8 +160,7 @@ def test_manifest_shape():
         {"id": "failures", "label": "失败记录",
          "kinds": ["render_failed", "import_failed"], "format": "entry"},
     ]
-    assert MANIFEST["restore"] == {"label": "恢复",
-                                   "path": "/api/decision/restore"}
+    assert MANIFEST["restore"] == {"label": "恢复", "action": "restore"}
     assert MANIFEST["archive"] == {"label": "建档"}
 
 

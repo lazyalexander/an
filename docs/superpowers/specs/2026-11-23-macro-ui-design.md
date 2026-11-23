@@ -35,6 +35,20 @@ Builds on: `docs/superpowers/specs/2026-11-22-bridge-studio-design.md`
 > unrelated tab), downscaled to an 800 px long edge. A decision may be
 > applied immediately only when the adapter is offline, where no
 > unsaved canvas can exist.
+>
+> **Revision note (2026-11-23, port contract).** The framework now
+> exposes three instance-neutral entry points — `POST
+> /api/input/<channel>`, `POST /api/action/<id>`, `GET
+> /api/read/<name>` — alongside the macro page/state/preview routes.
+> An instance exports `actions(app)`, `inputs(app)`, `reads(app)` and
+> `thumbnail(app, version_id)`; the server only routes, gates and maps
+> errors (bad request 400, invalid state 409). `lock`/`unlock` are
+> core actions merged for every instance; pose, adopt, re-render,
+> restore, heartbeat and ack are Bridge actions. Manifest decision
+> buttons carry action ids, not URLs, and the page no longer knows any
+> instance route. The cad-animation fixture exercises its own action,
+> input and read, so a new instance needs no framework change beyond a
+> module and a registry row.
 
 ## Intent and why
 

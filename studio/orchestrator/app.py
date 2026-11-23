@@ -54,6 +54,14 @@ class Orchestrator:
         with self._guard:
             return self._session
 
+    @property
+    def archives_dir(self) -> Path:
+        return self._archives_dir
+
+    @property
+    def ledger(self) -> Ledger:
+        return self._ledger
+
     def submit_pose(self, pose: dict) -> None:
         with self._guard:
             if self._phase is Phase.LOCKED:

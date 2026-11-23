@@ -10,5 +10,5 @@ class InvalidTransition(RuntimeError):
     pass
 
 
-class NoPose(RuntimeError):
+class NoPose(ValueError):
     pass

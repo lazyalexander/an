@@ -25,8 +25,7 @@ MANIFEST = {
     ],
     "decisions": [
         {"kind": "approve_rig", "label": "绑定结果", "actions": [
-            {"action": "approve", "label": "通过",
-             "path": "/api/instance/approve-rig"},
+            {"action": "approve_rig", "label": "通过"},
         ]},
     ],
     "drawer": [
@@ -46,6 +45,27 @@ MANIFEST = {
 
 def health(ctx: Context) -> dict:
     return {"adapter": adapter(ctx.app), "pipeline": pipeline(ctx.app)}
+
+
+def actions(app) -> dict:
+    return {"approve_rig": lambda body: _approve_rig(app)}
+
+
+def inputs(app) -> dict:
+    return {"pointer": lambda body: {"ok": True}}
+
+
+def reads(app) -> dict:
+    return {"timeline": lambda query: {"frames": []}}
+
+
+def thumbnail(app, version_id: str):
+    return None
+
+
+def _approve_rig(app) -> dict:
+    app.ledger.record("rig_approved", "rig approved by the user")
+    return {"ok": True}
 
 
 def stages(ctx: Context) -> list[dict]:

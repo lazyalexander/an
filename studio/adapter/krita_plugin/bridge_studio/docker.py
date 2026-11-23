@@ -37,8 +37,11 @@ if _STUDIO is not None and str(_STUDIO) not in sys.path:
     sys.path.insert(0, str(_STUDIO))
 
 
-def _get(path):
-    with urllib.request.urlopen(BASE + path, timeout=TIMEOUT_S) as response:
+def _get(path, key=None):
+    request = urllib.request.Request(BASE + path)
+    if key is not None:
+        request.add_header("X-Bridge-Key", key)
+    with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
         return json.loads(response.read())
 
 
@@ -217,7 +220,7 @@ class BridgeDocker(DockWidget):
                 self._apply_decision(decision, token)
         if (phase == "LOCKED" and session and session["state"] == "rendered"
                 and session["id"] not in self._pushed):
-            self._push(session)
+            self._push(session, token)
         if token is not None:
             self._heartbeat(token)
             pending = status["pending_restore"]
@@ -235,7 +238,7 @@ class BridgeDocker(DockWidget):
                     "dirty": bool(getattr(doc, "isModified", lambda: False)()),
                     "session": self._doc_session,
                 }
-            _post("/api/macro/heartbeat", {"document": document}, key=token)
+            _post("/api/action/heartbeat", {"document": document}, key=token)
         except Exception:  # best-effort; the status GET owns offline state
             pass
 
@@ -252,7 +255,7 @@ class BridgeDocker(DockWidget):
         except Exception as exc:  # never raise into Krita
             ok, detail = False, str(exc)
         try:
-            _post("/api/decision/ack",
+            _post("/api/action/ack",
                   {"kind": decision["kind"], "ok": ok, "detail": detail},
                   key=token)
         except OSError:
@@ -294,7 +297,7 @@ class BridgeDocker(DockWidget):
                 window.addView(doc)
             self._doc = doc
             self._doc_session = pending["id"]
-            _post("/api/decision/restore-ack", {"id": pending["id"]},
+            _post("/api/action/restore_ack", {"id": pending["id"]},
                   key=token)
             self._status_label.setText(
                 "restored {}".format(pathlib.Path(pending["kra"]).name))
@@ -316,11 +319,11 @@ class BridgeDocker(DockWidget):
         except Exception as exc:  # never raise into Krita
             self._status_label.setText("preview failed: {}".format(exc))
 
-    def _push(self, session):
+    def _push(self, session, token):
         try:
             from adapter.core.push import push_session
             from orchestrator.pipeline_api import LayerSpec
-            payload = _get("/api/session/layers")
+            payload = _get("/api/read/layers", token)
             layers = [LayerSpec(part=item["part"],
                                 png_path=pathlib.Path(item["png_path"]))
                       for item in payload["layers"]]

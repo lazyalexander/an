@@ -68,7 +68,7 @@ def test_every_instance_manifest_matches_the_contract(tmp_path, name):
         assert decision["actions"]
         for action in decision["actions"]:
             assert action["label"]
-            assert action["path"].startswith("/")
+            assert isinstance(action["action"], str) and action["action"]
     for section in manifest["drawer"]:
         assert section["id"] and section["label"]
         assert section["kinds"] and section["format"] in {"summary", "entry"}
@@ -78,6 +78,18 @@ def test_every_instance_manifest_matches_the_contract(tmp_path, name):
     assert isinstance(manifest["health"], dict)
     assert callable(instance.health)
     assert callable(instance.stages) and callable(instance.pending)
+
+    _, _, _, app = _rig(tmp_path / "ports")
+    actions = instance.actions(app)
+    assert isinstance(actions, dict) and all(callable(h) for h in actions.values())
+    for decision in manifest["decisions"]:
+        for action in decision["actions"]:
+            assert action["action"] in actions, action["action"]
+    if "restore" in manifest:
+        assert manifest["restore"]["action"] in actions
+    assert all(callable(h) for h in instance.inputs(app).values())
+    assert all(callable(h) for h in instance.reads(app).values())
+    assert callable(instance.thumbnail)
 
     state = _state(tmp_path, instance)
     assert state["instance"] == name
