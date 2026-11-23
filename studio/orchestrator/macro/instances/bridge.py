@@ -11,7 +11,8 @@ from adapter.core.archive import list_versions, read_thumbnail
 
 from ...phase import InvalidTransition
 from ..context import Context
-from ..health import adapter, pipeline, pose
+from ..health import adapter, pose
+from ..health import pipeline as pipeline_health
 from ..ports import BadRequest, force
 
 PREVIEW_URL = "/api/macro/preview.png"
@@ -72,7 +73,7 @@ def stages(ctx: Context) -> list[dict]:
 def health(ctx: Context) -> dict:
     return {"adapter": adapter(ctx.app),
             "pose": pose(ctx.status),
-            "pipeline": pipeline(ctx.app)}
+            "pipeline": pipeline_health(ctx.app)}
 
 
 def actions(app) -> dict:
@@ -118,6 +119,12 @@ def outputs(ctx: Context) -> dict:
 def preview(app) -> bytes | None:
     path = _preview_path(app)
     return path.read_bytes() if path.is_file() else None
+
+
+def pipeline():
+    """The instance's execution backend; lazy so --fake needs no container."""
+    from pipeline.container_pipeline import ContainerPipeline
+    return ContainerPipeline()
 
 
 def _preview_path(app) -> Path:

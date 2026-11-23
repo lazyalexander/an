@@ -33,14 +33,17 @@ def main(argv=None) -> None:
     token = secrets.token_urlsafe(8)
     (run_dir / "ui_token").write_text(token)
     ledger = Ledger(run_dir / "ledger.jsonl")
+    instance = load_instance(args.instance)
     if args.fake:
         pipeline = FakePipeline()
     else:
+        factory = getattr(instance, "pipeline", None)
+        if factory is None:
+            parser.error(f"instance {args.instance!r} has no pipeline; pass --fake")
         try:
-            from pipeline.container_pipeline import ContainerPipeline
-            pipeline = ContainerPipeline()
-        except ImportError:
-            parser.error("real pipeline unavailable; pass --fake")
+            pipeline = factory()
+        except ImportError as exc:
+            parser.error(f"pipeline unavailable ({exc}); pass --fake")
     from .scenes import SceneStore
     scenes = SceneStore(args.scene_root)
     app = Orchestrator(ledger, pipeline, (args.width, args.height), run_dir=run_dir,
@@ -51,8 +54,7 @@ def main(argv=None) -> None:
         watcher = Watcher(args.inbox, scenes, pipeline.import_asset, ledger)
         watcher.start()
     server = make_server(app, host="127.0.0.1", port=args.port, ui_token=token,
-                         ledger=ledger, scenes=scenes,
-                         instance=load_instance(args.instance))
+                         ledger=ledger, scenes=scenes, instance=instance)
     url = f"http://127.0.0.1:{server.server_address[1]}/ui?key={token}"
     print(f"orchestrator on 127.0.0.1:{args.port} (fake={args.fake})", flush=True)
     print(f"macro UI: {url}", flush=True)

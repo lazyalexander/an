@@ -58,6 +58,13 @@ Builds on: `docs/superpowers/specs/2026-11-22-bridge-studio-design.md`
 > implementations; cad-animation returns an empty output. `build_state`
 > no longer takes an archives directory, and the server's preview route
 > delegates to the instance.
+>
+> **Revision note (2026-11-23, pipeline ownership).** The execution
+> backend is instance-owned too: an instance exports `pipeline()`, and
+> `__main__` wires it (or the deterministic fake) without importing
+> `ContainerPipeline` itself. The inbox watcher still starts only when
+> the backend exposes `import_asset`. cad-animation returns the fake,
+> so the fixture boots without Blender or a container service.
 
 ## Intent and why
 

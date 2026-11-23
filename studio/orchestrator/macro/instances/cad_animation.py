@@ -6,7 +6,8 @@ with no change to the state builder, the server or the page.
 """
 
 from ..context import Context
-from ..health import adapter, pipeline
+from ..health import adapter
+from ..health import pipeline as pipeline_health
 
 MANIFEST = {
     "instance": "cad-animation",
@@ -44,7 +45,7 @@ MANIFEST = {
 
 
 def health(ctx: Context) -> dict:
-    return {"adapter": adapter(ctx.app), "pipeline": pipeline(ctx.app)}
+    return {"adapter": adapter(ctx.app), "pipeline": pipeline_health(ctx.app)}
 
 
 def actions(app) -> dict:
@@ -73,6 +74,12 @@ def outputs(ctx: Context) -> dict:
 
 def preview(app):
     return None
+
+
+def pipeline():
+    """Fixture backend: a deterministic fake so the instance boots without CAD."""
+    from orchestrator.fake_pipeline import FakePipeline
+    return FakePipeline()
 
 
 def _approve_rig(app) -> dict:

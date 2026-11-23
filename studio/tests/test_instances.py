@@ -93,6 +93,8 @@ def test_every_instance_manifest_matches_the_contract(tmp_path, name):
     assert callable(instance.versions)
     assert callable(instance.outputs)
     assert callable(instance.preview)
+    assert callable(instance.pipeline)
+    assert hasattr(instance.pipeline(), "render")
 
     state = _state(tmp_path, instance)
     assert state["instance"] == name
