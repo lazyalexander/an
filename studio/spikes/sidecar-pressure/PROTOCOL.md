@@ -1,7 +1,7 @@
 # Spike: Apple Pencil → Sidecar → Krita pressure gate
 
 Gate for the Bridge Studio carrier decision (design:
-`docs/superpowers/specs/2026-11-22-bridge-studio-design.md`, Risks).
+`docs/architecture.md`, Native surfaces).
 If pressure does not reach Krita through iPad Sidecar on the reference
 machine, the carrier decision reopens. Run **before** any pipeline
 work.
