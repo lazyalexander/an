@@ -1,5 +1,6 @@
 use crate::{manifest, store::*};
 use anyhow::{ensure, Context, Result};
+use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::Connection;
 use serde_json::{json, Value};
 use std::{
@@ -168,6 +169,9 @@ fn layout(reader: impl Read) -> Result<Value> {
     let mut paths = HashMap::new();
     let mut total = 0usize;
     let mut result = json!({});
+    let mut code = json!({});
+    let mut omissions = Vec::new();
+    let mut code_bytes = 0;
     for entry in archive.entries()? {
         let mut e = entry?;
         let bytes = e.path_bytes();
@@ -197,6 +201,22 @@ fn layout(reader: impl Read) -> Result<Value> {
             paths.insert(path.clone(), (ty, size)).is_none(),
             "Duplicate spool path"
         );
+        if ty.is_file() && path.starts_with("spool/code") {
+            let Some(name) = path.to_str() else {
+                omissions.push(path.to_string_lossy().into_owned());
+                continue;
+            };
+            // Admission still accepts large binaries. Their immutable image
+            // digest remains available when a source preview is omitted.
+            if size <= 1024 * 1024 && code_bytes + size <= 8 * 1024 * 1024 {
+                let mut bytes = Vec::new();
+                e.read_to_end(&mut bytes)?;
+                code[name] = json!(STANDARD.encode(bytes));
+                code_bytes += size;
+            } else {
+                omissions.push(name.to_owned());
+            }
+        }
         if path == Path::new("spool/SKILL.md") {
             ensure!(
                 ty.is_file() && size > 0 && size <= 262144,
@@ -237,6 +257,8 @@ fn layout(reader: impl Read) -> Result<Value> {
                         .all(|p| paths.get(p).is_some_and(|(t, _)| t.is_dir()))),
         "Invalid spool layout"
     );
+    result["code_files"] = code;
+    result["code_omissions"] = json!(omissions);
     Ok(result)
 }
 pub fn register(db: &Connection, reference: &str) -> Result<String> {
@@ -300,9 +322,11 @@ pub fn register(db: &Connection, reference: &str) -> Result<String> {
     if let Some(old) = find(db, "probe", key)? {
         cleanup(old["name"].as_str().context("Missing probe name")?)?;
     }
-    if record(db, &image)?
-        .is_some_and(|v| v["platform"] == info["platform"] && v["variant"] == info["variant"])
-    {
+    if record(db, &image)?.is_some_and(|v| {
+        v["platform"] == info["platform"]
+            && v["variant"] == info["variant"]
+            && v["code_revision"].is_string()
+    }) {
         put(db, "image", &image, &json!(image))?;
         return Ok(image);
     }
@@ -373,6 +397,12 @@ pub fn register(db: &Connection, reference: &str) -> Result<String> {
     phase("cleanup")?;
     cleanup(&id)?;
     let mut record = checked?;
+    let code = record
+        .as_object_mut()
+        .unwrap()
+        .remove("code_files")
+        .context("Missing code snapshot")?;
+    record["code_revision"] = json!(revision(db, &code)?);
     record["spec"] = json!("spool/v2");
     record["image"] = json!(image);
     record["platform"] = info["platform"].clone();

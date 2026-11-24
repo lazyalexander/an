@@ -1,5 +1,5 @@
 use crate::store::*;
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::{Args, Parser, Subcommand};
 use rusqlite::{Connection, TransactionBehavior};
 use serde_json::{json, Value};
@@ -295,9 +295,11 @@ pub fn execute() -> Result<Value> {
                                 && d.as_str().is_some_and(|k| cfg["tools"].get(k).is_some())
                         }
                         Some("handoff") => images.contains(s) && images.contains(d),
-                        Some("publish") => images.contains(s) && d == &id,
+                        Some("preview") => graph_origin(images, s) && d == "studio",
+                        Some("publish") => graph_origin(images, s) && d == &id,
                         Some("export") => {
-                            images.contains(s) && d.as_str().is_some_and(|v| v.starts_with('/'))
+                            graph_origin(images, s)
+                                && d.as_str().is_some_and(|v| v.starts_with('/'))
                         }
                         _ => false,
                     };
@@ -343,6 +345,13 @@ pub fn execute() -> Result<Value> {
         Command::Task {
             action: Task::Resume { delivery, editable },
         } => {
+            if let Some(group) = find(&tx, "graph_delivery", &delivery)? {
+                let origin = group["task"].as_str().context("Missing delivery origin")?;
+                let task = get(&tx, "task", origin)?;
+                let result = resume_graph(&tx, origin, &task, &group, &editable)?;
+                tx.commit()?;
+                return Ok(result);
+            }
             let r = get(&tx, "run", &delivery)?;
             ensure!(r["status"] == "delivered", "Expected a delivered run");
             let image = r["spool"]
@@ -363,4 +372,40 @@ pub fn execute() -> Result<Value> {
     tx.commit()?;
     drop(lock);
     Ok(result)
+}
+
+fn graph_origin(images: &[Value], source: &Value) -> bool {
+    images.contains(source)
+        || source == "response"
+        || source
+            .as_str()
+            .is_some_and(|s| s.starts_with("task-input:"))
+}
+
+pub(crate) fn resume_graph(
+    db: &Connection,
+    task: &str,
+    t: &Value,
+    delivery: &Value,
+    editable: &[String],
+) -> Result<Value> {
+    let images: Vec<String> = t["work"]
+        .as_object()
+        .context("Invalid task")?
+        .keys()
+        .cloned()
+        .collect();
+    let (id, mut fresh) = new_task(
+        db,
+        &images,
+        editable,
+        json!({"original":delivery["revision"]}),
+    )?;
+    fresh["workspace"] = t["workspace"].clone();
+    fresh["tools"] = t["tools"].clone();
+    fresh["origin"] = json!({"delivery":delivery["id"],"from_task":task});
+    put(db, "task", &id, &fresh)?;
+    Ok(
+        json!({"task":id,"origin":fresh["origin"],"mcp_servers":config(json!(["mcp","--task",id]))?}),
+    )
 }

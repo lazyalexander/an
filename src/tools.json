@@ -214,5 +214,164 @@
       ],
       "additionalProperties": false
     }
+  },
+  {
+    "name": "an_graph_submit",
+    "description": "Atomically append task nodes against base_revision. Replay the same idempotency key and content for the original receipt. A stale base returns the current revision. New nodes may consume earlier immutable outputs or task inputs. Host permissions are separate from panel responses.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "base_revision": {
+          "type": "integer"
+        },
+        "idempotency_key": {
+          "type": "string"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string"
+              },
+              "title": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "run",
+                  "surface",
+                  "delivery"
+                ]
+              },
+              "after": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "inputs": {
+                "type": "object",
+                "additionalProperties": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "node": {
+                          "type": "string"
+                        },
+                        "port": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "node",
+                        "port"
+                      ],
+                      "additionalProperties": false
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "input": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "input"
+                      ],
+                      "additionalProperties": false
+                    }
+                  ]
+                }
+              },
+              "outputs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                },
+                "description": "Run output paths, surface [\"response\"] or [\"response\",\"document\"], or empty for deliveries."
+              },
+              "spool": {
+                "type": "string",
+                "description": "Granted digest-pinned image for a run."
+              },
+              "argv": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "package": {
+                "type": "string",
+                "description": "Name of the bound package input. Its JSON file has version:1, entry, files (relative paths to HTML/JS/CSS text), bindings (other input names), and response (null for a delivery). On an-ready, use an.files, an.draft, an.saveDraft(value) and an.respond(value)."
+              },
+              "response": {
+                "type": "object",
+                "description": "Object schema matching the package. Declare object properties, array items, scalar types, optional enum values, and required keys."
+              },
+              "save": {
+                "type": "object",
+                "properties": {
+                  "node": {
+                    "type": "string"
+                  },
+                  "port": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "node",
+                  "port"
+                ],
+                "additionalProperties": false,
+                "description": "Optional container output confirming a saved document. The designated run must consume this surface response."
+              }
+            },
+            "required": [
+              "id",
+              "kind",
+              "outputs"
+            ],
+            "additionalProperties": false
+          },
+          "minItems": 0
+        },
+        "retry": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "supersede": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "base_revision",
+        "idempotency_key",
+        "nodes"
+      ],
+      "additionalProperties": false
+    }
+  },
+  {
+    "name": "an_graph_state",
+    "description": "Read the current graph and events following a cursor.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "after": {
+          "type": "integer"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    }
   }
 ]

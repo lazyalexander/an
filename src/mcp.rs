@@ -118,7 +118,9 @@ impl Gateway {
         if let Some(tool) = self.builtins.get(name) {
             validate_builtin(&tool.input_schema, &args)?;
             let op = &name[3..];
-            let mut value = if op == "deliveries" {
+            let mut value = if matches!(op, "graph_submit" | "graph_state") {
+                crate::graph::dispatch(&self.task, op, &args)?
+            } else if op == "deliveries" {
                 deliveries(&connect()?, &self.task, args["after"].as_i64().unwrap_or(0))?
             } else {
                 crate::instances::dispatch(&self.task, op, &args)?
@@ -308,8 +310,14 @@ fn validate_builtin(schema: &JsonObject, args: &Value) -> Result<()> {
                     .as_object()
                     .is_some_and(|m| m.values().all(Value::is_string)),
                 Some("integer") => v.as_u64().is_some_and(|n| i64::try_from(n).is_ok()),
-                Some("array") => v.as_array().is_some_and(|a| a.iter().all(Value::is_string)
-                    && a.len() >= def["minItems"].as_u64().unwrap_or(0) as usize),
+                Some("array") => v.as_array().is_some_and(|a| a.iter().all(|item| {
+                    if def["items"]["type"] == "object" {
+                        item.is_object()
+                    } else {
+                        item.is_string()
+                    }
+                }) && a.len()
+                    >= def["minItems"].as_u64().unwrap_or(0) as usize),
                 _ => false,
             },
             "Invalid {key}"
@@ -436,6 +444,7 @@ pub async fn execute() -> Result<()> {
             let bootstrap = env::var("AN_TURN").unwrap_or_default().is_empty();
             if !bootstrap {
                 crate::transfer::Transfer::recover()?;
+                crate::graph::wake(&task)?;
             }
             let mut builtins = BTreeMap::new();
             for tool in serde_json::from_str::<Vec<Tool>>(include_str!("tools.json"))? {

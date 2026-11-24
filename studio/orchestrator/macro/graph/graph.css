@@ -1,0 +1,17 @@
+* { box-sizing:border-box }
+body { margin:0;background:#f8f8f4;color:#223933;font:16px/1.55 "Inter",system-ui,sans-serif }
+header { background:#183d34;color:#fff;padding:16px max(4vw,20px);display:flex;align-items:center;gap:24px }
+header span { font:12px monospace;overflow-wrap:anywhere }
+main { display:grid;grid-template-columns:minmax(165px,230px) minmax(0,1fr);max-width:1440px;margin:auto;min-height:85vh }
+aside { border-right:1px solid #d3dcd5;padding:24px 16px }
+section { min-width:0;padding:28px clamp(16px,4vw,60px) }
+h2 { font-size:14px;color:#52675d;margin-top:22px }
+h1 { font-size:clamp(22px,4vw,36px);margin:0 }
+nav, #permissions { display:grid;gap:6px }
+button { border:1px solid #bbcbbf;border-radius:5px;background:white;color:inherit;padding:8px 12px;font:inherit;cursor:pointer;overflow-wrap:anywhere }
+nav button { text-align:left }
+button[aria-current=true] { background:#daebe0;border-color:#649882 }
+iframe { width:100%;height:min(66vh,620px);border:1px solid #c6d2c7;background:white;border-radius:8px }
+details { margin-top:24px } summary { cursor:pointer } pre { white-space:pre-wrap;overflow-wrap:anywhere;font-size:13px }
+#permissions article { padding:12px;background:#ffefd7;margin-bottom:12px } #status { color:#4f6559 }
+@media(max-width:650px){main{display:block}aside{border:0;border-bottom:1px solid #d3dcd5;padding:10px 16px}nav{display:flex;overflow-x:auto}nav button{flex-shrink:0}aside h2{margin:6px 0}}

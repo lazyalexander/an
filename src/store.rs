@@ -117,7 +117,7 @@ pub fn deliveries(db: &Connection, task: &str, after: i64) -> Result<Value> {
     let wid = t["workspace"]
         .as_str()
         .ok_or_else(|| anyhow!("Task has no workspace"))?;
-    let mut stmt=db.prepare("SELECT r.rowid,r.id,r.body FROM objects r JOIN objects t ON t.kind='task' AND t.id=json_extract(r.body,'$.task') WHERE r.kind='run' AND json_extract(t.body,'$.workspace')=? AND json_extract(r.body,'$.status')='delivered' AND json_array_length(r.body,'$.outputs')>0 AND r.rowid>? ORDER BY r.rowid LIMIT 51")?;
+    let mut stmt=db.prepare("SELECT r.rowid,r.id,r.body FROM objects r JOIN objects t ON t.kind='task' AND t.id=json_extract(r.body,'$.task') WHERE json_extract(t.body,'$.workspace')=? AND ((r.kind='run' AND json_extract(r.body,'$.status')='delivered' AND json_array_length(r.body,'$.outputs')>0) OR r.kind='graph_delivery') AND r.rowid>? ORDER BY r.rowid LIMIT 51")?;
     let mut rows = stmt.query(params![wid, after])?;
     let mut items = vec![];
     let mut last = 0;
@@ -131,7 +131,13 @@ pub fn deliveries(db: &Connection, task: &str, after: i64) -> Result<Value> {
         let id: String = row.get(1)?;
         let body: String = row.get(2)?;
         let r: Value = serde_json::from_str(&body)?;
-        items.push(json!({"id":id,"spool":r["spool"],"files":r["outputs"],"revision":r["output"]}));
+        if r["node"].is_string() && r["bindings"].is_object() {
+            items.push(json!({"id":id,"node":r["node"],"files":r["outputs"],"revision":r["revision"],"package":r["package"]}));
+        } else {
+            items.push(
+                json!({"id":id,"spool":r["spool"],"files":r["outputs"],"revision":r["output"]}),
+            );
+        }
     }
     Ok(json!({"items":items,"next":next}))
 }
