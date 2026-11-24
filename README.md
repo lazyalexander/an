@@ -12,4 +12,4 @@ A spool can pass a frozen artifact directly to another spool or publish it to th
 
 Build the Rust CLI and stdio MCP gateway with `cargo build --release --locked`. Spool execution uses Apple Container.
 
-[Spool image format](docs/spool-images.md) · [Workspace bindings](docs/workspaces.md) · [Permissions](docs/permissions.md) · [Incremental tasks and Studio](docs/graph-studio.md)
+[Architecture](docs/architecture.md) · [Spool image format](docs/spool-images.md) · [Workspace bindings](docs/workspaces.md) · [Permissions](docs/permissions.md) · [Incremental tasks and Studio](docs/graph-studio.md)

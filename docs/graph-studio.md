@@ -66,7 +66,7 @@ Workspace flow rules use `["preview",origin,"studio"]` for viewing and `["publis
 
 Use `an export DELIVERY_ID DESTINATION` to export the published revision. For a closed graph task, pass `--task ACTIVE_TASK_ID` with a current turn in the same workspace. Workspace policies must permit `["export",origin,destination]` for every constituent origin. The host approval covers the complete delivery and its destination.
 
-The legacy instance-mode Studio reads its original ledger and archives. Use task mode for the headless graph workflow.
+The legacy instance-mode Studio reads its original ledger and archives. It is frozen as the reference for native surfaces; see [Architecture](architecture.md). Use task mode for the headless graph workflow.
 
 
 ## Reproduce acceptance
