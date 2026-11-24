@@ -74,3 +74,7 @@ The legacy instance-mode Studio reads its original ledger and archives. Use task
 Run `python3 tests/graph_studio_smoke.py --experiment bridge` and repeat with `--experiment cad` after building the example image. Each test creates an isolated registry. The Bridge test checks overlapping execution intervals on distinct candidate instances and verifies that the second driver generates the processing node after the human response. Use `--choice A` to cover denied handoff and retry. Both tests close the task and check the published files and authorized evidence from a fresh workspace task.
 
 Pass `--browser` with Chrome and `playwright-core` installed to exercise the macro UI. Set `PLAYWRIGHT_CORE` to the module directory if it is outside Node's search path. Use `--directory` to retain the test registry and desktop/mobile screenshots. `cargo test` also covers a seeded indeterminate run, denied access, damaged package data, duplicate responses and expired requests.
+
+To add a second mark to a Bridge V1 made with the revision-capable image, run
+`python3 examples/graph_studio/demo.py bridge --resume V1_DELIVERY_ID` with the same registry and image.
+Approve input access, click a new point on the V1 preview, and save. The new delivery contains the SVG with both marks and an OpenRaster painting with separate annotation layers. The original delivery remains available under its own ID.

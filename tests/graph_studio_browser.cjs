@@ -10,7 +10,12 @@ const [mode, experiment, directory, choice="B"] = process.argv.slice(2);
     await page.goto(fs.readFileSync(0,"utf8").trim());
     const panel=page.frameLocator("iframe");
     const bridge=experiment==="bridge";
-    if(mode==="respond"){
+    if(mode==="revise"){
+      await panel.locator("#preview").click({position:{x:15,y:12}});
+      const saved=page.waitForResponse(r=>r.url().endsWith("/api/respond") && r.ok());
+      await panel.locator("#save").click();
+      await saved;
+    }else if(mode==="respond"){
       const draftSaved=page.waitForResponse(r=>r.url().endsWith("/api/draft") && r.ok() && (bridge?r.request().postDataJSON().value.note==="edge":r.request().postDataJSON().value.seconds===2));
       if(bridge){
         await panel.locator(`#fig${choice} img`).click();

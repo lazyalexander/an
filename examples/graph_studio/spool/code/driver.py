@@ -108,6 +108,33 @@ def bridge_result(spool, response):
              "inputs": {"ui": ref("report-ui", "report.json"), **data}, "outputs": []}]
 
 
+def revise(spool):
+    schema = form_schema(x={"type":"number"}, y={"type":"number"})
+    html = STYLE + """<h2>添加第二次标注</h2><figure><img id="preview" alt="第一版绘画"><mark hidden></mark></figure>
+    <button id="save" disabled>保存第二版</button><script>
+    addEventListener("an-ready",()=>{
+      let point=an.draft;
+      preview.src="data:image/svg+xml;base64,"+an.files.preview["selected.svg"];
+      const mark=document.querySelector("mark");
+      function place(){mark.hidden=false;mark.style.left=point.x*100+"%";mark.style.top=point.y*100+"%";save.disabled=false;}
+      if(point)place();
+      preview.onclick=e=>{const r=preview.getBoundingClientRect();point={x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
+        place();an.saveDraft(point);};
+      save.onclick=()=>an.respond(point);
+    });</script>"""
+    source = {"input":"original"}
+    return [run("preview", spool, "from shutil import copyfile; copyfile('/input/source/selected/selected.svg','/output/selected.svg')",
+                ["selected.svg"], source=source),
+            generate("interface", spool, {"panel.json": package(html, ["preview"], schema)}),
+            {"id":"edit","kind":"surface","package":"ui","response":schema,
+             "inputs":{"ui":ref("interface","panel.json"),"preview":ref("preview","selected.svg")},
+             "save":ref("apply","painting.ora"),"outputs":["response","document"]},
+            {"id":"apply","kind":"run","spool":spool,"argv":["python3","/spool/code/annotate.py","revise"],
+             "inputs":{"source":source,"choice":ref("edit","response")},"outputs":["selected.svg","painting.ora"]},
+            {"id":"revision","kind":"delivery","title":"第二版绘画","inputs":{
+             "selected":ref("apply","selected.svg"),"painting":ref("edit","document")},"outputs":[]}]
+
+
 def cad(spool):
     schema = form_schema(seconds={"type": "integer", "enum": [1, 2, 3, 4, 5]})
     html = STYLE + """<h2>设置零件旋转周期</h2><label>秒 <input id="speed" type="range" min="1" max="5">
@@ -134,7 +161,7 @@ if __name__ == "__main__":
         response = json.loads(Path("/input/choice/response.json").read_text())
         nodes = bridge_result(spool, response)
     else:
-        nodes = {"bridge": bridge, "cad": cad}[stage](spool)
+        nodes = {"bridge": bridge, "cad": cad, "revise": revise}[stage](spool)
     if stage == "bridge" and options == ["--verify-overlap"]:
         for candidate in nodes[:2]:
             candidate["argv"][-1] = "import time; time.sleep(5)\n" + candidate["argv"][-1]
