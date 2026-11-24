@@ -710,3 +710,89 @@ fn stop_requests_cancellation_of_running_work() {
         "cancel_pending"
     );
 }
+
+#[test]
+fn instructions_are_relayed_unchanged_with_the_revision_the_person_saw() {
+    let mut f = Fixture::graph_task();
+    let sent = f
+        .graph(
+            "instruct",
+            json!({"text":"  用 B，转慢一点  ","revision":0}),
+        )
+        .unwrap();
+    assert_eq!(sent["stale"], false);
+    f.graph(
+        "submit",
+        json!({"idempotency_key":"one","base_revision":0,"nodes":[Fixture::surface("s")]}),
+    )
+    .unwrap();
+    // The person typed while looking at revision 0; the graph has moved on.
+    let late = f
+        .graph("instruct", json!({"text":"换个角度","revision":0}))
+        .unwrap();
+    assert_eq!(late["stale"], true);
+    let events = f.graph("state", json!({})).unwrap()["events"].clone();
+    let relayed: Vec<_> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "instruction")
+        .collect();
+    assert_eq!(relayed.len(), 2);
+    assert_eq!(relayed[0]["actor"], "user");
+    assert_eq!(relayed[0]["data"]["text"], "  用 B，转慢一点  ");
+    assert_eq!(relayed[1]["data"]["seen_revision"], 0);
+    assert_eq!(relayed[1]["data"]["revision"], 1);
+    // An instruction is not a surface response.
+    assert_ne!(
+        f.graph("state", json!({})).unwrap()["activity"]["s"]["status"],
+        "done"
+    );
+
+    assert!(f
+        .graph("instruct", json!({"text":"   ","revision":1}))
+        .is_err());
+    assert!(f
+        .graph("instruct", json!({"text":"x","revision":9}))
+        .unwrap_err()
+        .contains("Unknown graph revision"));
+    f.turn = None;
+    assert!(f
+        .graph("instruct", json!({"text":"x","revision":1}))
+        .is_err());
+}
+
+#[test]
+fn host_config_overrides_limits_and_rejects_unknown_settings() {
+    let f = Fixture::graph_task();
+    std::fs::write(
+        f.root.join("config.json"),
+        json!({"instruction_max_bytes":4}).to_string(),
+    )
+    .unwrap();
+    assert!(f
+        .graph("instruct", json!({"text":"abcd","revision":0}))
+        .is_ok());
+    assert!(f
+        .graph("instruct", json!({"text":"abcde","revision":0}))
+        .unwrap_err()
+        .contains("exceeds 4 bytes"));
+    std::fs::write(
+        f.root.join("config.json"),
+        json!({"instruction_max_byte":4}).to_string(),
+    )
+    .unwrap();
+    assert!(f
+        .graph("view", json!({}))
+        .unwrap_err()
+        .contains("Unknown setting"));
+    std::fs::write(
+        f.root.join("config.json"),
+        json!({"mcp_deadline_s":0}).to_string(),
+    )
+    .unwrap();
+    assert!(f
+        .graph("view", json!({}))
+        .unwrap_err()
+        .contains("positive integer"));
+}

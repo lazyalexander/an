@@ -11,7 +11,6 @@ use std::{
     path::PathBuf,
 };
 
-const BYTE_LIMIT: u64 = 32 * 1024 * 1024;
 pub struct Transfer {
     path: PathBuf,
     output: File,
@@ -85,13 +84,12 @@ impl Transfer {
     }
     pub fn finish(&self, db: &Connection, mut provenance: Value) -> Result<Value> {
         // Read only the inode created by An. Never resolve a bridge-supplied path.
+        let limit = crate::config::load()?.limit("transfer_limit_bytes");
         let mut bytes = Vec::new();
-        (&self.output)
-            .take(BYTE_LIMIT + 1)
-            .read_to_end(&mut bytes)?;
+        (&self.output).take(limit + 1).read_to_end(&mut bytes)?;
         ensure!(
-            bytes.len() as u64 <= BYTE_LIMIT,
-            "Bridge output exceeds 32 MiB"
+            bytes.len() as u64 <= limit,
+            "Bridge output exceeds {limit} bytes"
         );
         if bytes.is_empty() {
             return Ok(json!({"status":"completed"}));

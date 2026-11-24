@@ -12,7 +12,7 @@
   <span id="phase"></span>
   <span id="surface"></span>
   <span id="document"></span>
-  <button id="lock-toggle" type="button">锁定</button>
+  <button id="lock-toggle" type="button"></button>
 </header>
 
 <nav id="stages" aria-label="stages"></nav>
@@ -20,7 +20,7 @@
 <main>
   <section id="preview" aria-label="preview">
     <img id="preview-img" alt="" hidden>
-    <p id="preview-empty">尚无画面</p>
+    <p id="preview-empty" data-t="no_preview"></p>
   </section>
 
   <section id="archive" aria-label="archive">
@@ -29,7 +29,7 @@
   </section>
 
   <details id="drawer">
-    <summary>🔧 排查/调整</summary>
+    <summary data-t="drawer"></summary>
     <div id="drawer-sections"></div>
   </details>
 </main>

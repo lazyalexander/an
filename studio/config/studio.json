@@ -1,0 +1,8 @@
+{
+  "locale": "zh-CN",
+  "graph": {
+    "poll_ms": 1000,
+    "panel_timeout_ms": 6000,
+    "max_body_bytes": 1048576
+  }
+}

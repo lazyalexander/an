@@ -16,3 +16,4 @@ details { margin-top:24px } summary { cursor:pointer } pre { white-space:pre-wra
 #permissions article { padding:12px;background:#ffefd7;margin-bottom:12px } #status { color:#4f6559 }
 @media(max-width:650px){main{display:block}aside{border:0;border-bottom:1px solid #d3dcd5;padding:10px 16px}nav{display:flex;overflow-x:auto}nav button{flex-shrink:0}aside h2{margin:6px 0}}
 header nav { display:flex;gap:8px;margin-left:auto } header nav button { padding:4px 10px;font-size:14px } #control-state { font:13px system-ui;color:#ffd79a }
+#instruct { display:flex;gap:8px;margin-top:24px;position:sticky;bottom:0;background:#f8f8f4;padding:12px 0 } #instruct[hidden] { display:none } #instruct textarea { flex:1;font:inherit;padding:8px;border:1px solid #bbcbbf;border-radius:5px;resize:vertical }

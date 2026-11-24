@@ -87,6 +87,11 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
         wake(task)?;
         return Ok(result);
     }
+    if action == "instruct" {
+        let result = instruct(&tx, task, &t, &mut graph, args)?;
+        tx.commit()?;
+        return Ok(result);
+    }
     if action == "finish" {
         if t["closed"] == true {
             return Ok(json!({"closed":true}));
@@ -332,4 +337,42 @@ fn control(
         runs,
         drivers,
     ))
+}
+
+/// Relay a person's instruction to the agent, unchanged.
+///
+/// An never interprets the text. It records who sent it (the person, under
+/// the current turn), when, and which graph revision the person was looking
+/// at, so the agent can tell when an instruction refers to an older state.
+/// The agent reads it as a `user`/`instruction` event from graph state. An
+/// instruction never answers a waiting surface.
+fn instruct(
+    tx: &Connection,
+    task: &str,
+    t: &Value,
+    graph: &mut Value,
+    args: &Value,
+) -> Result<Value> {
+    permission::current(tx, task)?;
+    ensure!(t["closed"] != true, "Task closed");
+    let text = args["text"].as_str().context("Expected instruction text")?;
+    ensure!(!text.trim().is_empty(), "Empty instruction");
+    let max = crate::config::load()?.limit("instruction_max_bytes");
+    ensure!(text.len() as u64 <= max, "Instruction exceeds {max} bytes");
+    let seen = args["revision"]
+        .as_u64()
+        .context("Expected the graph revision the person saw")?;
+    let current = graph["revision"].as_u64().unwrap_or(0);
+    ensure!(seen <= current, "Unknown graph revision");
+    let stale = seen != current;
+    event(
+        graph,
+        "user",
+        "instruction",
+        task,
+        json!({"text":text,"seen_revision":seen,"revision":current,"stale":stale}),
+    );
+    put(tx, "graph", task, graph)?;
+    let cursor = graph["events"].as_array().map_or(0, Vec::len);
+    Ok(json!({"cursor":cursor,"revision":current,"stale":stale}))
 }

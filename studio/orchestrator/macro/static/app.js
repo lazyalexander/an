@@ -11,6 +11,7 @@ const POLL_MS = 1000;
 const DOTS = {done: "✓", running: "●", waiting: "○", failed: "✕"};
 
 let manifest = null;
+let chrome = {};  // framework text from studio/config/locales
 
 const $ = (id) => document.getElementById(id);
 
@@ -76,7 +77,7 @@ function renderHeader(state) {
     : "";
   const button = $("lock-toggle");
   const locked = state.phase === "LOCKED";
-  button.textContent = locked ? "解锁" : "锁定";
+  button.textContent = locked ? chrome.unlock : chrome.lock;
   // Locking freezes the pose stream, so it is offered only while it is live.
   // Instances without a pose channel (no state.health.pose) are not gated.
   const poseChannel = state.health && state.health.pose;
@@ -169,7 +170,7 @@ function renderDecisions(state) {
   // While the adapter is persisting the canvas, show why nothing happens;
   // ordinary refusals from act() stay visible until the next press.
   if (pendingDecision) {
-    note.textContent = manifest.pending_decision || "正在保存…";
+    note.textContent = manifest.pending_decision || chrome.saving;
     note.dataset.pending = "1";
   } else if (note.dataset.pending === "1") {
     note.textContent = "";
@@ -269,6 +270,10 @@ async function refresh() {
 async function init() {
   try {
     manifest = await fetchJson("/api/macro/manifest");
+    chrome = await fetchJson("/api/macro/strings");
+    for (const node of document.querySelectorAll("[data-t]")) {
+      node.textContent = chrome[node.dataset.t] || "";
+    }
   } catch (err) {
     $("phase").textContent = String(err);
     return;

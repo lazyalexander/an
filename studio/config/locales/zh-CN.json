@@ -1,0 +1,56 @@
+{
+  "graph": {
+    "title": "An · 任务工作区",
+    "brand": "An Studio",
+    "heading": "任务工作区",
+    "nav": {"activity": "任务活动", "deliveries": "工作区交付", "graph": "完整流程", "controls": "任务控制"},
+    "sources": "查看来源",
+    "status": {
+      "queued": "等待执行", "running": "执行中", "waiting": "等待回应", "saving": "等待文档保存",
+      "done": "已完成", "failed": "失败", "unknown": "结果未知", "superseded": "已替换",
+      "permission_required": "等待授权", "cancelled": "已取消"
+    },
+    "panel": {"left": "面板已离开绑定的文档", "responded": "回应已提交", "timeout": "面板加载超时", "reload": "重新加载"},
+    "permission": {"request": "授权 {operation} · {scope} ", "details": "请求详情", "allow_once": "允许一次", "deny": "拒绝"},
+    "task": {
+      "awaiting_submission": "等待任务提交", "awaiting_authority": "等待有效的宿主授权",
+      "delivered": "已交付", "delivery_files": "交付文件",
+      "resume_from": "从此版本新建任务", "new_task": "新任务 {task}"
+    },
+    "evidence": {
+      "code": "镜像代码", "work": "工作目录", "input": "输入快照", "log": "执行日志",
+      "waiting": "等候宿主授权，请在授权后再次打开。", "empty": "空目录", "binary": "{name} · {bytes} bytes"
+    },
+    "control": {
+      "closed": "已关闭", "paused": "已暂停", "pause": "暂停", "resume": "继续", "stop": "停止",
+      "stop_confirm": "取消所有未完成的工作并暂停任务？"
+    },
+    "instruction": {
+      "placeholder": "给 agent 的指令（原样转述，不会回答面板）",
+      "send": "发送",
+      "sent": "已转述给 agent",
+      "stale": "已转述；任务在你看到之后已更新，agent 会知道这条指令基于旧版本"
+    }
+  },
+  "legacy": {
+    "lock": "锁定", "unlock": "解锁", "saving": "正在保存…",
+    "no_preview": "尚无画面", "drawer": "🔧 排查/调整"
+  },
+  "krita": {
+    "hint": "Bridge agent — 控制请在宏UI页面进行",
+    "offline": "orchestrator offline",
+    "broken": "install broken: not a symlink into the repo",
+    "status": "phase={phase}",
+    "pose_age": " pose_age={age}ms",
+    "session": " session={state}",
+    "decision": "{kind} {result}",
+    "saved": "saved",
+    "failed": "failed: {detail}",
+    "restored": "restored {name}",
+    "restore_failed": "restore failed: {error}",
+    "preview_failed": "preview failed: {error}",
+    "pushed": "pushed {name}",
+    "archive_kept": "archive kept: pose_{session}.kra",
+    "push_failed": "push failed: {error}"
+  }
+}

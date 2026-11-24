@@ -1,0 +1,102 @@
+{
+  "instance": "cad-animation",
+  "title": "CAD → 动画",
+  "stages": [
+    {
+      "id": "import",
+      "label": "导入 CAD",
+      "kind": "headless"
+    },
+    {
+      "id": "rig",
+      "label": "绑定",
+      "kind": "headless"
+    },
+    {
+      "id": "animate",
+      "label": "动画",
+      "kind": "interaction",
+      "surface": "stage"
+    },
+    {
+      "id": "export",
+      "label": "导出",
+      "kind": "artifact"
+    }
+  ],
+  "surfaces": [
+    {
+      "id": "stage",
+      "label": "动画台",
+      "kind": "pixels",
+      "phase": "ADJUSTMENT",
+      "inputs": [
+        "pointer",
+        "decision"
+      ]
+    },
+    {
+      "id": "review",
+      "label": "审片",
+      "kind": "pixels",
+      "phase": "LOCKED",
+      "inputs": [
+        "decision"
+      ]
+    }
+  ],
+  "decisions": [
+    {
+      "kind": "approve_rig",
+      "label": "绑定结果",
+      "actions": [
+        {
+          "action": "approve_rig",
+          "label": "通过"
+        }
+      ]
+    }
+  ],
+  "drawer": [
+    {
+      "id": "imports",
+      "label": "导入记录",
+      "kinds": [
+        "file_drop",
+        "import_done"
+      ],
+      "format": "summary"
+    },
+    {
+      "id": "failures",
+      "label": "失败记录",
+      "kinds": [
+        "import_failed",
+        "render_failed"
+      ],
+      "format": "entry"
+    }
+  ],
+  "ports": {
+    "input": [
+      "pointer",
+      "decision"
+    ],
+    "output": [
+      "preview",
+      "archive"
+    ]
+  },
+  "archive": {
+    "label": "版本"
+  },
+  "document": {
+    "dirty": "预览未保存",
+    "saved": "预览已保存"
+  },
+  "pending_decision": "等待适配器保存…",
+  "health": {
+    "adapter": "审片器未连接",
+    "pipeline": "容器管线不可用"
+  }
+}
