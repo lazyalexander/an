@@ -7,7 +7,7 @@ if (location.hash) {
 }
 let view, selection, instanceKey, channel, frame, panelTimer, panelEpoch = 0;
 const labels = {queued:"等待执行",running:"执行中",waiting:"等待回应",saving:"等待文档保存",
-  done:"已完成",failed:"失败",unknown:"结果未知",superseded:"已替换",permission_required:"等待授权"};
+  done:"已完成",failed:"失败",unknown:"结果未知",superseded:"已替换",permission_required:"等待授权",cancelled:"已取消"};
 async function api(action, body = {}) {
   const response = await fetch("/api/" + action, {method:"POST",
     headers:{"Authorization":"Bearer " + key, "Content-Type":"application/json"},
@@ -152,6 +152,7 @@ async function render() {
   if (!selection && activity.length) selection={kind:"node",id:activity[0][0],auto:true};
   const title=id=>view.nodes[id]?.title || id;
   el("task").textContent = view.task;
+  renderControls();
   el("graph-nodes").replaceChildren(...nav(activity.map(([id,s])=>[id,title(id)+" · "+(labels[s.status]||s.status)]),
     selection?.kind==="node" && selection.id,id=>select("node",id)));
   const active=activity.filter(([id,s])=>!["done","queued","superseded"].includes(s.status) || (selection?.kind==="node" && selection.id===id));
@@ -227,6 +228,16 @@ el("sources").ontoggle=async()=>{
     el("trace").replaceChildren(...rows);
   }catch(e){el("trace").textContent=e.message;}
 };
+// Person controls are executed by An itself, never relayed to the agent.
+function renderControls() {
+  const paused = view.control === "paused";
+  el("control-state").textContent = view.closed ? "已关闭" : paused ? "已暂停" : "";
+  if (!view.authorized || view.closed) return el("task-controls").replaceChildren();
+  const control = action => api("control", {action}).then(update);
+  el("task-controls").replaceChildren(
+    paused ? button("继续", () => control("resume")) : button("暂停", () => control("pause")),
+    button("停止", () => confirm("取消所有未完成的工作并暂停任务？") && control("stop")));
+}
 let inFlight;
 function update(){
   if(!inFlight)inFlight=api("view").then(v=>{view=v;return render();}).catch(e=>status(e.message)).finally(()=>{inFlight=null;});
