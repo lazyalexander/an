@@ -38,6 +38,9 @@ pub(super) fn read(
             continue;
         }
         let node = &graph["nodes"][&key];
+        if let Some(driver) = graph["drivers"][&key].as_str() {
+            pending.push(driver.to_owned());
+        }
         if let Some(save) = node["save"]["node"]
             .as_str()
             .filter(|id| graph["nodes"].get(id).is_some())

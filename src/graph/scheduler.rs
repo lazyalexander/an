@@ -16,7 +16,8 @@ fn bindings(db: &Connection, task: &str, graph: &Value, node: &Value) -> Result<
             if state["status"] != "done"
                 && !(state["status"] == "saving"
                     && r["port"] == "response"
-                    && graph["nodes"][field(r, "node")?]["save"]["node"] == node["id"])
+                    && (graph["nodes"][field(r, "node")?]["save"]["node"] == node["id"]
+                        || graph["nodes"][field(r, "node")?]["continuation"] == node["id"]))
             {
                 return Ok(None);
             }
@@ -47,15 +48,18 @@ pub(super) fn advance(
     graph: &mut Value,
     lock: &File,
 ) -> Result<()> {
-    let nodes = graph["nodes"].as_object().context("Invalid graph")?.clone();
     loop {
+        let nodes = graph["nodes"].as_object().context("Invalid graph")?.clone();
         let mut finished = false;
         for (id, node) in &nodes {
             let mut state = graph["activity"][id].clone();
             if state["status"] == "saving" {
                 let saver = field(&node["save"], "node")?;
                 let run = &graph["activity"][saver];
-                if run["status"] == "superseded" {
+                let continuation_superseded = node["continuation"]
+                    .as_str()
+                    .is_some_and(|id| graph["activity"][id]["status"] == "superseded");
+                if run["status"] == "superseded" || continuation_superseded {
                     state["status"] = json!("superseded");
                     graph["activity"][id] = state;
                     event(graph, "host", "superseded", id, json!({"save_node":saver}));
@@ -86,23 +90,63 @@ pub(super) fn advance(
             {
                 state = json!({"id":uid(),"attempt":state["attempt"].as_u64().unwrap()+1,"status":"queued"});
             }
-            if !matches!(
-                state["status"].as_str(),
-                Some("queued" | "running" | "permission_required" | "unknown")
-            ) {
-                continue;
-            }
-            let Some(bound) = bindings(db, task, graph, node)? else {
-                continue;
-            };
-            permission::current(db, task)?;
-            let result = step(db, task, node, &bound, &mut state, lock);
-            if let Err(e) = result {
-                if permission::current(db, task).is_err() {
-                    return Ok(());
+            if state["status"] == "cleanup_pending" {
+                state["status"] = state["after_cleanup"].take();
+            } else {
+                if !matches!(
+                    state["status"].as_str(),
+                    Some("queued" | "running" | "permission_required" | "unknown")
+                ) {
+                    continue;
                 }
-                state["status"] = json!("failed");
-                state["error"] = json!(e.to_string());
+                let Some(bound) = bindings(db, task, graph, node)? else {
+                    continue;
+                };
+                permission::current(db, task)?;
+                if let Err(error) = step(db, task, graph, node, &bound, &mut state, lock) {
+                    if permission::current(db, task).is_err() {
+                        return Ok(());
+                    }
+                    state["status"] = json!("failed");
+                    state["error"] = json!(error.to_string());
+                }
+            }
+            if node["kind"] == "expand"
+                && matches!(
+                    state["status"].as_str(),
+                    Some("done" | "failed" | "cancelled" | "authorization_expired")
+                )
+            {
+                ensure!(
+                    state["status"] != "done" || state["instance"].is_string(),
+                    "Missing driver instance"
+                );
+                if let Some(instance) = state["instance"].as_str() {
+                    if find(db, "instance", instance)?.is_some() {
+                        let settled = instances::dispatch_locked(
+                            db,
+                            task,
+                            "unload",
+                            &json!({"instance":instance}),
+                            lock,
+                        )?;
+                        if settled["status"] != "unloaded" {
+                            state["after_cleanup"] = state["status"].take();
+                            state["status"] = json!("cleanup_pending");
+                        }
+                    } else {
+                        ensure!(state["status"] != "done", "Missing driver instance");
+                    }
+                }
+                if state["status"] == "done" {
+                    if let Err(error) = accept_expansion(db, task, graph, id, &mut state) {
+                        if permission::current(db, task).is_err() {
+                            return Ok(());
+                        }
+                        state["status"] = json!("failed");
+                        state["error"] = json!(error.to_string());
+                    }
+                }
             }
             finished |= state["status"] == "done";
             if graph["activity"][id] != state {
@@ -123,9 +167,92 @@ pub(super) fn advance(
     Ok(())
 }
 
+fn accept_expansion(
+    db: &mut Connection,
+    task: &str,
+    graph: &mut Value,
+    id: &str,
+    state: &mut Value,
+) -> Result<()> {
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    ensure!(
+        state["authority"] == json!(hash(canonical(&permission::stamp(&tx, task)?).as_bytes())),
+        "Driver authority changed before acceptance"
+    );
+    let proposal_revision = field(&state["outputs"]["subgraph.json"], "revision")?;
+    let origin = &graph["nodes"][id]["spool"];
+    if let Some(request) = permission::gate(
+        &tx,
+        task,
+        "publish",
+        json!([origin, "graph-metadata", state["id"], proposal_revision]),
+        json!([state["id"], proposal_revision]),
+        state["proposal_request"].as_str(),
+        Some(json!(["publish", origin, "graph-metadata"])),
+    )? {
+        state["proposal_request"] = request["request_id"].clone();
+        state["status"] = json!("permission_required");
+        graph["activity"][id] = state.clone();
+        put(&tx, "graph", task, graph)?;
+        tx.commit()?;
+        return Ok(());
+    }
+    let revision = get(
+        &tx,
+        "revision",
+        field(&state["outputs"]["subgraph.json"], "revision")?,
+    )?;
+    let proposal: Value = serde_json::from_slice(&artifacts::bytes(&revision["subgraph.json"])?)?;
+    let additions = proposal["nodes"]
+        .as_array()
+        .filter(|n| !n.is_empty())
+        .context("Expected proposed nodes")?;
+    for surface in graph["nodes"]
+        .as_object()
+        .unwrap()
+        .values()
+        .filter(|n| n["continuation"] == id)
+    {
+        ensure!(
+            additions.iter().any(|n| n["id"] == surface["save"]["node"]),
+            "Continuation omitted save run"
+        );
+    }
+    const MAX_AUTOMATIC_NODES: usize = 256;
+    ensure!(
+        graph["drivers"].as_object().map_or(0, |m| m.len()) + additions.len()
+            <= MAX_AUTOMATIC_NODES,
+        "Task expansion budget exceeded"
+    );
+    let mut next = graph.clone();
+    append_nodes(
+        &tx,
+        &get(&tx, "task", task)?,
+        &mut next,
+        additions,
+        Some(id),
+    )?;
+    for addition in additions {
+        next["drivers"][field(addition, "id")?] = json!(id);
+    }
+    next["activity"][id] = state.clone();
+    event(
+        &mut next,
+        "host",
+        "expanded",
+        id,
+        json!({"attempt":state["id"],"nodes":additions.iter().map(|n| &n["id"]).collect::<Vec<_>>()}),
+    );
+    put(&tx, "graph", task, &next)?;
+    tx.commit()?;
+    *graph = next;
+    Ok(())
+}
+
 fn step(
     db: &mut Connection,
     task: &str,
+    graph: &mut Value,
     node: &Value,
     bound: &Value,
     state: &mut Value,
@@ -136,13 +263,19 @@ fn step(
         return Ok(());
     }
     let stamp = json!(hash(canonical(&permission::stamp(db, task)?).as_bytes()));
+    if node["kind"] == "expand"
+        && state["authority"] != stamp
+        && find(db, "run", field(state, "id")?)?.is_some()
+    {
+        anyhow::bail!("Driver authority changed before acceptance");
+    }
     if state["authority"] != stamp {
         state["requests"] = json!({});
         state["authority"] = stamp.clone();
     }
     state["bindings"] = bound.clone();
     let attempt = field(state, "id")?.to_owned();
-    if node["kind"] == "run" {
+    if node["kind"] == "run" || node["kind"] == "expand" {
         if find(db, "run", &attempt)?.is_some() {
             instances::dispatch_locked(db, task, "status", &json!({"run":attempt}), lock)?;
             let run = get(db, "run", &attempt)?;
@@ -171,7 +304,20 @@ fn step(
             }
             return Ok(());
         }
-        let instance = if let Some(id) = state["instance"].as_str() {
+        let instance = if node["kind"] == "expand"
+            && (state["instance"].is_null() || state["instance"] == format!("driver-{attempt}"))
+        {
+            state["instance"] = json!(format!("driver-{attempt}"));
+            graph["activity"][field(node, "id")?] = state.clone();
+            put(db, "graph", task, graph)?;
+            instances::dispatch_locked(
+                db,
+                task,
+                "load",
+                &json!({"spool":node["spool"],"_parallel":true,"_driver":attempt}),
+                lock,
+            )?
+        } else if let Some(id) = state["instance"].as_str() {
             get(db, "instance", id)?
         } else {
             instances::dispatch_locked(

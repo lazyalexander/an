@@ -242,9 +242,14 @@
                 "type": "string",
                 "enum": [
                   "run",
+                  "expand",
                   "surface",
                   "delivery"
                 ]
+              },
+              "continuation": {
+                "type": "string",
+                "description": "Expand node authorized to consume the provisional response and propose the designated saver."
               },
               "after": {
                 "type": "array",

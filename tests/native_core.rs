@@ -496,3 +496,134 @@ fn graph_export_requires_all_origins_and_exact_revision_approval() {
     assert_eq!(fs::read(path.join("one/a")).unwrap(), b"a");
     assert_eq!(fs::read(path.join("two/b")).unwrap(), b"b");
 }
+
+#[test]
+fn captured_driver_proposal_is_reconciled_atomically_under_its_authority() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    use sha2::{Digest, Sha256};
+    let stamp = format!("{:x}", Sha256::digest(br#"["active", "legacy", "legacy"]"#));
+    for case in ["valid", "invalid", "expired", "denied", "budget"] {
+        let f = Fixture::graph_task();
+        let mut children = vec![Fixture::surface("child")];
+        if case == "invalid" {
+            children.push(Fixture::surface("driver"));
+        }
+        if case == "budget" {
+            children = (0..2)
+                .map(|i| Fixture::surface(&format!("child{i}")))
+                .collect();
+        }
+        f.insert(
+            "revision",
+            "captured",
+            json!({"subgraph.json":STANDARD.encode(json!({"nodes":children}).to_string())}),
+        );
+        f.insert(
+            "instance",
+            "instance",
+            json!({"id":"instance","task":"task","status":"unloaded"}),
+        );
+        f.insert("run","attempt",json!({"id":"attempt","task":"task","status":"completed","candidate":"captured","outputs":["subgraph.json"]}));
+        let drivers: serde_json::Map<_, _> = if case == "budget" {
+            (0..255)
+                .map(|i| (format!("accepted{i}"), json!("previous")))
+                .collect()
+        } else {
+            Default::default()
+        };
+        f.insert("graph","task",json!({"revision":1,"drivers":drivers,"nodes":{"driver":{"id":"driver","kind":"expand","outputs":["subgraph.json"]}},
+            "events":[],"activity":{"driver":{"id":"attempt","status":"running","instance":"instance","authority":if case == "expired" {"old"} else {&stamp}}}}));
+        let pending = f.graph("state", json!({})).unwrap();
+        assert!(!pending.to_string().contains("child"));
+        if case != "expired" {
+            assert_eq!(
+                pending["activity"]["driver"]["status"],
+                "permission_required"
+            );
+            f.decide_graph(if case == "denied" { "deny" } else { "once" });
+        }
+        for _ in 0..2 {
+            let graph = f.graph("state", json!({})).unwrap();
+            assert_eq!(graph["revision"], if case == "valid" { 2 } else { 1 });
+            assert_eq!(graph["nodes"].get("child").is_some(), case == "valid");
+            assert_eq!(
+                graph["activity"]["driver"]["status"],
+                if case == "valid" { "done" } else { "failed" }
+            );
+        }
+    }
+}
+
+#[test]
+fn public_run_selection_excludes_driver_reservations() {
+    let f = Fixture::graph_task();
+    f.insert("instance", "driver-x", json!({"id":"driver-x","task":"task","spool":"sample","owner":"x","dedicated":true,"status":"running"}));
+    for (selector, value, error) in [
+        ("--spool", "sample", "Load the spool first"),
+        ("--instance", "driver-x", "Instance reserved for driver"),
+    ] {
+        let out = f.run(&["run", "--task", "task", selector, value, "true"]);
+        assert!(!out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains(error));
+    }
+}
+
+#[test]
+fn saver_reservation_rejects_same_batch_and_later_submissions() {
+    let f = Fixture::graph_task();
+    let mut surface = Fixture::surface("review");
+    surface["save"] = json!({"node":"save","port":"file"});
+    surface["continuation"] = json!("driver");
+    let proposal = |nodes: Value| json!({"nodes":nodes,"idempotency_key":"test","base_revision":0});
+    let claimed = Fixture::surface("save");
+    assert!(f
+        .graph("submit", proposal(json!([surface, claimed])))
+        .unwrap_err()
+        .contains("unclaimed saver"));
+    f.insert(
+        "graph",
+        "task",
+        json!({"nodes":{"review":surface},"revision":0,"activity":{},"events":[]}),
+    );
+    assert!(f
+        .graph("submit", proposal(json!([claimed])))
+        .unwrap_err()
+        .contains("reserved for continuation"));
+}
+
+#[test]
+fn driver_cleanup_is_reconciled_before_metadata_authorization() {
+    use sha2::{Digest, Sha256};
+    let f = Fixture::graph_task();
+    let instance = uuid::Uuid::new_v4().simple().to_string();
+    let record = json!({"id":instance,"name":format!("an-{instance}"),"task":"task","status":"cleanup_pending","intent":"unload","dedicated":true,"owner":"attempt"});
+    f.insert("instance", &instance, record.clone());
+    // Even if the VM is absent, an unremovable staging path keeps unload pending.
+    fs::create_dir(f.root.join("instances")).unwrap();
+    fs::write(f.root.join("instances").join(&instance), b"pending").unwrap();
+    let stamp = format!("{:x}", Sha256::digest(br#"["active", "legacy", "legacy"]"#));
+    f.insert("graph","task",json!({"revision":1,"nodes":{"driver":{"id":"driver","kind":"expand","spool":"demo"}},
+        "events":[],"activity":{"driver":{"id":"attempt","status":"cleanup_pending","after_cleanup":"done","instance":instance,
+        "authority":stamp,"outputs":{"subgraph.json":{"revision":"candidate"}}}}}));
+    let state = f.graph("state", json!({})).unwrap();
+    assert_eq!(state["activity"]["driver"]["status"], "cleanup_pending");
+    assert_eq!(f.graph("requests", json!({})).unwrap(), json!([]));
+    let mut confirmed = record;
+    confirmed["status"] = json!("unloaded");
+    f.insert("instance", &instance, confirmed);
+    let state = f.graph("state", json!({})).unwrap();
+    assert_eq!(state["activity"]["driver"]["status"], "permission_required");
+    assert_eq!(state["revision"], 1);
+}
+
+#[test]
+fn driver_reserves_instance_even_when_startup_fails() {
+    let f = Fixture::graph_task();
+    f.insert("graph","task",json!({"revision":1,"nodes":{"driver":{"id":"driver","kind":"expand","spool":"unavailable"}},
+        "events":[],"activity":{"driver":{"id":"attempt","status":"queued"}}}));
+    for _ in 0..2 {
+        let state = f.graph("state", json!({})).unwrap();
+        assert_eq!(state["activity"]["driver"]["status"], "failed");
+        assert_eq!(state["activity"]["driver"]["instance"], "driver-attempt");
+    }
+}

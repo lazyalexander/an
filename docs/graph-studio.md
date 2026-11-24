@@ -12,7 +12,7 @@ container build --tag an-graph-studio:headless examples/graph_studio/spool
 python3 examples/graph_studio/demo.py bridge
 ```
 
-Open the printed Studio URL. Approve the preview requests, select a reference and click the location to mark. The example agent reads that response and then adds the processing node. The spool writes a layered OpenRaster document, reopens its archive to check the saved layers and returns its bytes. The surface completes when An captures that output. The report includes the painting, annotated SVG and choice. Its **交付文件** section downloads the fixed versions.
+Open the printed Studio URL. Approve the preview requests, select a reference and click the location to mark. A second headless driver reads the frozen response and proposes the processing node. The initial driver has already exited. The spool writes a layered OpenRaster document, reopens its archive to check the saved layers and returns its bytes. The surface completes when An captures that output. The report includes the painting, annotated SVG and choice. Its **交付文件** section downloads the fixed versions.
 
 Run the same command with `cad` to set the rotation period of a chamfered plate and deliver a binary STL and animated SVG. Both examples unload their instances and close their task after publication. The page stays available until interrupted. The same task can be reopened later with its ID.
 
@@ -29,7 +29,8 @@ Call `an_graph_submit` with `base_revision`, `idempotency_key` and a `nodes` arr
 | Kind | Fields and behavior |
 | --- | --- |
 | `run` | Supply a granted digest-pinned `spool`, `argv` and output paths relative to `/output`. Input names match the admitted manifest. Each port receives its bound revision under `/input/<port>/`. Read-only spools support concurrent instances. Editable work is serialized. |
-| `surface` | `package` names an input binding. `response` declares an object schema with declared properties, array items, scalar types, optional enumerations and required keys. Declare the `response` output. For a verified save, add a `document` output and `save: {"node":"save-run","port":"file.ora"}`. The designated run can consume the provisional response. Other consumers wait for the captured save. |
+| `expand` | Runs a pinned, read-only spool in a dedicated short-lived instance with the same input authorization as a run. Declare the single output `subgraph.json`. Write an object with a nonempty `nodes` array there. After confirmed driver cleanup, An requires output authorization for the exact proposal revision before copying its contents into graph metadata. The workspace flow is `["publish", driverSpool, "graph-metadata"]`. Accepted proposals can add up to 256 nodes cumulatively per task. |
+| `surface` | `package` names an input binding. `response` declares an object schema with declared properties, array items, scalar types, optional enumerations and required keys. Declare the `response` output. For a verified save, add a `document` output and `save: {"node":"save-run","port":"file.ora"}`. The designated run can consume the provisional response. To generate the save run after the user responds, set `continuation` to a declared expand node bound to this response. The saver ID is reserved for this continuation, whose proposal must include it. Other consumers wait for the captured save. |
 | `delivery` | Bind the files to publish with `inputs`, use an empty `outputs` list and optionally name the interactive `package` binding. The group is published after authorization for all its members. |
 
 A repeated identical submission returns its original receipt. A stale base returns `status: conflict` and the current revision. A submission can include `retry` for failed or cancelled node IDs and `supersede` for unconsumed queued nodes or waiting surfaces. Submit replacement nodes under new IDs. An unknown run is reconciled by its reserved ID and kept for investigation.
@@ -70,6 +71,6 @@ The legacy instance-mode Studio reads its original ledger and archives. Use task
 
 ## Reproduce acceptance
 
-Run `python3 tests/graph_studio_smoke.py --experiment bridge` and repeat with `--experiment cad` after building the example image. Each test creates an isolated registry. The Bridge test measures overlapping execution intervals and appends its processing node after the human response. Both tests close the task and check the published files and authorized evidence from a fresh workspace task.
+Run `python3 tests/graph_studio_smoke.py --experiment bridge` and repeat with `--experiment cad` after building the example image. Each test creates an isolated registry. The Bridge test checks overlapping execution intervals on distinct candidate instances and verifies that the second driver generates the processing node after the human response. Use `--choice A` to cover denied handoff and retry. Both tests close the task and check the published files and authorized evidence from a fresh workspace task.
 
 Pass `--browser` with Chrome and `playwright-core` installed to exercise the macro UI. Set `PLAYWRIGHT_CORE` to the module directory if it is outside Node's search path. Use `--directory` to retain the test registry and desktop/mobile screenshots. `cargo test` also covers a seeded indeterminate run, denied access, damaged package data, duplicate responses and expired requests.

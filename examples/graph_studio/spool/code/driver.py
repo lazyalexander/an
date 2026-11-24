@@ -1,5 +1,7 @@
 """Agent-side subgraphs and generated panel packages for the two Studio experiments."""
 import json
+import sys
+from pathlib import Path
 
 
 def ref(node, port):
@@ -74,6 +76,10 @@ def bridge(spool):
                   "save": ref("apply", "painting.ora"), "response": schema, "inputs": {
                       "ui": ref("interface", "panel.json"), **{k: ref(k, "candidate.svg") for k in ("A", "B")}},
                   "outputs": ["response", "document"]})
+    nodes[-1]["continuation"] = "select"
+    nodes.append({"id": "select", "kind": "expand", "spool": spool,
+                  "argv": ["python3", "/spool/code/driver.py", "select", spool],
+                  "inputs": {"choice": ref("compare", "response")}, "outputs": ["subgraph.json"]})
     return nodes
 
 
@@ -120,3 +126,16 @@ def cad(spool):
             {"id": "animation", "kind": "delivery", "title": "零件模型与旋转动画", "inputs": {
                 "model": ref("animate", "plate.stl"), "animation": ref("animate", "turntable.svg")},
              "outputs": []}]
+
+
+if __name__ == "__main__":
+    stage, spool, *options = sys.argv[1:]
+    if stage == "select":
+        response = json.loads(Path("/input/choice/response.json").read_text())
+        nodes = bridge_result(spool, response)
+    else:
+        nodes = {"bridge": bridge, "cad": cad}[stage](spool)
+    if stage == "bridge" and options == ["--verify-overlap"]:
+        for candidate in nodes[:2]:
+            candidate["argv"][-1] = "import time; time.sleep(5)\n" + candidate["argv"][-1]
+    Path("/output/subgraph.json").write_text(json.dumps({"nodes": nodes}))
