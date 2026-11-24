@@ -129,3 +129,11 @@ def test_boot_rejects_a_misspelled_override(tmp_path):
                           cwd=STUDIO, capture_output=True, text=True, timeout=30, check=False)
     assert proc.returncode == 2
     assert "unknown setting graph.poll" in proc.stderr
+
+
+def test_task_page_labels_statuses_only_through_config():
+    # Regression: a leftover hardcoded label table left `labels` undefined,
+    # which stopped rendering before any panel could mount.
+    script = (STUDIO / "orchestrator" / "macro" / "graph" / "graph.js").read_text(encoding="utf-8")
+    assert "labels[" not in script
+    assert "statusLabel(s.status)" in script
