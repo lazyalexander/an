@@ -147,8 +147,17 @@ fn load(
     image: &str,
     f: &File,
     parallel: bool,
+    owner: Option<&str>,
 ) -> Result<Value> {
+    let dedicated = owner.is_some();
     let work = t["work"][image].as_str().context("Spool outside task")?;
+    ensure!(
+        !dedicated
+            || !t["editable"]
+                .as_array()
+                .is_some_and(|a| a.contains(&json!(image))),
+        "Driver requires a read-only spool"
+    );
     let platform = runtime::require(db, image)?["platform"].clone();
     let graph = if parallel {
         find(db, "graph", task)?
@@ -156,7 +165,7 @@ fn load(
         None
     };
     for mut i in items(db, "instance", task)? {
-        if i["spool"] != image || i["status"] == "unloaded" {
+        if i["spool"] != image || i["status"] == "unloaded" || dedicated || i["dedicated"] == true {
             continue;
         }
         reconcile(db, &mut i, f)?;
@@ -193,8 +202,22 @@ fn load(
             "Resolve previous instance before loading"
         );
     }
-    let id = uid();
-    let mut i = json!({"id":id,"name":format!("an-{id}"),"task":task,"spool":image,"platform":platform,"status":"loading","intent":"load","active":null});
+    let id = owner
+        .map(|attempt| format!("driver-{attempt}"))
+        .unwrap_or_else(uid);
+    if let Some(mut prior) = find(db, "instance", &id)? {
+        ensure!(
+            prior["task"] == task && prior["spool"] == image && prior["owner"].as_str() == owner,
+            "Invalid driver reservation"
+        );
+        reconcile(db, &mut prior, f)?;
+        ensure!(
+            prior["status"] == "running",
+            "Reserved driver did not start"
+        );
+        return Ok(prior);
+    }
+    let mut i = json!({"id":id,"name":format!("an-{id}"),"task":task,"spool":image,"platform":platform,"status":"loading","dedicated":dedicated,"owner":owner,"intent":"load","active":null});
     save(db, "instance", &i)?;
     let setup = (|| -> Result<()> {
         let p = path(&i)?;
@@ -516,6 +539,12 @@ fn reap(mut child: std::process::Child) {
 }
 
 pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
+    ensure!(
+        !args
+            .as_object()
+            .is_some_and(|a| a.keys().any(|k| k.starts_with('_'))),
+        "Reserved instance argument"
+    );
     let mut db = connect()?;
     let lock = lock(&db, task)?;
     dispatch_locked(&mut db, task, op, args, &lock)
@@ -543,6 +572,7 @@ pub(crate) fn dispatch_locked(
                 string(args, "spool")?,
                 lock,
                 args["_parallel"] == true,
+                args["_driver"].as_str(),
             )
         }
         "skill" => {
@@ -701,9 +731,37 @@ pub(crate) fn dispatch_locked(
         items(db, "instance", task)?
             .into_iter()
             .rev()
-            .find(|i| i["spool"] == args["spool"] && i["status"] != "unloaded")
+            .find(|i| {
+                i["spool"] == args["spool"]
+                    && i["status"] != "unloaded"
+                    && (op != "run" || i["dedicated"] != true)
+            })
             .context("Load the spool first")?
     };
+    if op == "run" && i["dedicated"] == true {
+        if i["owner"].is_null() && args["_graph_run"].is_string() {
+            // Upgrade previously reserved instances only from durable graph ownership.
+            let graph = get(db, "graph", task)?;
+            ensure!(
+                graph["activity"]
+                    .as_object()
+                    .is_some_and(
+                        |activity| activity
+                            .iter()
+                            .any(|(node, a)| graph["nodes"][node]["kind"] == "expand"
+                                && a["id"] == args["_graph_run"]
+                                && a["instance"] == i["id"])
+                    ),
+                "Missing driver reservation"
+            );
+            i["owner"] = args["_graph_run"].clone();
+            save(db, "instance", &i)?;
+        }
+        ensure!(
+            i["owner"].is_string() && i["owner"] == args["_graph_run"],
+            "Instance reserved for driver"
+        );
+    }
     if op == "unload" && i["status"] != "unloaded" {
         i["intent"] = json!("unload");
         let tx = db.transaction()?;

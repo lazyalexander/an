@@ -83,9 +83,84 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         );
         state["status"] = json!("superseded");
     }
+    append_nodes(&tx, &record, &mut graph, additions, None)?;
+    let rev = graph["revision"].as_u64().unwrap();
+    let events = graph["events"].as_array_mut().unwrap();
+    let cursor = events.len() + 1;
+    events.push(json!({"cursor":cursor,"time_ms":now_ms(),"actor":"agent","kind":"submitted","revision":rev,"retry":args["retry"],"supersede":args["supersede"],"nodes":additions.iter().map(|n|&n["id"]).collect::<Vec<_>>()}));
+    let receipt = json!({"revision":rev,"cursor":cursor,"status":"accepted"});
+    put(&tx, "graph", task, &graph)?;
+    put(
+        &tx,
+        "graph_submission",
+        &key,
+        &json!({"args":args,"receipt":receipt}),
+    )?;
+    tx.commit()?;
+    advance(&mut db, task, &mut graph, &lock)?;
+    Ok(receipt)
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn event(graph: &mut Value, actor: &str, kind: &str, id: &str, data: Value) {
+    let events = graph["events"].as_array_mut().unwrap();
+    events.push(json!({"cursor":events.len()+1,"time_ms":now_ms(),"actor":actor,"kind":kind,"node":id,"data":data}));
+}
+
+pub(crate) fn binding_origin(item: &Value) -> String {
+    if let Some(spool) = item["spool"].as_str() {
+        spool.to_owned()
+    } else if let Some(name) = item["source"].as_str() {
+        format!("task-input:{name}")
+    } else {
+        "response".to_owned()
+    }
+}
+
+fn append_nodes(
+    db: &Connection,
+    record: &Value,
+    graph: &mut Value,
+    additions: &[Value],
+    driver: Option<&str>,
+) -> Result<()> {
     let nodes = graph["nodes"].as_object_mut().unwrap();
+    let mut reserved = BTreeMap::new();
+    for surface in nodes
+        .values()
+        .chain(additions.iter())
+        .filter(|n| n["continuation"].is_string())
+    {
+        let saver = field(&surface["save"], "node")?;
+        let owner = field(surface, "continuation")?;
+        ensure!(
+            reserved
+                .insert(saver.to_owned(), owner.to_owned())
+                .is_none(),
+            "Duplicate saver reservation"
+        );
+    }
+    for surface in additions.iter().filter(|n| n["continuation"].is_string()) {
+        let saver = field(&surface["save"], "node")?;
+        ensure!(
+            !nodes.contains_key(saver) && !additions.iter().any(|n| n["id"] == saver),
+            "Continuation requires an unclaimed saver"
+        );
+    }
     for node in additions {
         let id = field(node, "id")?;
+        if let Some(owner) = reserved.get(id) {
+            ensure!(
+                Some(owner.as_str()) == driver,
+                "Saver reserved for continuation"
+            );
+        }
         ensure!(
             node.get("inputs").is_none_or(Value::is_object),
             "Expected input map"
@@ -108,14 +183,26 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         }
         ensure!(!nodes.contains_key(id), "Existing node {id}");
         match field(node, "kind")? {
-            "run" => {
+            "run" | "expand" => {
+                if node["kind"] == "expand" {
+                    ensure!(
+                        !record["editable"]
+                            .as_array()
+                            .is_some_and(|images| images.contains(&node["spool"])),
+                        "Driver requires a read-only spool"
+                    );
+                    ensure!(
+                        node["outputs"] == json!(["subgraph.json"]),
+                        "Expected subgraph.json"
+                    );
+                }
                 ensure!(
                     record["work"].get(field(node, "spool")?).is_some(),
                     "Spool outside task"
                 );
                 let spool = field(node, "spool")?;
                 let digest = spool.rsplit_once('@').context("Invalid image reference")?.1;
-                let manifest = get(&tx, "admission", digest)?["manifest"].clone();
+                let manifest = get(db, "admission", digest)?["manifest"].clone();
                 let ports = manifest["inputs"]
                     .as_array()
                     .context("Invalid manifest inputs")?;
@@ -186,45 +273,9 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         nodes.insert(id.to_owned(), node.clone());
     }
     validate(nodes)?;
-    let rev = graph["revision"].as_u64().unwrap() + 1;
-    graph["revision"] = json!(rev);
-    let events = graph["events"].as_array_mut().unwrap();
-    let cursor = events.len() + 1;
-    events.push(json!({"cursor":cursor,"time_ms":now_ms(),"actor":"agent","kind":"submitted","revision":rev,"retry":args["retry"],"supersede":args["supersede"],"nodes":additions.iter().map(|n|&n["id"]).collect::<Vec<_>>()}));
     for node in additions {
         graph["activity"][field(node, "id")?] = json!({"status":"queued","attempt":1,"id":uid()});
     }
-    let receipt = json!({"revision":rev,"cursor":cursor,"status":"accepted"});
-    put(&tx, "graph", task, &graph)?;
-    put(
-        &tx,
-        "graph_submission",
-        &key,
-        &json!({"args":args,"receipt":receipt}),
-    )?;
-    tx.commit()?;
-    advance(&mut db, task, &mut graph, &lock)?;
-    Ok(receipt)
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis() as u64
-}
-
-fn event(graph: &mut Value, actor: &str, kind: &str, id: &str, data: Value) {
-    let events = graph["events"].as_array_mut().unwrap();
-    events.push(json!({"cursor":events.len()+1,"time_ms":now_ms(),"actor":actor,"kind":kind,"node":id,"data":data}));
-}
-
-pub(crate) fn binding_origin(item: &Value) -> String {
-    if let Some(spool) = item["spool"].as_str() {
-        spool.to_owned()
-    } else if let Some(name) = item["source"].as_str() {
-        format!("task-input:{name}")
-    } else {
-        "response".to_owned()
-    }
+    graph["revision"] = json!(graph["revision"].as_u64().unwrap() + 1);
+    Ok(())
 }

@@ -7,9 +7,15 @@ import subprocess
 import sys
 import time
 
-from experiments import bridge, bridge_result, cad
+
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def initial_driver(experiment, spool):
+    return {"id": "start", "kind": "expand", "spool": spool,
+            "argv": ["python3", "/spool/code/driver.py", experiment, spool],
+            "outputs": ["subgraph.json"]}
 
 
 def main():
@@ -42,17 +48,12 @@ def main():
                                "--port", str(options.port)], cwd=ROOT / "studio", env=env)
     closed = False
     try:
-        is_bridge = options.experiment == "bridge"
         graph("submit", base_revision=0, idempotency_key="start",
-              nodes=bridge(spool) if is_bridge else cad(spool))
+              nodes=[initial_driver(options.experiment, spool)])
         print(f"Workspace {workspace} · task {task}", flush=True)
         while studio.poll() is None:
             if not closed:
                 state = graph("view")
-                review = state["activity"].get("compare", {})
-                if is_bridge and review.get("status") == "saving" and state["revision"] == 1:
-                    graph("submit", base_revision=1, idempotency_key="apply-selection",
-                          nodes=bridge_result(spool, review["response"]))
                 if any(node.get("delivery") for node in state["activity"].values()):
                     for instance in call("state", "--task", task)["instances"]:
                         call("unload", "--task", task, "--instance", instance["id"])

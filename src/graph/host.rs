@@ -139,7 +139,12 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
             .flatten()
             .map(|(_, v)| v)
         {
-            for (_, key) in state["requests"].as_object().into_iter().flatten() {
+            for key in state["requests"]
+                .as_object()
+                .into_iter()
+                .flat_map(|m| m.values())
+                .chain(state.get("proposal_request"))
+            {
                 let r = get(&tx, "request", key.as_str().context("Invalid request ID")?)?;
                 if r["state"] == "pending" && r["revisions"] == stamp {
                     pending.push(json!({"id":key,"scope":r["scope"],"details":r["details"],"operation":r["operation"]}));

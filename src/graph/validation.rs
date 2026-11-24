@@ -38,8 +38,24 @@ pub(super) fn validate(nodes: &serde_json::Map<String, Value>) -> Result<()> {
             );
             deps.insert((
                 upstream,
-                producer["save"]["node"] == id.as_str() && port == "response",
+                (producer["save"]["node"] == id.as_str()
+                    || producer["continuation"] == id.as_str())
+                    && port == "response",
             ));
+        }
+        if let Some(target) = node.get("continuation") {
+            let driver = nodes
+                .get(target.as_str().context("Invalid continuation")?)
+                .context("Missing continuation")?;
+            ensure!(
+                node["kind"] == "surface"
+                    && node.get("save").is_some()
+                    && driver["kind"] == "expand"
+                    && driver["inputs"].as_object().is_some_and(|inputs| inputs
+                        .values()
+                        .any(|r| r["node"] == id.as_str() && r["port"] == "response")),
+                "Invalid continuation"
+            );
         }
         if let Some(save) = node.get("save") {
             let saver = field(save, "node")?;
@@ -50,6 +66,9 @@ pub(super) fn validate(nodes: &serde_json::Map<String, Value>) -> Result<()> {
             );
             dependencies.insert((id.as_str(), true), deps);
             let mut completion = BTreeSet::from([(id.as_str(), true)]);
+            if let Some(driver) = node["continuation"].as_str() {
+                completion.insert((driver, false));
+            }
             if let Some(run) = nodes.get(saver) {
                 ensure!(
                     run["kind"] == "run"

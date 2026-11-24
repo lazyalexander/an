@@ -2,7 +2,7 @@
 const fs = require("node:fs");
 const assert = require("node:assert/strict");
 const {chromium} = require(process.env.PLAYWRIGHT_CORE || "playwright-core");
-const [mode, experiment, directory] = process.argv.slice(2);
+const [mode, experiment, directory, choice="B"] = process.argv.slice(2);
 (async()=>{
   const browser = await chromium.launch({channel:"chrome",headless:true});
   try{
@@ -13,7 +13,7 @@ const [mode, experiment, directory] = process.argv.slice(2);
     if(mode==="respond"){
       const draftSaved=page.waitForResponse(r=>r.url().endsWith("/api/draft") && r.ok() && (bridge?r.request().postDataJSON().value.note==="edge":r.request().postDataJSON().value.seconds===2));
       if(bridge){
-        await panel.locator("#figB img").click();
+        await panel.locator(`#fig${choice} img`).click();
         await panel.locator("#note").fill("edge");
       }else{
         await panel.locator("#speed").focus();
@@ -24,7 +24,7 @@ const [mode, experiment, directory] = process.argv.slice(2);
       await page.reload();
       if(bridge){
         assert.equal(await panel.locator("#note").inputValue(),"edge");
-        assert.equal(await panel.locator("#B").isChecked(),true);
+        assert.equal(await panel.locator(`#${choice}`).isChecked(),true);
       }else assert.equal(await panel.locator("#speed").inputValue(),"2");
       await page.screenshot({path:directory+"/panel.png"});
       await page.setViewportSize({width:390,height:844});

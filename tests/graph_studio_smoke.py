@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "examples/graph_studio"))
-import experiments as ex
+from demo import initial_driver
 
 
 class Agent:
@@ -49,7 +49,7 @@ class Agent:
         self.proc.wait(timeout=30)
 
 
-def exercise(directory, image, browser, experiment):
+def exercise(directory, image, browser, experiment, choice):
     env = {**os.environ, "AN_HOME": str(directory)}
     binary = str(ROOT / "target/debug/an")
 
@@ -73,10 +73,10 @@ def exercise(directory, image, browser, experiment):
             state = agent.graph("state", after=0)
             for r in host("requests"):
                 cli("permission", "decide", "--task", task, "--request-id", r["id"], "--decision", "once")
-            activity = state["activity"][node]
-            if activity["status"] == desired:
+            activity = state["activity"].get(node, {})
+            if activity.get("status") == desired:
                 return activity
-            if activity["status"] in ("failed", "unknown"):
+            if activity.get("status") in ("failed", "unknown"):
                 raise AssertionError(activity)
             time.sleep(.2)
         raise TimeoutError(state["activity"])
@@ -89,17 +89,17 @@ def exercise(directory, image, browser, experiment):
 
     def chrome(mode):
         subprocess.run(["node", str(ROOT / "tests/graph_studio_browser.cjs"), mode, experiment,
-                        str(directory)], input=url, env=env, text=True, check=True, timeout=90)
+                        str(directory), choice], input=url, env=env, text=True, check=True, timeout=90)
 
     agent = Agent(binary, task, env)
     studio = None
     try:
         bridge = experiment == "bridge"
-        nodes = ex.bridge(spool) if bridge else ex.cad(spool)
+        nodes = [initial_driver(experiment, spool),
+                 {"id":"failure", "kind":"run", "spool":spool, "after":["start"],
+                  "argv":["python3","-c","raise SystemExit(7)"], "outputs":[]}]
         if bridge:
-            for candidate in nodes[:2]:
-                candidate["argv"][-1]="import time; time.sleep(2)\n"+candidate["argv"][-1]
-        nodes += [dict(ex.run("failure", spool, "raise SystemExit(7)", []), after=[nodes[0]["id"]])]
+            nodes[0]["argv"].append("--verify-overlap")
         first = dict(base_revision=0, idempotency_key="first", nodes=nodes)
         receipt = agent.graph("submit", **first)
         assert receipt["revision"] == 1
@@ -112,6 +112,9 @@ def exercise(directory, image, browser, experiment):
         delivery = "report" if bridge else "animation"
         state = wait(decision, "waiting")
         assert "apply" not in host("view")["nodes"]
+        initial = host("view")["activity"]["start"]
+        instances = json.loads(cli("state", "--task", task))["instances"]
+        assert any(i["id"] == initial["instance"] and i["status"] == "unloaded" for i in instances)
         request = dict(node=decision, request=state["id"])
         if browser:
             studio, url = start_studio()
@@ -119,17 +122,27 @@ def exercise(directory, image, browser, experiment):
         else:
             assert host("panel", **request)["html"]
             host("viewed", **request)
-            response = dict(choice="B", x=.5, y=.25, note="edge") if bridge else dict(seconds=2)
+            response = dict(choice=choice, x=.5, y=.25, note="edge") if bridge else dict(seconds=2)
             host("draft", **request, value=response)
             assert host("panel", **request)["draft"] == response
             host("respond", **request, value=response)
+        # Reconnect after the host persisted the response. The continuation
+        # still needs its own handoff permission before it can run.
+        agent.close()
+        agent = Agent(binary, task, env)
+        if bridge and choice == "A":
+            activity = host("view")["activity"]["select"]
+            assert activity["status"] == "permission_required"
+            cli("permission", "decide", "--task", task, "--request-id",
+                activity["requests"]["choice"], "--decision", "deny")
+            denied = agent.graph("state")
+            assert denied["activity"]["select"]["status"] == "failed"
+            assert "apply" not in denied["nodes"]
+            agent.graph("submit", base_revision=denied["revision"], idempotency_key="retry-driver",
+                        retry=["select"], nodes=[])
         responded = "saving" if bridge else "done"
         response = wait(decision, responded)["response"]
         assert host("respond", **request, value=response)["status"] == responded
-        if bridge:
-            assert set(host("view")["nodes"]).isdisjoint({"apply", "report"})
-            agent.graph("submit", base_revision=1, idempotency_key="after-response",
-                        nodes=ex.bridge_result(spool, response))
         published = wait(delivery, "done")["delivery"]
         state = agent.graph("state")
         assert state["activity"]["failure"]["status"] == "failed"
@@ -138,11 +151,16 @@ def exercise(directory, image, browser, experiment):
         if bridge:
             candidates=[state["activity"][key] for key in ("A","B")]
             assert candidates[0]["instance"] != candidates[1]["instance"]
-            assert max(c["evidence"]["started_at"] for c in candidates) < min(c["evidence"]["exited_at"] for c in candidates)
+            intervals = [c["evidence"] for c in candidates]
+            assert max(i["started_at"] for i in intervals) < min(i["exited_at"] for i in intervals), intervals
+            assert state["activity"]["apply"]["bindings"]["source"]["run"] == state["activity"][response["choice"]]["run"]
         assert sum(e["kind"] == "responded" for e in state["events"]) == 1
         cursor = state["events"][-1]["cursor"]
         assert not agent.graph("state", after=cursor)["events"]
         trace = host("sources", delivery=published)
+        expansions = [e["node"] for e in state["events"] if e["kind"] == "expanded"]
+        assert expansions == (["start", "select"] if bridge else ["start"])
+        assert all(trace[node]["execution"]["evidence"]["run"] for node in expansions)
         assert trace[decision]["execution"]["response"] == response
         assert trace["apply" if bridge else "animate"]["execution"]["evidence"]["log"]
         for i in json.loads(cli("state", "--task", task))["instances"]:
@@ -189,7 +207,7 @@ def exercise(directory, image, browser, experiment):
             if kind=="input":
                 assert "choice/response.json" in evidence
             if kind=="log" and bridge:
-                assert "Applied annotation to B" in evidence
+                assert f"Applied annotation to {choice}" in evidence
         cli("permission","end","--task",fresh)
         print(experiment, "passed", len(state["events"]), "events", flush=True)
     finally:
@@ -208,10 +226,11 @@ if __name__ == "__main__":
     p.add_argument("--browser", action="store_true")
     p.add_argument("--directory", type=Path)
     p.add_argument("--experiment", choices=["bridge", "cad"], default="bridge")
+    p.add_argument("--choice", choices=["A", "B"], default="B")
     args = p.parse_args()
     if args.directory:
         args.directory.mkdir(parents=True, exist_ok=True)
-        exercise(args.directory.resolve(), args.image, args.browser, args.experiment)
+        exercise(args.directory.resolve(), args.image, args.browser, args.experiment, args.choice)
     else:
         with tempfile.TemporaryDirectory() as tmp:
-            exercise(Path(tmp).resolve(), args.image, args.browser, args.experiment)
+            exercise(Path(tmp).resolve(), args.image, args.browser, args.experiment, args.choice)
