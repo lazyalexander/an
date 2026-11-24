@@ -1,4 +1,5 @@
 mod artifacts;
+mod config;
 mod graph;
 mod instances;
 mod manifest;

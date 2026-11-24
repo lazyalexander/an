@@ -3,7 +3,7 @@ use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::{env, fs, os::unix::fs::DirBuilderExt, path::PathBuf, time::Duration};
+use std::{env, fs, os::unix::fs::DirBuilderExt, path::PathBuf};
 
 pub fn root() -> Result<PathBuf> {
     let path = env::var_os("AN_HOME")
@@ -18,7 +18,7 @@ pub fn root() -> Result<PathBuf> {
 }
 pub fn connect() -> Result<Connection> {
     let db = Connection::open(root()?.join("registry.sqlite3"))?;
-    db.busy_timeout(Duration::from_secs(20))?;
+    db.busy_timeout(crate::config::load()?.seconds("sqlite_busy_s"))?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS objects (kind, id, body, PRIMARY KEY(kind,id))")?;
     Ok(db)
 }

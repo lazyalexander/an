@@ -27,10 +27,17 @@ def main(argv=None) -> None:
                         help="macro UI instance manifest to serve")
     parser.add_argument("--task", help="serve an incremental An task graph")
     parser.add_argument("--an", default="an", help="path to the An executable")
+    parser.add_argument("--config", type=Path,
+                        help="override settings from studio/config/studio.json")
     args = parser.parse_args(argv)
+    from .config import load as load_config
+    try:
+        config = load_config(args.config)
+    except (OSError, ValueError) as exc:
+        parser.error(f"config: {exc}")
     if args.task:
         from .graph_server import serve
-        return serve(args.task, args.an, args.port, args.open_ui)
+        return serve(args.task, args.an, args.port, args.open_ui, config)
 
     run_dir = DEFAULT_RUN_DIR
     run_dir.mkdir(parents=True, exist_ok=True)

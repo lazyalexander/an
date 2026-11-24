@@ -37,6 +37,29 @@ if _STUDIO is not None and str(_STUDIO) not in sys.path:
     sys.path.insert(0, str(_STUDIO))
 
 
+def _load_text():
+    """Docker labels from studio/config; never raises into Krita."""
+    if _STUDIO is None:
+        return {}
+    try:
+        config = json.loads((_STUDIO / "config" / "studio.json").read_text(encoding="utf-8"))
+        locale = _STUDIO / "config" / "locales" / "{}.json".format(config["locale"])
+        return json.loads(locale.read_text(encoding="utf-8"))["krita"]
+    except Exception:  # noqa: BLE001 — fall back to keys, keep the docker alive
+        return {}
+
+
+_TEXT = _load_text()
+
+
+def _t(key, **values):
+    text = _TEXT.get(key, key)
+    try:
+        return text.format(**values)
+    except (KeyError, IndexError, ValueError):
+        return text
+
+
 def _get(path, key=None):
     request = urllib.request.Request(BASE + path)
     if key is not None:
@@ -164,9 +187,9 @@ class BridgeDocker(DockWidget):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Bridge")
-        self._status_label = QLabel("orchestrator offline")
+        self._status_label = QLabel(_t("offline"))
         layout = QVBoxLayout()
-        layout.addWidget(QLabel("Bridge agent — 控制请在宏UI页面进行"))
+        layout.addWidget(QLabel(_t("hint")))
         layout.addWidget(self._status_label)
         widget = QWidget()
         widget.setLayout(layout)
@@ -180,7 +203,7 @@ class BridgeDocker(DockWidget):
         self._last_preview = 0.0
         self._broken = _STUDIO is None
         if self._broken:
-            self._status_label.setText("install broken: not a symlink into the repo")
+            self._status_label.setText(_t("broken"))
         self._timer = QTimer(self)
         self._timer.timeout.connect(self._tick)
         self._timer.start(500)
@@ -190,7 +213,7 @@ class BridgeDocker(DockWidget):
         pass
 
     def _set_offline(self):
-        self._status_label.setText("orchestrator offline")
+        self._status_label.setText(_t("offline"))
 
     def _tick(self):
         if self._broken:
@@ -207,11 +230,11 @@ class BridgeDocker(DockWidget):
         phase = status["phase"]
         session = status["session"]
         age = status["pose_age_ms"]
-        text = "phase={}".format(phase)
+        text = _t("status", phase=phase)
         if age is not None:
-            text += " pose_age={}ms".format(age)
+            text += _t("pose_age", age=age)
         if session:
-            text += " session={}".format(session["state"])
+            text += _t("session", state=session["state"])
         self._status_label.setText(text)
         token = _ui_token()
         if token is not None:
@@ -268,8 +291,8 @@ class BridgeDocker(DockWidget):
                     doc.close()
             except Exception:  # noqa: BLE001 — closing is best-effort
                 pass
-        self._status_label.setText(
-            "{} {}".format(decision["kind"], "saved" if ok else "failed: " + str(detail)))
+        result = _t("saved") if ok else _t("failed", detail=detail)
+        self._status_label.setText(_t("decision", kind=decision["kind"], result=result))
 
     def _document(self):
         """The adapter-owned live document; never an unrelated user tab."""
@@ -300,9 +323,9 @@ class BridgeDocker(DockWidget):
             _post("/api/action/restore_ack", {"id": pending["id"]},
                   key=token)
             self._status_label.setText(
-                "restored {}".format(pathlib.Path(pending["kra"]).name))
+                _t("restored", name=pathlib.Path(pending["kra"]).name))
         except Exception as exc:  # never raise into Krita
-            self._status_label.setText("restore failed: {}".format(exc))
+            self._status_label.setText(_t("restore_failed", error=exc))
 
     def _maybe_export_preview(self, now):
         try:
@@ -317,7 +340,7 @@ class BridgeDocker(DockWidget):
                 return
             atomic_write(path, _flattened_png_bytes(doc))
         except Exception as exc:  # never raise into Krita
-            self._status_label.setText("preview failed: {}".format(exc))
+            self._status_label.setText(_t("preview_failed", error=exc))
 
     def _push(self, session, token):
         try:
@@ -334,11 +357,10 @@ class BridgeDocker(DockWidget):
             self._doc = self._kis.document
             self._doc_session = session["id"]
             self._pushed.add(session["id"])
-            self._status_label.setText("pushed {}".format(kra.name))
+            self._status_label.setText(_t("pushed", name=kra.name))
         except FileExistsError:  # the user's painted archive wins; never clobber
             self._pushed.add(session["id"])
-            self._status_label.setText(
-                "archive kept: pose_{}.kra".format(session["id"]))
+            self._status_label.setText(_t("archive_kept", session=session["id"]))
         except Exception as exc:  # never raise into Krita
             self._pushed.add(session["id"])  # no retry storm on the 500ms tick
-            self._status_label.setText("push failed: {}".format(exc))
+            self._status_label.setText(_t("push_failed", error=exc))

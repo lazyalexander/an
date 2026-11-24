@@ -43,6 +43,10 @@ The person controls a task through the host, never through the agent. Pass `{"ac
 
 `pause` starts no new work: queued nodes and pending permission requests wait, while running containers are still observed until they settle. The agent may keep submitting; new nodes queue. `resume` releases the pause. `stop` cancels every unsettled node, requests cancellation of running work, unloads idle drivers and leaves the task paused. After `resume`, the agent can `retry` cancelled nodes. Each control is recorded as a `user` event (`paused`, `resumed`, `stopped`), and `an_graph_state` and the host view report `control`.
 
+## Instructions
+
+The person can type to the agent. Pass `{"text": ..., "revision": N}` to `an graph --task TASK instruct` with the current `AN_TURN`, where `N` is the graph revision the person was looking at; Studio sends it from the box under the work area. An relays the text unchanged and never interprets it. The agent reads it from `an_graph_state` as an event with `actor: "user"`, `kind: "instruction"` and data `text`, `seen_revision`, `revision` and `stale`. `stale` is true when the graph moved on after the person looked. An instruction never answers a waiting surface; the agent may supersede that surface instead. Controls stay separate buttons. The size limit is `instruction_max_bytes` (see [Configuration](configuration.md)).
+
 ## Panel packages
 
 A package is a single JSON file produced by a run or imported as a task input. This package presents one confirmation button.

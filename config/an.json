@@ -1,0 +1,9 @@
+{
+  "sqlite_busy_s": 20,
+  "mcp_deadline_s": 30,
+  "mcp_ping_s": 3,
+  "bridge_deadline_s": 240,
+  "transfer_limit_bytes": 33554432,
+  "graph_expansion_budget": 256,
+  "instruction_max_bytes": 4096
+}

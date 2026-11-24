@@ -6,8 +6,13 @@ if (location.hash) {
   history.replaceState(null, "", location.pathname);
 }
 let view, selection, instanceKey, channel, frame, panelTimer, panelEpoch = 0;
-const labels = {queued:"等待执行",running:"执行中",waiting:"等待回应",saving:"等待文档保存",
-  done:"已完成",failed:"失败",unknown:"结果未知",superseded:"已替换",permission_required:"等待授权",cancelled:"已取消"};
+// All user-facing text and timing come from studio/config via /config.json.
+let strings = {}, settings = {};
+function t(key, vars = {}) {
+  const text = key.split(".").reduce((node, part) => node?.[part], strings);
+  return typeof text === "string" ? text.replace(/\{(\w+)\}/g, (_, name) => vars[name] ?? "") : key;
+}
+const statusLabel = status => strings.status?.[status] ?? status;
 async function api(action, body = {}) {
   const response = await fetch("/api/" + action, {method:"POST",
     headers:{"Authorization":"Bearer " + key, "Content-Type":"application/json"},
@@ -97,7 +102,7 @@ function mount(pkg, ref, epoch) {
   const target = frame;
   target.onload = () => {
     if (epoch !== panelEpoch) return;
-    target.onload = () => { if(epoch===panelEpoch) panelError("面板已离开绑定的文档"); };
+    target.onload = () => { if(epoch===panelEpoch) panelError(t("panel.left")); };
     const pair = new MessageChannel();
     channel = pair.port1;
     // Keep edits and submission in message order, including a slow draft write.
@@ -116,19 +121,19 @@ function mount(pkg, ref, epoch) {
         const result = await api(data.type, {...ref,value:data.value});
         if (epoch !== panelEpoch) return;
         channel.postMessage({type:"saved",operation:data.type,status:result.status});
-        if (data.type === "respond") {status("回应已提交");await update();}
+        if (data.type === "respond") {status(t("panel.responded"));await update();}
       }).catch(e => {if(epoch===panelEpoch)status(e.message);});
     };
     target.contentWindow.postMessage("an:init", "*", [pair.port2]);
     channel.postMessage({type:"init",html:pkg.html,assets:pkg.assets,files:pkg.files,draft:pkg.draft});
   };
-  panelTimer = setTimeout(() => {if(epoch===panelEpoch)panelError("面板加载超时");},6000);
+  panelTimer = setTimeout(() => {if(epoch===panelEpoch)panelError(t("panel.timeout"));},settings.panel_timeout_ms);
   el("content").append(target);
 }
 function panelError(message) {
   clearPanel();
   status(message);
-  el("controls").append(button("重新加载", () => {instanceKey=null;return render();}));
+  el("controls").append(button(t("panel.reload"), () => {instanceKey=null;return render();}));
 }
 function select(kind,id) {selection = {kind,id};return render();}
 function nav(items, active, action) {
@@ -161,15 +166,15 @@ async function render() {
   el("deliveries").replaceChildren(...nav(deliveries.map(d=>[d.id,d.title || d.node]),selection?.kind==="delivery" && selection.id,id=>select("delivery",id)));
   el("permissions").replaceChildren(...view.permissions.map(r=>{
     const article=document.createElement("article");
-    article.append("授权 "+r.operation+" · "+r.scope.join(" / ")+" ");
+    article.append(t("permission.request",{operation:r.operation,scope:r.scope.join(" / ")}));
     const details=document.createElement("details"), summary=document.createElement("summary"), detail=document.createElement("pre");
-    summary.textContent="请求详情";detail.textContent=JSON.stringify(r.details,null,2);details.append(summary,detail);article.append(details);
-    for (const [text,decision] of [["允许一次","once"],["拒绝","deny"]]) article.append(button(text,async()=>{
+    summary.textContent=t("permission.details");detail.textContent=JSON.stringify(r.details,null,2);details.append(summary,detail);article.append(details);
+    for (const [text,decision] of [[t("permission.allow_once"),"once"],[t("permission.deny"),"deny"]]) article.append(button(text,async()=>{
       await api("decide",{request:r.id,decision}); await update();
     }));
     return article;
   }));
-  if (!selection) {status("等待任务提交");return;}
+  if (!selection) {status(t("task.awaiting_submission"));return;}
   const {kind,id}=selection;
   const s=view.activity[id] || {};
   const current=JSON.stringify([kind,id,s.id,s.status,view.authorized]);
@@ -178,7 +183,7 @@ async function render() {
   clearPanel();
   const epoch=panelEpoch;
   el("title").textContent=kind==="delivery" ? (deliveries.find(d=>d.id===id)?.title || deliveries.find(d=>d.id===id)?.node) : title(id);
-  status(kind==="delivery"?"已交付":(s.error || labels[s.status] || s.status));
+  status(kind==="delivery"?t("task.delivered"):(s.error || statusLabel(s.status)));
   try {
     if(kind==="delivery" || (s.status==="waiting" && view.authorized)) {
       const ref=kind==="delivery"?null:{node:id,request:s.id};
@@ -188,14 +193,14 @@ async function render() {
         mount(pkg,ref,epoch);
         if(kind==="delivery"){
           const details=document.createElement("details"),heading=document.createElement("summary");
-          heading.textContent="交付文件";details.append(heading);filesPanel(pkg.files,details);el("content").append(details);
+          heading.textContent=t("task.delivery_files");details.append(heading);filesPanel(pkg.files,details);el("content").append(details);
         }
       }else filesPanel(pkg.files);
-      if(kind==="delivery") el("controls").append(button("从此版本新建任务",async()=>{
-        const fresh=await api("resume",{delivery:id});status("新任务 "+fresh.task);
+      if(kind==="delivery") el("controls").append(button(t("task.resume_from"),async()=>{
+        const fresh=await api("resume",{delivery:id});status(t("task.new_task",{task:fresh.task}));
       }));
     }
-    if(kind==="node" && !view.closed && !view.authorized) status("等待有效的宿主授权");
+    if(kind==="node" && !view.closed && !view.authorized) status(t("task.awaiting_authority"));
   }catch(e){if(epoch===panelEpoch)panelError(e.message);}
 }
 el("sources").ontoggle=async()=>{
@@ -208,19 +213,19 @@ el("sources").ontoggle=async()=>{
     const rows=[];
     for(const [id,record] of Object.entries(trace)){
       const d=document.createElement("details"), heading=document.createElement("summary"), pre=document.createElement("pre");
-      heading.textContent=id+" · "+(labels[record.execution.status]||record.execution.status);
+      heading.textContent=id+" · "+statusLabel(record.execution.status);
       pre.textContent=JSON.stringify(record,null,2);
       d.append(heading,pre);
       if(record.execution.evidence) for(const type of ["code","work","input","log"]){
-        d.append(button({code:"镜像代码",work:"工作目录",input:"输入快照",log:"执行日志"}[type],async()=>{
+        d.append(button(t("evidence."+type),async()=>{
           const value=await api("evidence",{...body,source:id,type});
-          if(value.status==="permission_required"){pre.textContent="等候宿主授权，请在授权后再次打开。";await update();}
+          if(value.status==="permission_required"){pre.textContent=t("evidence.waiting");await update();}
           else if(typeof value==="string")pre.textContent=value;
           else pre.textContent=Object.entries(value).map(([name,entry])=>{
             const bytes=Uint8Array.from(atob(entry.data || entry),c=>c.charCodeAt(0));
             try{return name+"\n"+new TextDecoder("utf-8",{fatal:true}).decode(bytes);}
-            catch{return name+" · "+bytes.length+" bytes";}
-          }).join("\n\n") || "空目录";
+            catch{return t("evidence.binary",{name,bytes:bytes.length});}
+          }).join("\n\n") || t("evidence.empty");
         }));
       }
       rows.push(d);
@@ -231,17 +236,41 @@ el("sources").ontoggle=async()=>{
 // Person controls are executed by An itself, never relayed to the agent.
 function renderControls() {
   const paused = view.control === "paused";
-  el("control-state").textContent = view.closed ? "已关闭" : paused ? "已暂停" : "";
-  if (!view.authorized || view.closed) return el("task-controls").replaceChildren();
+  el("control-state").textContent = view.closed ? t("control.closed") : paused ? t("control.paused") : "";
+  if (!view.authorized || view.closed) {
+    el("instruct").hidden = true;
+    return el("task-controls").replaceChildren();
+  }
   const control = action => api("control", {action}).then(update);
   el("task-controls").replaceChildren(
-    paused ? button("继续", () => control("resume")) : button("暂停", () => control("pause")),
-    button("停止", () => confirm("取消所有未完成的工作并暂停任务？") && control("stop")));
+    paused ? button(t("control.resume"), () => control("resume")) : button(t("control.pause"), () => control("pause")),
+    button(t("control.stop"), () => confirm(t("control.stop_confirm")) && control("stop")));
+  el("instruct").hidden = false;
 }
 let inFlight;
 function update(){
   if(!inFlight)inFlight=api("view").then(v=>{view=v;return render();}).catch(e=>status(e.message)).finally(()=>{inFlight=null;});
   return inFlight;
 }
-update();
-setInterval(update,1000);
+// Free text goes to the agent unchanged, tagged with the revision on screen.
+// It never answers a waiting panel; controls stay separate buttons.
+el("instruct").onsubmit = async event => {
+  event.preventDefault();
+  const text = el("instruction").value;
+  if (!text.trim()) return;
+  try {
+    const sent = await api("instruct", {text, revision: view.revision ?? 0});
+    el("instruction").value = "";
+    status(t(sent.stale ? "instruction.stale" : "instruction.sent"));
+  } catch (e) { status(e.message); }
+};
+fetch("/config.json").then(r => r.json()).then(config => {
+  strings = config.strings; settings = config.settings;
+  document.documentElement.lang = config.locale;
+  document.title = t("title");
+  for (const node of document.querySelectorAll("[data-t]")) node.textContent = t(node.dataset.t);
+  for (const node of document.querySelectorAll("[data-t-label]")) node.setAttribute("aria-label", t(node.dataset.tLabel));
+  for (const node of document.querySelectorAll("[data-t-placeholder]")) node.placeholder = t(node.dataset.tPlaceholder);
+  update();
+  setInterval(update, settings.poll_ms);
+}).catch(e => status(e.message));

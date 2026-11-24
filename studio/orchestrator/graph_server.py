@@ -7,12 +7,20 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import urlsplit
 
+from . import config as studio_config
+
 ASSETS = Path(__file__).parent / "macro" / "graph"
 ACTIONS = {"view", "panel", "viewed", "draft", "respond", "open", "deliveries", "sources", "resume",
-           "control"}
+           "control", "instruct"}
 
 
-def serve(task, binary, port, launch=False):
+def serve(task, binary, port, launch=False, config=None):
+    config = config or studio_config.load()
+    settings = config["graph"]
+    # Public, like the page assets: text and timing only, never the session key.
+    page_config = json.dumps({"locale": config["locale"],
+                              "strings": studio_config.strings(config["locale"])["graph"],
+                              "settings": {k: settings[k] for k in ("poll_ms", "panel_timeout_ms")}}).encode()
     key = secrets.token_urlsafe(32)
 
     def an(command, body):
@@ -46,6 +54,8 @@ def serve(task, binary, port, launch=False):
         def do_GET(self):
             assets = {"/ui": ("index.html", "text/html"), "/graph.css": ("graph.css", "text/css"),
                       "/graph.js": ("graph.js", "text/javascript")}
+            if urlsplit(self.path).path == "/config.json":
+                return self.send(200, page_config)
             asset = assets.get(urlsplit(self.path).path)
             if asset:
                 return self.send(200, (ASSETS / asset[0]).read_bytes(), asset[1])
@@ -57,7 +67,7 @@ def serve(task, binary, port, launch=False):
             action = self.path.removeprefix("/api/")
             try:
                 size = int(self.headers.get("Content-Length", 0))
-                if not 0 < size <= 2**20:
+                if not 0 < size <= settings["max_body_bytes"]:
                     return self.send(413, b"{}")
                 body = json.loads(self.rfile.read(size))
                 if not isinstance(body, dict):

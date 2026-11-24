@@ -18,7 +18,7 @@ Each opted-in downstream tool declares an object argument named `an_transfer`. I
 | Bridge argument | Contract |
 | --- | --- |
 | `an_transfer.input` | Per-call directory containing the candidate's relative files. Empty for a call without a source. |
-| `an_transfer.output` | Existing regular file. Write up to 32 MiB to this file in place to return bytes. Leave it empty for a receipt-only call. |
+| `an_transfer.output` | Existing regular file. Write up to `transfer_limit_bytes` (default 32 MiB, see [Configuration](configuration.md)) to this file in place to return bytes. Leave it empty for a receipt-only call. |
 
 On success An imports the original file descriptor, rechecks the task turn and bridge grant, and returns `artifact`, `revision`, `file` (currently `data`), `bytes` and `sha256`. A receipt-only call returns `{"status":"completed"}`. An ignores downstream result content for these tools. The transfer area lasts one call. A bridge executes as a trusted host program with the privileges of its OS account.
 

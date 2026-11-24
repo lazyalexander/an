@@ -232,10 +232,9 @@ fn accept_expansion(
             "Continuation omitted save run"
         );
     }
-    const MAX_AUTOMATIC_NODES: usize = 256;
+    let budget = crate::config::load()?.limit("graph_expansion_budget") as usize;
     ensure!(
-        graph["drivers"].as_object().map_or(0, |m| m.len()) + additions.len()
-            <= MAX_AUTOMATIC_NODES,
+        graph["drivers"].as_object().map_or(0, |m| m.len()) + additions.len() <= budget,
         "Task expansion budget exceeded"
     );
     let mut next = graph.clone();

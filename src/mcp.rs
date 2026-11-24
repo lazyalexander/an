@@ -17,7 +17,7 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     env, fs,
     path::PathBuf,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{process::Command, time::timeout};
 #[derive(Parser)]
@@ -52,7 +52,6 @@ enum Server {
     },
 }
 type Peer = RunningService<RoleClient, ()>;
-const DEADLINE: Duration = Duration::from_secs(30);
 async fn peer(config: &Value) -> Result<(Peer, Vec<Tool>)> {
     let mut cmd = Command::new(config["command"].as_str().context("Expected command")?);
     cmd.args(serde_json::from_value::<Vec<String>>(
@@ -65,8 +64,9 @@ async fn peer(config: &Value) -> Result<(Peer, Vec<Tool>)> {
             cmd.env(key, v);
         }
     }
-    let service = timeout(DEADLINE, ().serve(TokioChildProcess::new(cmd)?)).await??;
-    let tools = timeout(DEADLINE, service.list_all_tools()).await??;
+    let deadline = crate::config::load()?.seconds("mcp_deadline_s");
+    let service = timeout(deadline, ().serve(TokioChildProcess::new(cmd)?)).await??;
+    let tools = timeout(deadline, service.list_all_tools()).await??;
     Ok((service, tools))
 }
 struct Route {
@@ -129,7 +129,7 @@ impl Gateway {
                 for (name, peer) in &self.peers {
                     if !matches!(
                         timeout(
-                            Duration::from_secs(3),
+                            crate::config::load()?.seconds("mcp_ping_s"),
                             peer.send_request(ClientRequest::PingRequest(PingRequest::default()))
                         )
                         .await,
@@ -226,11 +226,12 @@ impl Gateway {
         }
         let forwarded = CallToolRequestParams::new(route.raw.clone())
             .with_arguments(args.as_object().unwrap().clone());
-        let deadline = if route.transfer {
-            Duration::from_secs(240)
+        let settings = crate::config::load()?;
+        let deadline = settings.seconds(if route.transfer {
+            "bridge_deadline_s"
         } else {
-            DEADLINE
-        };
+            "mcp_deadline_s"
+        });
         let result = timeout(deadline, self.peers[&route.server].call_tool(forwarded)).await;
         audit["end"] = json!(now());
         match result {

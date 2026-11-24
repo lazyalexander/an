@@ -4,6 +4,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
+from . import config
 from .app import Orchestrator
 from .ledger import Ledger
 from .macro.instances import load as load_instance
@@ -26,6 +27,7 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
                 instance=None) -> ThreadingHTTPServer:
     if instance is None:
         instance = load_instance("bridge-studio")
+    chrome = config.strings(config.load()["locale"])["legacy"]
     if ledger is None:
         ledger = getattr(app, "_ledger", None)
     if scenes is None:
@@ -97,6 +99,8 @@ def make_server(app: Orchestrator, host: str = "127.0.0.1", port: int = 8791,
                 self._send(200, app.status())
             elif path.startswith("/api/read/"):
                 self._dispatch_read(reads, path[len("/api/read/"):], parsed)
+            elif path == "/api/macro/strings":
+                self._send(200, chrome)
             elif path == "/api/macro/manifest":
                 self._send(200, instance.MANIFEST)
             elif path == "/api/macro/state":
