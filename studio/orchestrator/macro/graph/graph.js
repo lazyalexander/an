@@ -216,7 +216,8 @@ el("sources").ontoggle=async()=>{
       heading.textContent=id+" · "+statusLabel(record.execution.status);
       pre.textContent=JSON.stringify(record,null,2);
       d.append(heading,pre);
-      if(record.execution.evidence) for(const type of ["code","work","input","log"]){
+      const types = record.node.kind==="model" ? ["input","output"].filter(k=>record.execution.evidence?.[k] || record.execution.evidence?.available?.includes(k)) : ["code","work","input","log"];
+      if(record.execution.evidence) for(const type of types){
         d.append(button(t("evidence."+type),async()=>{
           const value=await api("evidence",{...body,source:id,type});
           if(value.status==="permission_required"){pre.textContent=t("evidence.waiting");await update();}

@@ -18,7 +18,7 @@
       "resume_from": "从此版本新建任务", "new_task": "新任务 {task}"
     },
     "evidence": {
-      "code": "镜像代码", "work": "工作目录", "input": "输入快照", "log": "执行日志",
+      "code": "镜像代码", "work": "工作目录", "input": "输入快照", "output": "模型结果", "log": "执行日志",
       "waiting": "等候宿主授权，请在授权后再次打开。", "empty": "空目录", "binary": "{name} · {bytes} bytes"
     },
     "control": {

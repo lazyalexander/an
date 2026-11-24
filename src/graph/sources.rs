@@ -71,10 +71,15 @@ pub(super) fn read(
             .get("execution")
             .context("Missing attempt")?["evidence"]
             .clone();
-        let run = field(&evidence, "run")?;
+        let is_model = trace[source]["node"]["kind"] == "model";
+        let run = field(&evidence, if is_model { "attempt" } else { "run" })?;
         let kind = field(args, "type")?;
         ensure!(
-            matches!(kind, "input" | "work" | "code" | "log"),
+            if is_model {
+                matches!(kind, "input" | "output")
+            } else {
+                matches!(kind, "input" | "work" | "code" | "log")
+            },
             "Unknown evidence type"
         );
         let auth = permission::stamp(&tx, task).context("Evidence requires an active host turn")?;
@@ -86,7 +91,12 @@ pub(super) fn read(
         let flow = if kind == "log" {
             None
         } else {
-            Some(json!(["preview", evidence["spool"], "studio"]))
+            let sender = match (is_model, kind) {
+                (true, "input") => evidence["input_origin"].clone(),
+                (true, _) => json!(format!("model:{}", field(&evidence, "alias")?)),
+                _ => evidence["spool"].clone(),
+            };
+            Some(json!(["preview", sender, "studio"]))
         };
         if let Some(p) = permission::gate(
             &tx,
@@ -123,7 +133,16 @@ pub(super) fn read(
         for item in trace.as_object_mut().unwrap().values_mut() {
             item.as_object_mut().unwrap().remove("events");
             let state = &item["execution"];
-            *item = json!({"node":{"id":item["node"]["id"],"kind":item["node"]["kind"]},"execution":{"status":state["status"],"evidence":state["evidence"].get("run").map(|run|json!({"run":run})),"bindings":state["bindings"]}});
+            let evidence = if item["node"]["kind"] == "model" {
+                let available: Vec<_> = ["input", "output"]
+                    .into_iter()
+                    .filter(|k| state["evidence"][*k].is_string())
+                    .collect();
+                Some(json!({"available":available}))
+            } else {
+                state["evidence"].get("run").map(|run| json!({"run":run}))
+            };
+            *item = json!({"node":{"id":item["node"]["id"],"kind":item["node"]["kind"]},"execution":{"status":state["status"],"evidence":evidence,"bindings":state["bindings"]}});
         }
     }
     Ok(trace)

@@ -29,13 +29,30 @@ Call `an_graph_submit` with `base_revision`, `idempotency_key` and a `nodes` arr
 | Kind | Fields and behavior |
 | --- | --- |
 | `run` | Supply a granted digest-pinned `spool`, `argv` and output paths relative to `/output`. Input names match the admitted manifest. Each port receives its bound revision under `/input/<port>/`. Read-only spools support concurrent instances. Editable work is serialized. |
-| `expand` | Runs a pinned, read-only spool in a dedicated short-lived instance with the same input authorization as a run. Declare the single output `subgraph.json`. Write an object with a nonempty `nodes` array there. After confirmed driver cleanup, An requires output authorization for the exact proposal revision before copying its contents into graph metadata. The workspace flow is `["publish", driverSpool, "graph-metadata"]`. Accepted proposals can add up to 256 nodes cumulatively per task. |
+| `expand` | Runs a pinned, read-only spool in a dedicated short-lived instance with the same input authorization as a run. Declare the single output `subgraph.json`. Write an object with a nonempty `nodes` array there. After confirmed driver cleanup, An requires output authorization for the exact proposal revision before copying its contents into graph metadata. The workspace flow is `["publish", driverSpool, "graph-metadata"]`. The cumulative per-task limit is configurable and defaults to 256 nodes. |
+| `model` | A granted model alias, one `request` binding containing `request.json`, and one output `result.json`. An runs local inference on the host. |
 | `surface` | `package` names an input binding. `response` declares an object schema with declared properties, array items, scalar types, optional enumerations and required keys. Declare the `response` output. For a verified save, add a `document` output and `save: {"node":"save-run","port":"file.ora"}`. The designated run can consume the provisional response. To generate the save run after the user responds, set `continuation` to a declared expand node bound to this response. The saver ID is reserved for this continuation, whose proposal must include it. Other consumers wait for the captured save. |
 | `delivery` | Bind the files to publish with `inputs`, use an empty `outputs` list and optionally name the interactive `package` binding. The group is published after authorization for all its members. |
 
 A repeated identical submission returns its original receipt. A stale base returns `status: conflict` and the current revision. A submission can include `retry` for failed or cancelled node IDs and `supersede` for unconsumed queued nodes or waiting surfaces. Submit replacement nodes under new IDs. An unknown run is reconciled by its reserved ID and kept for investigation.
 
 Read `an_graph_state` with `after` set to the last event cursor. The result includes the current graph, activity, revision, cursor and later events. A container exit, an approval, a response or reconnection wakes scheduling. Task and SQLite locks serialize concurrent updates. Business responses and harness permission decisions use separate APIs.
+
+## Host model calls
+
+Grant an installed local model when creating a task, for example `an task new --model local --model-calls 4 --input request.json`.
+The task snapshots its alias, model name and quota. Existing tasks and tasks created without a grant have no model access.
+A driver can propose the following node and bind its result to a subsequent expand node:
+
+```json
+{"id":"decision","kind":"model","model":"local","inputs":{"request":{"node":"prompt","port":"request.json"}},"outputs":["result.json"]}
+```
+
+The request file contains one `messages` array of text messages with `role` and `content`. The result contains a `text` string. The host checks the resolved model with a metadata-only Ollama show request before sending any prompt. It requires local weight metadata, rejects remote models, and uses Ollama’s explicit `:local` routing suffix on the generation request. The result and usage are committed before the optional running-model digest lookup. For a workspace with explicit flow rules, permit `["model", inputOrigin, "model:local"]` for inference and `["handoff","model:local",recipientSpool]` for the downstream container.
+
+Each authorized attempt reserves a task slot before sending. The graph state includes a `model_calls` ledger with attempts, revision IDs, send and settlement timestamps, the model name, digest when observed in the running model list, and reported token counts. The evidence API supports separately authorized reads of model input and output. A sending attempt whose worker disappeared or whose response could not be confirmed becomes `unknown`; usage remains unknown. Explicit retry uses a fresh attempt and slot. A reserved attempt can resume before sending. Settled attempts reuse the captured result. Stop and turn expiry suppress downstream work; a request already sent may still complete on the host.
+
+With Ollama serving the configured local model, run `python3 examples/graph_studio/demo.py bridge-model` with the example image. Select the painting and enter an instruction such as “attach a separate annotation text file” or “only deliver the painting”. A follow-up driver reads the authorized model decision and selects the delivery contents. Run `python3 tests/model_node_smoke.py` for counted backend recovery tests and `python3 tests/graph_studio_smoke.py --experiment bridge-model --browser` for the real model path.
 
 ## Person controls
 

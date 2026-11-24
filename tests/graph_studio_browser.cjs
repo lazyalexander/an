@@ -2,7 +2,7 @@
 const fs = require("node:fs");
 const assert = require("node:assert/strict");
 const {chromium} = require(process.env.PLAYWRIGHT_CORE || "playwright-core");
-const [mode, experiment, directory, choice="B"] = process.argv.slice(2);
+const [mode, experiment, directory, choice="B",note="edge"] = process.argv.slice(2);
 (async()=>{
   const browser = await chromium.launch({channel:"chrome",headless:true});
   try{
@@ -10,16 +10,24 @@ const [mode, experiment, directory, choice="B"] = process.argv.slice(2);
     await page.goto(fs.readFileSync(0,"utf8").trim());
     const panel=page.frameLocator("iframe");
     const bridge=experiment==="bridge";
-    if(mode==="revise"){
+    if(mode==="cross-evidence"){
+      await page.locator("#deliveries button").first().click();
+      await page.locator("#sources summary").first().click();
+      const decision=page.locator("#trace details").filter({has:page.locator("summary",{hasText:/^decision ·/})});
+      await decision.locator("summary").click();
+      assert.equal(await decision.getByRole("button").count(),2);
+      await decision.getByRole("button").last().click();
+      await decision.locator("pre").filter({hasText:/授权/}).waitFor();
+    }else if(mode==="revise"){
       await panel.locator("#preview").click({position:{x:15,y:12}});
       const saved=page.waitForResponse(r=>r.url().endsWith("/api/respond") && r.ok());
       await panel.locator("#save").click();
       await saved;
     }else if(mode==="respond"){
-      const draftSaved=page.waitForResponse(r=>r.url().endsWith("/api/draft") && r.ok() && (bridge?r.request().postDataJSON().value.note==="edge":r.request().postDataJSON().value.seconds===2));
+      const draftSaved=page.waitForResponse(r=>r.url().endsWith("/api/draft") && r.ok() && (bridge?r.request().postDataJSON().value.note===note:r.request().postDataJSON().value.seconds===2));
       if(bridge){
         await panel.locator(`#fig${choice} img`).click();
-        await panel.locator("#note").fill("edge");
+        await panel.locator("#note").fill(note);
       }else{
         await panel.locator("#speed").focus();
         await panel.locator("#speed").press("Home");
@@ -28,7 +36,7 @@ const [mode, experiment, directory, choice="B"] = process.argv.slice(2);
       await draftSaved;
       await page.reload();
       if(bridge){
-        assert.equal(await panel.locator("#note").inputValue(),"edge");
+        assert.equal(await panel.locator("#note").inputValue(),note);
         assert.equal(await panel.locator(`#${choice}`).isChecked(),true);
       }else assert.equal(await panel.locator("#speed").inputValue(),"2");
       await page.screenshot({path:directory+"/panel.png"});

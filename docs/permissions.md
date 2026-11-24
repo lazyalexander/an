@@ -19,3 +19,7 @@ Replace the entire turn policy with `an permission policy --task TASK --file hos
 Use an_handoff(run, recipient_spool) for a private candidate. Pass the returned handoff ID as an_run input. It belongs to one task, turn, recipient and frozen revision. The public delivery list and host export accept only published deliveries.
 
 The dev artifact bridge adds scoped bridge-to-spool and spool-to-bridge flows, and named input approvals. See [private bridge artifacts](bridge-artifacts.md).
+
+### Local model decisions
+
+Only the trusted host can create a task with `--model ALIAS` and a call quota. A workspace flow for inference has the form `["model", inputOrigin, "model:ALIAS"]`. The turn decision identifies the model, input revision and node attempt. A denied request makes no inference call and consumes no slot. Result handoff to a spool requires a second boundary decision. Model input and output evidence reads require preview authorization for their respective origins. See [Host model calls](graph-studio.md#host-model-calls) for the recovery contract.

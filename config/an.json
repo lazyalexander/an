@@ -5,5 +5,13 @@
   "bridge_deadline_s": 240,
   "transfer_limit_bytes": 33554432,
   "graph_expansion_budget": 256,
-  "instruction_max_bytes": 4096
+  "instruction_max_bytes": 4096,
+  "model_aliases": {
+    "local": "qwen3:8b"
+  },
+  "model_default_calls": 4,
+  "ollama_port": 11434,
+  "model_timeout_s": 120,
+  "model_input_bytes": 16384,
+  "model_output_tokens": 256
 }

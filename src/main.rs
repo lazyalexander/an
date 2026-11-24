@@ -110,6 +110,11 @@ enum Core {
         #[arg(long)]
         recipient_spool: String,
     },
+    #[command(name = "_model-worker", hide = true)]
+    ModelWorker {
+        id: String,
+        fd: i32,
+    },
     #[command(name = "_worker", hide = true)]
     Worker {
         id: String,
@@ -138,6 +143,7 @@ fn run() -> Result<()> {
         _ => {}
     }
     match Cli::parse().command {
+        Core::ModelWorker { id, fd } => graph::model::worker(&id, fd),
         Core::Worker { id, fd } => instances::worker(&id, fd),
         Core::Check { path } => {
             ensure!(path.is_file(), "Expected regular manifest file");

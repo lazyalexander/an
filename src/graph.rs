@@ -1,4 +1,5 @@
 mod host;
+pub mod model;
 mod scheduler;
 mod sources;
 mod validation;
@@ -41,6 +42,8 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
             .as_array_mut()
             .unwrap()
             .retain(|e| e["cursor"].as_u64().unwrap() > after);
+        permission::current(&db, task)?;
+        graph["model_calls"] = json!(model::history(&db, task)?);
         return Ok(graph);
     }
     let key = canonical(&json!([task, field(args, "idempotency_key")?]));
@@ -67,9 +70,11 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         "Empty submission"
     );
     for id in retry {
+        let model_unknown =
+            graph["nodes"][&id]["kind"] == "model" && graph["activity"][&id]["status"] == "unknown";
         let state = &mut graph["activity"][&id];
         ensure!(
-            state["status"] == "failed" || state["status"] == "cancelled",
+            state["status"] == "failed" || state["status"] == "cancelled" || model_unknown,
             "Expected settled failed attempt"
         );
         *state =
@@ -183,6 +188,29 @@ fn append_nodes(
         }
         ensure!(!nodes.contains_key(id), "Existing node {id}");
         match field(node, "kind")? {
+            "model" => {
+                ensure!(
+                    field(node, "model")?
+                        == record["model_grant"]["alias"]
+                            .as_str()
+                            .context("No task model grant")?,
+                    "Model outside task grant"
+                );
+                ensure!(
+                    node["inputs"]
+                        .as_object()
+                        .is_some_and(|m| m.len() == 1 && m.contains_key("request"))
+                        && node["outputs"] == json!(["result.json"]),
+                    "Expected request binding and result.json"
+                );
+                ensure!(
+                    node.as_object().unwrap().keys().all(|k| matches!(
+                        k.as_str(),
+                        "id" | "kind" | "title" | "after" | "model" | "inputs" | "outputs"
+                    )),
+                    "Unexpected model node field"
+                );
+            }
             "run" | "expand" => {
                 if node["kind"] == "expand" {
                     ensure!(

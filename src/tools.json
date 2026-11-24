@@ -243,9 +243,14 @@
                 "enum": [
                   "run",
                   "expand",
+                  "model",
                   "surface",
                   "delivery"
                 ]
+              },
+              "model": {
+                "type": "string",
+                "description": "Granted host model alias"
               },
               "continuation": {
                 "type": "string",
