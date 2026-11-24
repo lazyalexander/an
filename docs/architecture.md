@@ -1,25 +1,29 @@
 # Architecture
 
-An lets an agent run industrial work for one person. The person faces one input and one output: the macro UI. Everything between them is planned by agents, executed in Apple Container and recorded by An. Painting, CAD and animation are instances of this shape, not separate products.
+An lets an agent run industrial work for one person. An is the only hub: the person, the agents and any presentation layer are its clients. The person has one input, instructions and controls sent to An, and one output, the deliveries An publishes. Everything between them is planned by agents, executed in Apple Container and recorded by An. Painting, CAD and animation are instances of this shape, not separate products.
 
 ## Final form
 
 1. **An agent and its subagents drive the work.** The main agent runs in the harness and talks to An through task-scoped MCP. Subagents run as drivers inside containers. A subagent never holds more authority than the agent that started it: it sees only its bound inputs, its granted spools and its task namespace.
-2. **The macro UI is the only control surface.** It shows what needs the person and what was produced. Agents generate its content as panel packages. The framework guarantees its shell.
+2. **Every action passes through An.** The person instructs An, and An relays the instruction to the agent. The agent acts only through An: graph submissions, transfers and model calls are An operations. Nothing addresses an agent, a container or another agent out of band.
 3. **Each part of the work runs in its own container.** Temporary code, temporary artifacts and secrets stay inside the container that needs them. Every transfer between containers crosses an An permission check.
 4. **No one draws a pipeline.** There is no predefined graph and no template. Agents decide the next step from the last result. A container may use a fixed internal procedure. Between containers, the graph grows as work happens: it is the execution record and the provenance, not a plan.
+5. **Presentation is per pipeline.** A pipeline may use the macro UI, the CLI or the harness conversation. A headless batch pipeline needs no page. Intervention is mandatory in every pipeline; the macro UI is only one way to present it.
 
 ## How the parts fit
 
 ```text
-person ── macro UI ── An host (Rust: graph, versions, permissions, ledger)
-                         │
-          harness agent ─┤ an_graph_submit / an_graph_state
-                         │
-             ┌───────────┼──────────────┐
-          run nodes   expand nodes   surface / delivery nodes
-          (spools)    (subagent        (panels for the person,
-                       drivers)         published results)
+person ── instructions / controls ──┐
+                                    ▼
+ presentation (macro UI | CLI | harness) ── An host (Rust: graph, versions,
+                                    ▲         permissions, ledger, relay)
+                                    │
+          harness agent ── an_graph_submit / an_graph_state / instructions
+                                    │
+             ┌──────────────────────┼─────────────────────┐
+          run nodes            expand nodes          surface / delivery nodes
+          (spools)             (subagent drivers,    (panels for the person,
+                                model calls via An)   published results)
 ```
 
 - **Decisions are recorded before they run.** An agent's choice becomes a graph submission with an idempotency key and a base revision. Recovery reads the record and never asks the model again.
@@ -29,16 +33,30 @@ person ── macro UI ── An host (Rust: graph, versions, permissions, ledge
 
 See [Incremental tasks and Studio](graph-studio.md) for the submission contract and panel packages, and [Permissions](permissions.md) for turns, flows and approvals.
 
-## Macro UI rules
+## Instructions and controls
 
-The shell is fixed and always present, whatever an agent generates:
+An separates two channels from the person:
+
+- **Controls** are executed by An directly and never relayed: stop or pause a task, cancel work, deny or approve a permission request. They must work even when an agent is stuck or unwilling.
+- **Instructions** express intent ("use B", "rotate slower") and are relayed to the agent, which decides what to do. An relays the text unchanged. It adds a record: sender, time, turn and the graph revision the person was looking at. An agent that receives an instruction against an older revision can detect that it is stale. An never interprets or rewrites an instruction; doing so would make it a second agent.
+
+## Agent boundary
+
+- The harness exposes only task-scoped An MCP to the agent. A general shell under the controller's identity defeats the boundary and is not permitted.
+- Container drivers have no network. A subagent that needs a model calls it through An: credentials stay on the host, and each call is budgeted and recorded per task. No model credential enters a container.
+
+## Presentation
+
+The macro UI, when a pipeline uses it, has a fixed shell whatever an agent generates:
 
 - surfaces waiting for the person, with their panels;
 - the current output and published deliveries;
 - failures and pending permission requests;
-- intervention: approve or deny a request, supersede or retry work, open an earlier version.
+- controls and an instruction entry.
 
 Agents fill the rest by submitting surfaces: a panel package and a response schema. The page never exposes prompts, tool calls or the agent loop. The rules for generating panel content are still open.
+
+A pipeline without the macro UI still needs somewhere to present surfaces and permission requests. Either it contains no surface nodes, or its harness renders them. Controls and deliveries remain available through the CLI.
 
 ## Status
 
@@ -48,13 +66,16 @@ Agents fill the rest by submitting surfaces: a panel package and a response sche
 | Staged container drivers (`expand`, `continuation`) | Implemented |
 | Delivery resume as a new task | Implemented |
 | Host-side instance reclamation | Implemented for settled runs and drivers |
-| Macro UI shell with panels, permissions, deliveries | Implemented; no stop or pause control yet |
-| Subagent authority as a strict subset of its parent | Partial: drivers see bound inputs and granted spools; budgets and model credentials are not defined |
+| Macro UI shell with panels, permissions, deliveries | Implemented; no controls or instruction entry yet |
+| Control channel (stop, pause, cancel) | Not started |
+| Instruction relay with revision binding | Not started |
+| Model calls through An for container subagents | Not started |
+| Subagent authority as a strict subset of its parent | Partial: drivers see bound inputs and granted spools; budgets depend on model calls through An |
 | Model-backed subagents inside drivers | Not started: example drivers are deterministic programs |
+| Presentation without the macro UI (CLI / harness surfaces) | Not started |
 | Native surfaces | Not started (see below) |
 | Turn-level policy to avoid approval fatigue | Not started |
 | Reclamation of unreferenced intermediate artifacts | Not started |
-| Intent entry from the person | Open question: behavior inference only, or a direct command channel |
 
 ## Native surfaces
 
