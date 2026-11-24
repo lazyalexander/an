@@ -208,7 +208,57 @@ def exercise(directory, image, browser, experiment, choice):
                 assert "choice/response.json" in evidence
             if kind=="log" and bridge:
                 assert f"Applied annotation to {choice}" in evidence
-        cli("permission","end","--task",fresh)
+        if bridge:
+            agent.close()
+            if studio:
+                studio.terminate()
+                studio.wait(timeout=15)
+                studio = None
+            task = fresh
+            agent = Agent(binary, task, env)
+            agent.graph("submit", base_revision=0, idempotency_key="revise",
+                        nodes=[initial_driver("revise", spool)])
+            edit = wait("edit", "waiting")
+            edit_request = dict(node="edit", request=edit["id"])
+            assert host("panel", **edit_request)["draft"] is None
+            try:
+                host("panel", **request)
+            except subprocess.CalledProcessError:
+                pass
+            else:
+                raise AssertionError("Old private panel accessible in resumed task")
+            if browser:
+                studio, url = start_studio()
+                chrome("revise")
+            else:
+                host("viewed", **edit_request)
+                host("respond", **edit_request, value={"x":.1,"y":.2})
+            second = wait("revision","done")["delivery"]
+            assert second != published
+            assert host("open", delivery=published) == pkg
+            for delivery_id, folder in [(published,"v1"),(second,"v2")]:
+                args = ["export", delivery_id, str(directory / folder), "--task", task]
+                pending = json.loads(cli(*args))
+                cli("permission","decide","--task",task,"--request-id",pending["request_id"],"--decision","once")
+                cli(*args,"--request-id",pending["request_id"])
+            def files(root):
+                return {p.relative_to(root): p.read_bytes() for p in root.rglob("*") if p.is_file()}
+            assert files(directory / "v1") == files(destination)
+            with ZipFile(directory / "v1/painting/painting.ora") as before, ZipFile(directory / "v2/painting/painting.ora") as after:
+                for layer in ("data/reference.png","data/annotation.png"):
+                    assert after.read(layer) == before.read(layer)
+                assert after.testzip() is None and "data/annotation-2.png" in after.namelist()
+                assert after.read("mergedimage.png") != before.read("mergedimage.png")
+            first_svg = (directory / "v1/selected/selected.svg").read_text()
+            second_svg = (directory / "v2/selected/selected.svg").read_text()
+            assert second_svg.startswith(first_svg.removesuffix("</svg>"))
+            assert second_svg.count("<circle") == first_svg.count("<circle") + 1
+            assert host("finish")["closed"]
+            assert host("open", delivery=published) == pkg
+            reopened_v2 = host("open", delivery=second)["files"]
+            assert base64.b64decode(reopened_v2["painting"]["painting.ora"]) == (directory / "v2/painting/painting.ora").read_bytes()
+        else:
+            cli("permission","end","--task",fresh)
         print(experiment, "passed", len(state["events"]), "events", flush=True)
     finally:
         agent.close()
