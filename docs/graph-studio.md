@@ -37,6 +37,12 @@ A repeated identical submission returns its original receipt. A stale base retur
 
 Read `an_graph_state` with `after` set to the last event cursor. The result includes the current graph, activity, revision, cursor and later events. A container exit, an approval, a response or reconnection wakes scheduling. Task and SQLite locks serialize concurrent updates. Business responses and harness permission decisions use separate APIs.
 
+## Person controls
+
+The person controls a task through the host, never through the agent. Pass `{"action":"pause"}`, `{"action":"resume"}` or `{"action":"stop"}` to `an graph --task TASK control` with the current `AN_TURN`; Studio shows the same actions as header buttons. Controls are not part of the agent's MCP tools.
+
+`pause` starts no new work: queued nodes and pending permission requests wait, while running containers are still observed until they settle. The agent may keep submitting; new nodes queue. `resume` releases the pause. `stop` cancels every unsettled node, requests cancellation of running work, unloads idle drivers and leaves the task paused. After `resume`, the agent can `retry` cancelled nodes. Each control is recorded as a `user` event (`paused`, `resumed`, `stopped`), and `an_graph_state` and the host view report `control`.
+
 ## Panel packages
 
 A package is a single JSON file produced by a run or imported as a task input. This package presents one confirmation button.

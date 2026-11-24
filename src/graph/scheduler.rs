@@ -30,6 +30,10 @@ fn bindings(db: &Connection, task: &str, graph: &Value, node: &Value) -> Result<
     Ok(Some(result))
 }
 
+pub(super) fn paused(graph: &Value) -> bool {
+    graph["control"] == "paused"
+}
+
 /// Wake the scheduler after a durable change, including worker settlement.
 /// A later state read can repeat this reconciliation after a host crash.
 pub fn wake(task: &str) -> Result<()> {
@@ -97,6 +101,16 @@ pub(super) fn advance(
                     state["status"].as_str(),
                     Some("queued" | "running" | "permission_required" | "unknown")
                 ) {
+                    continue;
+                }
+                // A person's pause starts no new work. Execution already under
+                // way keeps being observed so it can settle and be reclaimed.
+                if paused(graph)
+                    && matches!(
+                        state["status"].as_str(),
+                        Some("queued" | "permission_required")
+                    )
+                {
                     continue;
                 }
                 let Some(bound) = bindings(db, task, graph, node)? else {

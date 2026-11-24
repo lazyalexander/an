@@ -67,6 +67,26 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
     }
     let mut graph = find(&tx, "graph", task)?
         .unwrap_or(json!({"nodes":{},"revision":0,"events":[],"activity":{}}));
+    if action == "control" {
+        let (result, runs, drivers) = control(&tx, task, &t, &mut graph, args)?;
+        tx.commit()?;
+        // Cancelling observes and stops containers; it never relaunches work.
+        for run in runs {
+            instances::dispatch_locked(&mut db, task, "cancel", &json!({"run":run}), &_lock)?;
+        }
+        for instance in drivers {
+            instances::dispatch_locked(
+                &mut db,
+                task,
+                "unload",
+                &json!({"instance":instance}),
+                &_lock,
+            )?;
+        }
+        drop(_lock);
+        wake(task)?;
+        return Ok(result);
+    }
     if action == "finish" {
         if t["closed"] == true {
             return Ok(json!({"closed":true}));
@@ -116,7 +136,7 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
             }
         }
         return Ok(
-            json!({"task":task,"revision":graph["revision"],"nodes":graph["nodes"],"activity":graph["activity"],"closed":t["closed"]==true,"authorized":authorized}),
+            json!({"task":task,"revision":graph["revision"],"nodes":graph["nodes"],"activity":graph["activity"],"closed":t["closed"]==true,"authorized":authorized,"control":graph.get("control").cloned().unwrap_or(json!("running"))}),
         );
     }
     if action == "deliveries" {
@@ -239,4 +259,77 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
         wake(task)?;
     }
     Ok(json!({"status":state["status"]}))
+}
+
+/// A person's control, executed by the host and never relayed to an agent.
+///
+/// `pause` starts no new work; running work is still observed and settles.
+/// `resume` clears the pause. `stop` cancels every unsettled node and pauses,
+/// so nothing new starts until the person resumes; cancelled nodes can then
+/// be retried by the agent. Returns the runs to cancel and the idle driver
+/// instances to unload once this transaction commits.
+fn control(
+    tx: &Connection,
+    task: &str,
+    t: &Value,
+    graph: &mut Value,
+    args: &Value,
+) -> Result<(Value, Vec<String>, Vec<String>)> {
+    let kind = field(args, "action")?;
+    ensure!(
+        matches!(kind, "pause" | "resume" | "stop"),
+        "Unknown control {kind}"
+    );
+    permission::current(tx, task)?;
+    ensure!(t["closed"] != true, "Task closed");
+    let mut cancelled = vec![];
+    let mut runs = vec![];
+    let mut drivers = vec![];
+    if kind == "stop" {
+        for (id, state) in graph["activity"]
+            .as_object_mut()
+            .context("Invalid graph activity")?
+        {
+            let attempt = state["id"].as_str().unwrap_or_default().to_owned();
+            let has_run = !attempt.is_empty() && find(tx, "run", &attempt)?.is_some();
+            match state["status"].as_str() {
+                Some("running" | "unknown") if has_run => runs.push(attempt),
+                Some("queued" | "permission_required" | "waiting" | "saving") if !has_run => {
+                    if let Some(instance) = state["instance"].as_str() {
+                        if instance == format!("driver-{attempt}")
+                            && find(tx, "instance", instance)?.is_some()
+                        {
+                            drivers.push(instance.to_owned());
+                        }
+                    }
+                    state["status"] = json!("cancelled");
+                    cancelled.push(id.clone());
+                }
+                _ => {}
+            }
+        }
+    }
+    graph["control"] = json!(if kind == "resume" {
+        "running"
+    } else {
+        "paused"
+    });
+    let past = match kind {
+        "pause" => "paused",
+        "resume" => "resumed",
+        _ => "stopped",
+    };
+    event(
+        graph,
+        "user",
+        past,
+        task,
+        json!({"cancelled":cancelled,"cancelling":runs}),
+    );
+    put(tx, "graph", task, graph)?;
+    Ok((
+        json!({"control":graph["control"],"cancelled":cancelled,"cancelling":runs}),
+        runs,
+        drivers,
+    ))
 }

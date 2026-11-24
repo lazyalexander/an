@@ -8,7 +8,8 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 ASSETS = Path(__file__).parent / "macro" / "graph"
-ACTIONS = {"view", "panel", "viewed", "draft", "respond", "open", "deliveries", "sources", "resume"}
+ACTIONS = {"view", "panel", "viewed", "draft", "respond", "open", "deliveries", "sources", "resume",
+           "control"}
 
 
 def serve(task, binary, port, launch=False):

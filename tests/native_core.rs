@@ -627,3 +627,86 @@ fn driver_reserves_instance_even_when_startup_fails() {
         assert_eq!(state["activity"]["driver"]["instance"], "driver-attempt");
     }
 }
+
+#[test]
+fn person_controls_pause_resume_and_stop_without_the_agent() {
+    let mut f = Fixture::graph_task();
+    let control = |f: &Fixture, action: &str| f.graph("control", json!({ "action": action }));
+    assert_eq!(control(&f, "pause").unwrap()["control"], "paused");
+    f.graph(
+        "submit",
+        json!({"idempotency_key":"held","base_revision":0,"nodes":[Fixture::surface("held")]}),
+    )
+    .unwrap();
+    // Paused: the agent may plan, but nothing starts, not even a preview request.
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["held"]["status"],
+        "queued"
+    );
+    assert_eq!(f.graph("requests", json!({})).unwrap(), json!([]));
+    assert_eq!(f.graph("view", json!({})).unwrap()["control"], "paused");
+
+    assert_eq!(control(&f, "resume").unwrap()["control"], "running");
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["held"]["status"],
+        "permission_required"
+    );
+
+    // Stop cancels unsettled work and holds the task paused.
+    let stopped = control(&f, "stop").unwrap();
+    assert_eq!(stopped["control"], "paused");
+    assert_eq!(stopped["cancelled"], json!(["held"]));
+    let state = f.graph("state", json!({})).unwrap();
+    assert_eq!(state["activity"]["held"]["status"], "cancelled");
+    let kinds: Vec<_> = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["actor"] == "user")
+        .map(|e| e["kind"].as_str().unwrap().to_owned())
+        .collect();
+    assert_eq!(kinds, ["paused", "resumed", "stopped"]);
+
+    // After resume the agent can retry what the person stopped.
+    control(&f, "resume").unwrap();
+    f.graph(
+        "submit",
+        json!({"idempotency_key":"again","base_revision":1,"nodes":[],"retry":["held"]}),
+    )
+    .unwrap();
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["held"]["status"],
+        "permission_required"
+    );
+
+    assert!(control(&f, "explode")
+        .unwrap_err()
+        .contains("Unknown control"));
+    f.turn = None;
+    assert!(
+        control(&f, "stop").is_err(),
+        "controls need the person's turn"
+    );
+}
+
+#[test]
+fn stop_requests_cancellation_of_running_work() {
+    let f = Fixture::graph_task();
+    f.insert(
+        "run",
+        "live",
+        json!({"id":"live","task":"task","status":"running","spool":"demo"}),
+    );
+    f.insert(
+        "graph",
+        "task",
+        json!({"revision":1,"events":[],"nodes":{"job":{"id":"job","kind":"run","spool":"demo","outputs":[]}},
+        "activity":{"job":{"attempt":1,"id":"live","status":"running","run":"live"}}}),
+    );
+    let stopped = f.graph("control", json!({"action":"stop"})).unwrap();
+    assert_eq!(stopped["cancelling"], json!(["live"]));
+    assert_eq!(
+        f.call(&["status", "--task", "task", "live"])["status"],
+        "cancel_pending"
+    );
+}
