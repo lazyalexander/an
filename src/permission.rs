@@ -104,10 +104,24 @@ pub fn gate(
     request: Option<&str>,
     flow: Option<Value>,
 ) -> Result<Option<Value>> {
+    gate_flows(db, task, op, scope, details, request, flow.as_slice())
+}
+pub fn gate_flows(
+    db: &Connection,
+    task: &str,
+    op: &str,
+    scope: Value,
+    details: Value,
+    request: Option<&str>,
+    required: &[Value],
+) -> Result<Option<Value>> {
     let (turn, flows, host) = context(db, task)?;
     let revisions = json!([turn, flows["revision"], host["revision"]]);
-    if let (Some(flow), Some(rules)) = (flow, flows["flows"].as_array()) {
-        ensure!(rules.contains(&flow), "Denied by workspace flow policy");
+    if let Some(rules) = flows["flows"].as_array() {
+        ensure!(
+            required.iter().all(|flow| rules.contains(flow)),
+            "Denied by workspace flow policy"
+        );
     }
     let effect = canonical(&json!([op, scope, details]));
     let mut decision = host["default"].as_str().unwrap_or("unavailable");
@@ -184,7 +198,9 @@ pub fn execute() -> Result<Value> {
                 .ok_or_else(|| anyhow!("Expected policy file"))?,
         )?)?)
     };
+    let wake_graph = matches!(action, Action::Decide | Action::Policy | Action::Effect);
     let result = if matches!(action, Action::Begin) {
+        ensure!(get(&tx, "task", &task)?["closed"] != true, "Task is closed");
         let turn = uid();
         put(&tx, "turn", &task, &json!(turn))?;
         if file.is_some() {
@@ -281,5 +297,8 @@ pub fn execute() -> Result<Value> {
         }
     };
     tx.commit()?;
+    if wake_graph {
+        crate::graph::wake(&task)?;
+    }
     Ok(result)
 }

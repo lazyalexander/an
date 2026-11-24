@@ -1,0 +1,16 @@
+schema: an.spool/v1
+name: studio-sample
+summary: Execute the reproducible Studio graph examples.
+inputs:
+  - name: source
+    description: Selected upstream artifact
+    media_types: [application/octet-stream]
+    required: false
+  - name: choice
+    description: Versioned user response
+    media_types: [application/json]
+    required: false
+outputs:
+  - name: result
+    description: Generated files
+    media_types: [application/octet-stream]

@@ -14,7 +14,7 @@ use std::{
 fn string<'a>(v: &'a Value, k: &str) -> Result<&'a str> {
     v[k].as_str().with_context(|| format!("Expected {k}"))
 }
-fn lock(db: &Connection, task: &str) -> Result<File> {
+pub(crate) fn lock(db: &Connection, task: &str) -> Result<File> {
     get(db, "task", task)?;
     ensure!(
         !task.contains('/') && task != "." && task != "..",
@@ -140,15 +140,43 @@ fn reconcile(db: &mut Connection, i: &mut Value, f: &File) -> Result<()> {
     tx.commit()?;
     Ok(())
 }
-fn load(db: &mut Connection, task: &str, t: &Value, image: &str, f: &File) -> Result<Value> {
+fn load(
+    db: &mut Connection,
+    task: &str,
+    t: &Value,
+    image: &str,
+    f: &File,
+    parallel: bool,
+) -> Result<Value> {
     let work = t["work"][image].as_str().context("Spool outside task")?;
     let platform = runtime::require(db, image)?["platform"].clone();
+    let graph = if parallel {
+        find(db, "graph", task)?
+    } else {
+        None
+    };
     for mut i in items(db, "instance", task)? {
         if i["spool"] != image || i["status"] == "unloaded" {
             continue;
         }
         reconcile(db, &mut i, f)?;
         if i["status"] == "running" {
+            if parallel
+                && (!i["active"].is_null()
+                    || graph
+                        .as_ref()
+                        .and_then(|g| g["activity"].as_object())
+                        .is_some_and(|nodes| {
+                            nodes.values().any(|s| {
+                                s["status"] == "permission_required" && s["instance"] == i["id"]
+                            })
+                        }))
+                && !t["editable"]
+                    .as_array()
+                    .is_some_and(|a| a.contains(&json!(image)))
+            {
+                continue;
+            }
             ensure!(
                 i["platform"] == platform,
                 "Unload instance to reload admitted platform"
@@ -281,6 +309,9 @@ fn submit(
 ) -> Result<Value> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let spool = string(i, "spool")?;
+    if args["_graph_run"].is_string() {
+        permission::current(&tx, task)?;
+    }
     ensure!(
         i["status"] == "running" && i["intent"] == "load" && i["active"].is_null(),
         "Instance is not ready"
@@ -309,13 +340,21 @@ fn submit(
     let mut decisions = Vec::new();
     let mut files = json!({});
     let mut input_stamp = Value::Null;
-    if !bindings.is_empty() {
+    if !bindings.is_empty() || args["_graph_run"].is_string() {
         input_stamp = permission::stamp(&tx, task)?;
     }
     // Roll back approval consumption if a later port still needs a decision.
     tx.execute_batch("SAVEPOINT input_decisions")?;
     for (port, source) in bindings {
-        let (rev, flow) = if let Some(rev) = t["inputs"].get(source) {
+        let (rev, flow) = if let Some(binding) = args["_graph_bindings"].get(source) {
+            let origin = &binding["spool"];
+            let flow = if origin.is_null() {
+                json!(["input", "response", spool])
+            } else {
+                json!(["handoff", origin, spool])
+            };
+            (binding["revision"].clone(), Some(flow))
+        } else if let Some(rev) = t["inputs"].get(source) {
             (rev.clone(), Some(json!(["input", source, spool])))
         } else if source.starts_with("handoff-") {
             let ticket = get(&tx, "handoff", source)?;
@@ -354,6 +393,14 @@ fn submit(
             )
         };
         if let Some(flow) = flow {
+            let operation = if args["_graph_bindings"]
+                .get(source)
+                .is_some_and(|b| !b["spool"].is_null())
+            {
+                "handoff"
+            } else {
+                "input"
+            };
             let scope = match port {
                 Some(name) => json!([source, rev, spool, name]),
                 None => json!([source, rev, spool]),
@@ -370,7 +417,7 @@ fn submit(
                 decisions.push((id, get(&tx, "request", id)?));
             }
             if let Some(mut pending) =
-                permission::gate(&tx, task, "input", scope, details, request, Some(flow))?
+                permission::gate(&tx, task, operation, scope, details, request, Some(flow))?
             {
                 let id = string(&pending, "request_id")?.to_owned();
                 let row = get(&tx, "request", &id)?;
@@ -395,16 +442,30 @@ fn submit(
         }
     }
     let inp = revision(&tx, &files)?;
-    let id = uid();
+    let id = args["_graph_run"]
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(uid);
     let dir = root()?.join("runs").join(&id);
     fs::create_dir_all(&dir)?;
-    let lease = File::create_new(dir.join("lease"))?;
+    // An interrupted reservation can leave a directory before its transaction commits.
+    let lease = File::options()
+        .create(true)
+        .append(true)
+        .open(dir.join("lease"))?;
     lease.lock()?;
     let mut r = json!({"inputs":named,"id":id,"instance":i["id"],"task":task,"spool":spool,"work":t["work"][spool],"argv":argv,"input":inp,"source":args["input"],"outputs":outputs,"editable":editable,"status":"running","input_stamp":input_stamp});
     for (key, record) in &tickets {
         let mut used = record.clone();
         used["used"] = json!(id);
         put(&tx, "handoff", key, &used)?;
+    }
+    if args["_graph_run"].is_string() {
+        r["graph_bindings"] = args["_graph_bindings"].clone();
+        let digest = spool.rsplit_once('@').context("Invalid admitted image")?.1;
+        let image = get(&tx, "admission", digest)?;
+        r["image_code"] = image["code_revision"].clone();
+        r["code_omissions"] = image["code_omissions"].clone();
     }
     i["active"] = json!(id);
     save(&tx, "run", &r)?;
@@ -457,23 +518,47 @@ fn reap(mut child: std::process::Child) {
 pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
     let mut db = connect()?;
     let lock = lock(&db, task)?;
-    let t = get(&db, "task", task)?;
+    dispatch_locked(&mut db, task, op, args, &lock)
+}
+pub(crate) fn dispatch_locked(
+    db: &mut Connection,
+    task: &str,
+    op: &str,
+    args: &Value,
+    lock: &File,
+) -> Result<Value> {
+    let t = get(db, "task", task)?;
+    if t["closed"] == true {
+        ensure!(
+            matches!(op, "state" | "status" | "unload" | "skill" | "log"),
+            "Task is closed"
+        );
+    }
     match op {
-        "load" => return load(&mut db, task, &t, string(args, "spool")?, &lock),
+        "load" => {
+            return load(
+                db,
+                task,
+                &t,
+                string(args, "spool")?,
+                lock,
+                args["_parallel"] == true,
+            )
+        }
         "skill" => {
             let s = string(args, "spool")?;
             ensure!(t["work"].get(s).is_some(), "Spool outside task");
-            return runtime::require(&db, s);
+            return runtime::require(db, s);
         }
         "state" => {
             let mut result = t.clone();
-            let mut instances = items(&db, "instance", task)?;
+            let mut instances = items(db, "instance", task)?;
             for i in &mut instances {
-                reconcile(&mut db, i, &lock)?;
+                reconcile(db, i, lock)?;
             }
             let mut spools = json!({});
             for s in t["work"].as_object().context("Invalid task")?.keys() {
-                spools[s] = runtime::summary(&db, s)?;
+                spools[s] = runtime::summary(db, s)?;
             }
             let mut runs = json!({});
             let mut stmt = db.prepare("SELECT id, json_extract(body, '$.status') FROM objects WHERE kind='run' AND json_extract(body, '$.task')=?")?;
@@ -489,7 +574,7 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         }
         "publish" | "handoff" | "status" | "cancel" | "log" => {
             let id = string(args, "run")?;
-            let mut r = owned(&db, task, id)?;
+            let mut r = owned(db, task, id)?;
             if matches!(op, "publish" | "handoff") {
                 ensure!(
                     r["status"] == "awaiting_publication",
@@ -586,10 +671,10 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
                         }
                     }
                 }
-                put(&db, "run", id, &r)?;
+                put(db, "run", id, &r)?;
                 return Ok(r);
             }
-            let mut i = get(&db, "instance", string(&r, "instance")?)?;
+            let mut i = get(db, "instance", string(&r, "instance")?)?;
             if op == "cancel" && i["active"] == id && i["intent"] == "load" {
                 let tx = db.transaction()?;
                 i["intent"] = json!("stop");
@@ -598,22 +683,22 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
                 save(&tx, "run", &r)?;
                 tx.commit()?;
             }
-            reconcile(&mut db, &mut i, &lock)?;
-            let r = owned(&db, task, id)?;
+            reconcile(db, &mut i, lock)?;
+            let r = owned(db, task, id)?;
             return Ok(json!({"id":id,"status":r["status"],"spool":r["spool"]}));
         }
         "run" | "unload" => {}
         _ => bail!("Unknown operation {op}"),
     }
     let mut i = if let Some(id) = args["instance"].as_str() {
-        let i = get(&db, "instance", id)?;
+        let i = get(db, "instance", id)?;
         ensure!(
             i["task"] == task && (args["spool"].is_null() || i["spool"] == args["spool"]),
             "Instance outside requested task or spool"
         );
         i
     } else {
-        items(&db, "instance", task)?
+        items(db, "instance", task)?
             .into_iter()
             .rev()
             .find(|i| i["spool"] == args["spool"] && i["status"] != "unloaded")
@@ -630,17 +715,17 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         save(&tx, "instance", &i)?;
         tx.commit()?;
     }
-    reconcile(&mut db, &mut i, &lock)?;
+    reconcile(db, &mut i, lock)?;
     if op == "unload" {
         return Ok(i);
     }
-    let admission = runtime::require(&db, string(&i, "spool")?)?;
+    let admission = runtime::require(db, string(&i, "spool")?)?;
     ensure!(
         i["platform"] == admission["platform"],
         "Reload instance on admitted platform"
     );
     submit(
-        &mut db,
+        db,
         task,
         &t,
         &mut i,
@@ -674,10 +759,18 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             let p = path(&i)?;
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if !r["input_stamp"].is_null() || !r["source"].is_null() {
-                ensure!(
-                    r["input_stamp"] == permission::stamp(&tx, &task)?,
-                    "Input authority changed"
-                );
+                let authority = permission::stamp(&tx, &task);
+                if r["graph_bindings"].is_object()
+                    && authority.as_ref().ok() != Some(&r["input_stamp"])
+                {
+                    r["status"] = json!("authorization_expired");
+                    i["active"] = Value::Null;
+                    save(&tx, "run", &r)?;
+                    save(&tx, "instance", &i)?;
+                    tx.commit()?;
+                    return Ok(());
+                }
+                ensure!(r["input_stamp"] == authority?, "Input authority changed");
             }
             let t = get(&tx, "task", &task)?;
             let sources = r["inputs"]
@@ -705,14 +798,19 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             )?;
             let log = File::create(root()?.join("runs").join(id).join("log"))?;
             quiet = false;
-            Command::new(runtime::CONTAINER)
+            let child = Command::new(runtime::CONTAINER)
                 .args(["exec", string(&i, "name")?])
                 .args(serde_json::from_value::<Vec<String>>(r["argv"].clone())?)
                 .stdout(log.try_clone()?)
                 .stderr(log)
-                .spawn()?
+                .spawn()?;
+            r["started_at"] = json!(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64());
+            save(&db, "run", &r)?;
+            child
         };
         let code = child.wait()?;
+        r["exited_at"] = json!(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64());
+        r["exit_code"] = json!(code.code());
         let f = lock(&db, &task)?;
         let mut i = get(&db, "instance", &instance)?;
         if i["active"] != id || i["intent"] != "load" {
@@ -767,8 +865,7 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
         let _guard = lock(&db, &task)?;
         let mut i = get(&db, "instance", &instance)?;
         if i["active"] == id && i["intent"] == "load" {
-            let mut r = get(&db, "run", id)?;
-            r["status"] = json!("failed");
+            r["status"] = json!(if quiet { "failed" } else { "unknown" });
             r["error"] = json!(e.to_string());
             if quiet && r["editable"] == true {
                 if let Err(e) = artifacts::stage(
@@ -790,6 +887,9 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             save(&tx, "instance", &i)?;
             tx.commit()?;
         }
+    }
+    if r["graph_bindings"].is_object() {
+        crate::graph::wake(&task)?;
     }
     Ok(())
 }

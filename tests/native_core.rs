@@ -195,3 +195,304 @@ fn legacy_run_without_body_id_uses_registry_key() {
         "cancel_pending"
     );
 }
+
+impl Fixture {
+    fn graph(&self, action: &str, args: Value) -> Result<Value, String> {
+        use std::{io::Write, process::Stdio};
+        let mut child = Command::new(env!("CARGO_BIN_EXE_an"))
+            .args(["graph", "--task", "task", action])
+            .env("AN_HOME", &self.root)
+            .env("AN_TURN", self.turn.as_deref().unwrap_or(""))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(args.to_string().as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        if out.status.success() {
+            Ok(serde_json::from_slice(&out.stdout).unwrap())
+        } else {
+            Err(String::from_utf8_lossy(&out.stderr).into_owned())
+        }
+    }
+
+    fn graph_task() -> Self {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+        let mut f = Fixture::new();
+        let schema = json!({"type":"object","properties":{"choice":{"type":"string","enum":["A","B"]}},"required":["choice"]});
+        let manifest = json!({"version":1,"entry":"index.html","files":{"index.html":"<p>Compare</p>"},"bindings":[],"response":schema});
+        f.insert(
+            "revision",
+            "panel",
+            json!({"panel.json":STANDARD.encode(manifest.to_string())}),
+        );
+        f.insert(
+            "task",
+            "task",
+            json!({"work":{},"inputs":{"package":"panel"}}),
+        );
+        f.insert("turn", "task", json!("active"));
+        f.turn = Some("active".into());
+        f
+    }
+    fn surface(id: &str) -> Value {
+        json!({"id":id,"kind":"surface","package":"ui","inputs":{"ui":{"input":"package"}},
+        "outputs":["response"],"response":{"type":"object","properties":{"choice":{"type":"string","enum":["A","B"]}},"required":["choice"]}})
+    }
+    fn decide_graph(&self, decision: &str) {
+        for request in self
+            .graph("requests", json!({}))
+            .unwrap()
+            .as_array()
+            .unwrap()
+        {
+            self.call(&[
+                "permission",
+                "decide",
+                "--task",
+                "task",
+                "--request-id",
+                request["id"].as_str().unwrap(),
+                "--decision",
+                decision,
+            ]);
+        }
+    }
+}
+
+#[test]
+fn graph_validates_a_whole_revision_and_never_replays_an_unknown_attempt() {
+    let f = Fixture::graph_task();
+    let mut a = Fixture::surface("A");
+    let mut b = Fixture::surface("B");
+    a["after"] = json!(["B"]);
+    b["after"] = json!(["A"]);
+    let mut request = json!({"idempotency_key":"test","base_revision":0,"nodes":[a,b]});
+    assert!(f
+        .graph("submit", request.clone())
+        .unwrap_err()
+        .contains("cycle"));
+    assert_eq!(f.graph("view", json!({})).unwrap()["revision"], 0);
+    request["nodes"][1]["after"] = json!([]);
+    request["nodes"][1]["inputs"]["ui"] = json!({"node":"A","port":"undeclared"});
+    assert!(f
+        .graph("submit", request)
+        .unwrap_err()
+        .contains("Unknown output"));
+
+    // Simulate restart after run reservation, with an external outcome already
+    // known to be indeterminate. Reconciliation may observe, never relaunch.
+    f.insert(
+        "run",
+        "reserved",
+        json!({"id":"reserved","task":"task","status":"unknown","spool":"demo"}),
+    );
+    f.insert(
+        "graph",
+        "task",
+        json!({"revision":1,"nodes":{"job":{"id":"job","kind":"run","spool":"demo","outputs":[]}},
+        "activity":{"job":{"attempt":1,"id":"reserved","status":"queued"}},"events":[]}),
+    );
+    let state = f.graph("state", json!({})).unwrap();
+    assert_eq!(state["activity"]["job"]["status"], "unknown");
+    assert_eq!(state["activity"]["job"]["evidence"]["run"], "reserved");
+    assert!(f
+        .graph(
+            "submit",
+            json!({"base_revision":1,"idempotency_key":"retry","nodes":[],"retry":["job"]})
+        )
+        .is_err());
+    assert_eq!(
+        f.graph("state", json!({"after":1})).unwrap()["events"],
+        json!([])
+    );
+}
+
+#[test]
+fn graph_surfaces_recover_drafts_require_current_authority_and_settle_once() {
+    let mut f = Fixture::graph_task();
+    let submit =
+        json!({"idempotency_key":"one","base_revision":0,"nodes":[Fixture::surface("choice")]});
+    let receipt = f.graph("submit", submit.clone()).unwrap();
+    assert_eq!(receipt, f.graph("submit", submit).unwrap());
+    f.decide_graph("deny");
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["choice"]["status"],
+        "failed"
+    );
+    f.graph(
+        "submit",
+        json!({"idempotency_key":"two","base_revision":1,"nodes":[],"retry":["choice"]}),
+    )
+    .unwrap();
+    f.decide_graph("once");
+    let state = f.graph("view", json!({})).unwrap()["activity"]["choice"].clone();
+    assert_eq!(state["attempt"], 2);
+    let mut req = json!({"node":"choice","request":state["id"]});
+    f.graph("panel", req.clone()).unwrap();
+    f.graph("viewed", req.clone()).unwrap();
+    req["value"] = json!({"choice":"B"});
+    f.graph("draft", req.clone()).unwrap();
+    let original: String =
+        f.db.query_row(
+            "SELECT body FROM objects WHERE kind='revision' AND id='panel'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    f.insert("revision", "panel", json!({"panel.json":"e30="}));
+    assert!(f.graph("panel", req.clone()).is_err());
+    f.insert(
+        "revision",
+        "panel",
+        serde_json::from_str(&original).unwrap(),
+    );
+    assert_eq!(
+        f.graph("panel", req.clone()).unwrap()["draft"],
+        req["value"]
+    );
+
+    f.insert("turn", "task", json!("new-turn"));
+    assert!(f.graph("respond", req.clone()).is_err());
+    f.turn = Some("new-turn".into());
+    f.graph("state", json!({})).unwrap();
+    f.decide_graph("once");
+    assert!(f.graph("respond", req.clone()).is_err());
+    let state = f.graph("view", json!({})).unwrap();
+    req["request"] = state["activity"]["choice"]["id"].clone();
+    f.graph("panel", req.clone()).unwrap();
+    f.graph("viewed", req.clone()).unwrap();
+    req["value"]["choice"] = json!("C");
+    assert!(f.graph("respond", req.clone()).is_err());
+    req["value"]["choice"] = json!("B");
+    for _ in 0..2 {
+        assert_eq!(f.graph("respond", req.clone()).unwrap()["status"], "done");
+    }
+    let state = f.graph("state", json!({})).unwrap();
+    assert_eq!(
+        state["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "responded")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn inactive_turn_only_sees_public_status() {
+    let mut f = Fixture::graph_task();
+    f.insert(
+        "graph",
+        "task",
+        json!({"revision":1,"events":[{"node":"n","data":"private"}],
+        "nodes":{"n":{"id":"n","kind":"surface","title":"private"}},
+        "activity":{"n":{"status":"done","response":"private","bindings":{"secret":"private"}}}}),
+    );
+    for turn in [None, Some("expired".to_owned())] {
+        f.turn = turn;
+        let view = f.graph("view", json!({})).unwrap();
+        assert_eq!(view["authorized"], false);
+        assert_eq!(view["activity"]["n"], json!({"status":"done"}));
+        assert!(!view.to_string().contains("private"));
+        let trace = f.graph("sources", json!({"node":"n"})).unwrap();
+        assert_eq!(trace["n"]["execution"], json!({"status":"done"}));
+        assert!(!trace.to_string().contains("private"));
+    }
+}
+
+#[test]
+fn superseded_save_settles_waiting_document() {
+    let f = Fixture::graph_task();
+    f.insert(
+        "graph",
+        "task",
+        json!({"revision":1,"events":[],"nodes":{
+        "s":{"id":"s","kind":"surface","save":{"node":"writer","port":"file"}},
+        "writer":{"id":"writer","kind":"run"}},
+        "activity":{"s":{"status":"saving"},"writer":{"status":"superseded"}}}),
+    );
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["s"]["status"],
+        "superseded"
+    );
+    assert_eq!(f.graph("finish", json!({})).unwrap()["closed"], true);
+}
+
+#[test]
+fn delivery_rejects_ambiguous_flattened_paths_before_publication() {
+    for (left, right) in [("b/c", "c"), ("b", "c")] {
+        let f = Fixture::graph_task();
+        f.insert("task", "task", json!({"inputs":{"one":"v1","two":"v2"}}));
+        f.insert("revision", "v1", json!({left:"YQ=="}));
+        f.insert("revision", "v2", json!({right:"Yg=="}));
+        f.graph("submit",json!({"base_revision":0,"idempotency_key":"publish","nodes":[
+            {"kind":"delivery","id":"delivery","outputs":[],"inputs":{"a":{"input":"one"},"a/b":{"input":"two"}}}
+        ]})).unwrap();
+        for _ in 0..2 {
+            f.decide_graph("once");
+        }
+        let state = f.graph("state", json!({})).unwrap();
+        assert_eq!(state["activity"]["delivery"]["status"], "failed");
+        assert_eq!(f.graph("deliveries", json!({})).unwrap(), json!([]));
+    }
+}
+
+#[test]
+fn graph_export_requires_all_origins_and_exact_revision_approval() {
+    let f = Fixture::graph_task();
+    f.insert("task", "task", json!({"workspace":"w"}));
+    f.insert("workspace", "w", json!({"images":["spool"]}));
+    f.insert(
+        "graph_delivery",
+        "group",
+        json!({"task":"closed","workspace":"w","revision":"version","bindings":{
+        "one":{"spool":"spool","revision":"a"},"two":{"revision":"b"}}}),
+    );
+    f.insert(
+        "revision",
+        "version",
+        json!({"one/a":"YQ==","two/b":"Yg=="}),
+    );
+    let path = f.root.canonicalize().unwrap().join("export");
+    let dst = path.to_str().unwrap();
+    let policy = f.root.join("policy");
+    let policyfile = policy.to_str().unwrap();
+    let set_policy = |flows: Value| {
+        fs::write(&policy, flows.to_string()).unwrap();
+        f.call(&["workspace", "policy", "set", "w", "--file", policyfile]);
+    };
+    set_policy(json!([["export", "spool", dst]]));
+    let args = ["export", "group", dst, "--task", "task"];
+    assert!(!f.run(&args).status.success());
+    assert!(!path.exists());
+    set_policy(json!([
+        ["export", "spool", dst],
+        ["export", "response", dst]
+    ]));
+    let pending = f.call(&args);
+    assert!(!path.exists());
+    let id = pending["request_id"].as_str().unwrap();
+    f.call(&[
+        "permission",
+        "decide",
+        "--task",
+        "task",
+        "--request-id",
+        id,
+        "--decision",
+        "once",
+    ]);
+    let mut approved = args.to_vec();
+    approved.extend(["--request-id", id]);
+    assert!(f.run(&approved).status.success());
+    assert_eq!(fs::read(path.join("one/a")).unwrap(), b"a");
+    assert_eq!(fs::read(path.join("two/b")).unwrap(), b"b");
+}

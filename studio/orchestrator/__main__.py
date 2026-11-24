@@ -25,7 +25,12 @@ def main(argv=None) -> None:
     parser.add_argument("--instance", default="bridge-studio",
                         choices=instance_names(),
                         help="macro UI instance manifest to serve")
+    parser.add_argument("--task", help="serve an incremental An task graph")
+    parser.add_argument("--an", default="an", help="path to the An executable")
     args = parser.parse_args(argv)
+    if args.task:
+        from .graph_server import serve
+        return serve(args.task, args.an, args.port, args.open_ui)
 
     run_dir = DEFAULT_RUN_DIR
     run_dir.mkdir(parents=True, exist_ok=True)
