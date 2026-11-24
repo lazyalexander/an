@@ -12,6 +12,9 @@ const DEFAULTS: &str = include_str!("../config/an.json");
 pub struct Config(Map<String, Value>);
 
 impl Config {
+    pub fn aliases(&self) -> &Map<String, Value> {
+        self.0["model_aliases"].as_object().unwrap()
+    }
     fn number(&self, key: &str) -> u64 {
         self.0[key].as_u64().expect("validated setting")
     }
@@ -41,6 +44,21 @@ pub fn load() -> Result<Config> {
         Err(e) => return Err(e.into()),
     }
     for (key, value) in &settings {
+        if key == "model_aliases" {
+            ensure!(
+                value.as_object().is_some_and(|m| m
+                    .iter()
+                    .all(|(k, v)| !k.is_empty() && v.as_str().is_some_and(|s| !s.is_empty()))),
+                "Invalid model aliases"
+            );
+            continue;
+        }
+        if key == "ollama_port" {
+            ensure!(
+                value.as_u64().is_some_and(|p| p <= 65535),
+                "Invalid Ollama port"
+            );
+        }
         ensure!(
             value.as_u64().is_some_and(|n| n > 0),
             "Setting {key} must be a positive integer"

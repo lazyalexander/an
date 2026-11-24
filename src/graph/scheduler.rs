@@ -38,10 +38,13 @@ pub(super) fn paused(graph: &Value) -> bool {
 /// A later state read can repeat this reconciliation after a host crash.
 pub fn wake(task: &str) -> Result<()> {
     let mut db = connect()?;
-    if find(&db, "graph", task)?.is_none() || permission::current(&db, task).is_err() {
+    if find(&db, "graph", task)?.is_none() {
         return Ok(());
     }
     let lock = instances::lock(&db, task)?;
+    if permission::current(&db, task).is_err() {
+        return super::model::reconcile_sends(&db, task);
+    }
     let mut graph = get(&db, "graph", task)?;
     advance(&mut db, task, &mut graph, &lock)
 }
@@ -52,6 +55,7 @@ pub(super) fn advance(
     graph: &mut Value,
     lock: &File,
 ) -> Result<()> {
+    super::model::reconcile_sends(db, task)?;
     loop {
         let nodes = graph["nodes"].as_object().context("Invalid graph")?.clone();
         let mut finished = false;
@@ -281,6 +285,9 @@ fn step(
         && find(db, "run", field(state, "id")?)?.is_some()
     {
         anyhow::bail!("Driver authority changed before acceptance");
+    }
+    if node["kind"] == "model" {
+        return super::model::schedule(db, task, node, bound, state, &stamp, paused(graph));
     }
     if state["authority"] != stamp {
         state["requests"] = json!({});

@@ -83,7 +83,7 @@ def bridge(spool):
     return nodes
 
 
-def bridge_result(spool, response):
+def bridge_result(spool, response, attach=False):
     chosen = response["choice"]
     html = STYLE + """<h2>绘画参考与修改记录</h2>
     <button id="original">原始参考</button> <button id="annotated">显示标注</button>
@@ -99,6 +99,8 @@ def bridge_result(spool, response):
     });</script>"""
     data = {"original": ref(chosen,"candidate.svg"), "selected": ref("apply", "selected.svg"), "choice": ref("compare", "response")}
     data["painting"] = ref("compare", "document")
+    if attach:
+        data["annotation"] = ref("annotation-note","annotation.txt")
     process = {"id": "apply", "kind": "run", "spool": spool,
                "argv": ["python3", "/spool/code/annotate.py"], "outputs": ["selected.svg", "painting.ora"],
                "inputs": {"source": ref(chosen, "candidate.svg"), "choice": ref("compare", "response")}}
@@ -157,12 +159,41 @@ def cad(spool):
 
 if __name__ == "__main__":
     stage, spool, *options = sys.argv[1:]
-    if stage == "select":
+    if stage in ("select", "model-select"):
         response = json.loads(Path("/input/choice/response.json").read_text())
         nodes = bridge_result(spool, response)
+        if stage == "model-select":
+            nodes = nodes[:1] + [
+                {"id":"prompt","kind":"run","spool":spool,"argv":["python3","/spool/code/driver.py","prompt",spool],
+                 "inputs":{"choice":ref("compare","response")},"outputs":["request.json"]},
+                {"id":"decision","kind":"model","model":"local","inputs":{"request":ref("prompt","request.json")},"outputs":["result.json"]},
+                {"id":"finalize","kind":"expand","spool":spool,"argv":["python3","/spool/code/driver.py","finalize",spool],
+                 "inputs":{"source":ref("decision","result.json"),"choice":ref("compare","response")},"outputs":["subgraph.json"]}]
+    elif stage == "prompt":
+        note = json.loads(Path("/input/choice/response.json").read_text())["note"]
+        messages = [{"role":"system","content":"Classify whether the user wants a separate annotation text file with the painting. Reply with exactly ATTACH or PAINTING. Default to PAINTING."},
+                    {"role":"user","content":note}]
+        Path("/output/request.json").write_text(json.dumps({"messages":messages}))
+        sys.exit(0)
+    elif stage == "finalize":
+        answer = json.loads(Path("/input/source/result.json").read_text())["text"].strip()
+        if answer not in ("ATTACH", "PAINTING"):
+            raise ValueError("Unexpected Bridge model decision")
+        choice = json.loads(Path("/input/choice/response.json").read_text())
+        nodes = bridge_result(spool, choice, attach=answer=="ATTACH")[1:]
+        if answer == "ATTACH":
+            write_note = """import json
+from pathlib import Path
+choice = json.loads(Path("/input/choice/response.json").read_text())
+Path("/output/annotation.txt").write_text(choice["note"])
+"""
+            nodes.insert(0, run("annotation-note", spool, write_note, ["annotation.txt"],
+                                choice=ref("compare", "response")))
     else:
-        nodes = {"bridge": bridge, "cad": cad, "revise": revise}[stage](spool)
-    if stage == "bridge" and options == ["--verify-overlap"]:
+        nodes = {"bridge": bridge, "bridge-model":bridge, "cad": cad, "revise": revise}[stage](spool)
+        if stage == "bridge-model":
+            nodes[-1]["argv"][2] = "model-select"
+    if stage in ("bridge","bridge-model") and options == ["--verify-overlap"]:
         for candidate in nodes[:2]:
             candidate["argv"][-1] = "import time; time.sleep(5)\n" + candidate["argv"][-1]
     Path("/output/subgraph.json").write_text(json.dumps({"nodes": nodes}))

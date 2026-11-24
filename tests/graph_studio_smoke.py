@@ -57,11 +57,13 @@ def exercise(directory, image, browser, experiment, choice):
         return subprocess.check_output([binary, *args], env=env, text=True,
                                        input=json.dumps(body or {})).strip()
 
+    modeled = experiment == "bridge-model"
+    note = ("edge: attach a separate annotation text file" if choice=="B" else "edge: only deliver the painting without a note file") if modeled else "edge"
     spool = cli("register", image)
     workspace = json.loads(cli("workspace", "create", "--spool", spool))["workspace"]
     selector = ["--harness", "validation", "--session", experiment]
     cli("workspace", "bind", workspace, *selector)
-    task = json.loads(cli("task", "new", *selector))["task"]
+    task = json.loads(cli("task", "new", *selector, *(["--model","local"] if modeled else [])))["task"]
     env["AN_TURN"] = json.loads(cli("permission", "begin", "--task", task))["turn"]
 
     def host(action, **args):
@@ -88,18 +90,32 @@ def exercise(directory, image, browser, experiment, choice):
         return proc, proc.stdout.readline().strip().split("macro UI: ")[1]
 
     def chrome(mode):
-        subprocess.run(["node", str(ROOT / "tests/graph_studio_browser.cjs"), mode, experiment,
-                        str(directory), choice], input=url, env=env, text=True, check=True, timeout=90)
+        subprocess.run(["node", str(ROOT / "tests/graph_studio_browser.cjs"), mode, "bridge" if modeled else experiment,
+                        str(directory), choice,note], input=url, env=env, text=True, check=True, timeout=90)
 
+    private_file = directory / "host-only-model-credential"
+    if modeled:
+        private_file.write_text("synthetic-model-credential")
+        env["AN_MODEL_TEST_SECRET"] = private_file.read_text()
+        env["AN_MODEL_TEST_SECRET_FILE"] = str(private_file)
     agent = Agent(binary, task, env)
     studio = None
     try:
-        bridge = experiment == "bridge"
+        bridge = experiment in ("bridge","bridge-model")
         nodes = [initial_driver(experiment, spool),
                  {"id":"failure", "kind":"run", "spool":spool, "after":["start"],
                   "argv":["python3","-c","raise SystemExit(7)"], "outputs":[]}]
         if bridge:
             nodes[0]["argv"].append("--verify-overlap")
+        if modeled:
+            # Probe inside the actual initial driver, before it emits its proposal.
+            probe = ("import os, sys, runpy; from pathlib import Path; "
+                     "assert set(os.listdir('/sys/class/net')) <= {'lo'}; "
+                     "assert 'AN_MODEL_TEST_SECRET' not in os.environ and 'AN_MODEL_TEST_SECRET_FILE' not in os.environ; "
+                     f"assert not Path({str(private_file)!r}).exists(); "
+                     "assert all(not (Path(p)/'host-only-model-credential').exists() for p in ('/input','/output','/spool','/work')); "
+                     "sys.argv=sys.argv[1:]; runpy.run_path(sys.argv[0],run_name='__main__')")
+            nodes[0]["argv"][1:1] = ["-c",probe]
         first = dict(base_revision=0, idempotency_key="first", nodes=nodes)
         receipt = agent.graph("submit", **first)
         assert receipt["revision"] == 1
@@ -122,7 +138,7 @@ def exercise(directory, image, browser, experiment, choice):
         else:
             assert host("panel", **request)["html"]
             host("viewed", **request)
-            response = dict(choice=choice, x=.5, y=.25, note="edge") if bridge else dict(seconds=2)
+            response = dict(choice=choice, x=.5, y=.25, note=note) if bridge else dict(seconds=2)
             host("draft", **request, value=response)
             assert host("panel", **request)["draft"] == response
             host("respond", **request, value=response)
@@ -159,10 +175,22 @@ def exercise(directory, image, browser, experiment, choice):
         assert not agent.graph("state", after=cursor)["events"]
         trace = host("sources", delivery=published)
         expansions = [e["node"] for e in state["events"] if e["kind"] == "expanded"]
-        assert expansions == (["start", "select"] if bridge else ["start"])
+        assert expansions == (["start","select","finalize"] if modeled else ["start", "select"] if bridge else ["start"])
         assert all(trace[node]["execution"]["evidence"]["run"] for node in expansions)
         assert trace[decision]["execution"]["response"] == response
         assert trace["apply" if bridge else "animate"]["execution"]["evidence"]["log"]
+        if modeled:
+            record = trace["decision"]["execution"]["evidence"]
+            assert record["state"]=="completed" and record["usage"]["output_tokens"]>0
+            assert record["model"] == "qwen3:8b" and len(state["model_calls"]) == 1
+            args = dict(delivery=published, source="decision", type="output")
+            pending = host("evidence", **args)
+            assert pending["status"] == "permission_required"
+            cli("permission", "decide", "--task", task, "--request-id", pending["request_id"], "--decision", "once")
+            raw = host("evidence", **args)["result.json"]
+            decision_text = json.loads(base64.b64decode(raw))["text"].strip()
+            assert decision_text == ("ATTACH" if choice=="B" else "PAINTING")
+            assert ("annotation-note" in state["nodes"]) == (choice=="B")
         for i in json.loads(cli("state", "--task", task))["instances"]:
             cli("unload", "--task", task, "--instance", i["id"])
         assert host("finish")["closed"]
@@ -196,6 +224,15 @@ def exercise(directory, image, browser, experiment, choice):
 
         def reopened(action, **args):
             return json.loads(cli("graph","--task",fresh,action,body=args))
+        if modeled:
+            projection = reopened("sources", delivery=published)["decision"]["execution"]["evidence"]
+            assert projection == {"available":["input","output"]}, projection
+            for kind, file in [("input","request.json"),("output","result.json")]:
+                args = dict(delivery=published, source="decision", type=kind)
+                pending = reopened("evidence", **args)
+                assert pending["status"] == "permission_required"
+                cli("permission","decide","--task",fresh,"--request-id",pending["request_id"],"--decision","once")
+                assert file in reopened("evidence", **args)
         for kind in ("code","work","input","log"):
             args=dict(delivery=published,source="apply" if bridge else "animate",type=kind)
             permission = reopened("evidence", **args)
@@ -216,6 +253,12 @@ def exercise(directory, image, browser, experiment, choice):
                 studio = None
             task = fresh
             agent = Agent(binary, task, env)
+            if modeled and browser:
+                studio, url = start_studio()
+                chrome("cross-evidence")
+                studio.terminate()
+                studio.wait(timeout=15)
+                studio = None
             agent.graph("submit", base_revision=0, idempotency_key="revise",
                         nodes=[initial_driver("revise", spool)])
             edit = wait("edit", "waiting")
@@ -275,7 +318,7 @@ if __name__ == "__main__":
     p.add_argument("--image", default="an-graph-studio:headless")
     p.add_argument("--browser", action="store_true")
     p.add_argument("--directory", type=Path)
-    p.add_argument("--experiment", choices=["bridge", "cad"], default="bridge")
+    p.add_argument("--experiment", choices=["bridge", "bridge-model", "cad"], default="bridge")
     p.add_argument("--choice", choices=["A", "B"], default="B")
     args = p.parse_args()
     if args.directory:

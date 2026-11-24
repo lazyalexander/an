@@ -44,6 +44,9 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
     }
     let mut db = connect()?;
     let _lock = instances::lock(&db, task)?;
+    if matches!(action, "control" | "view" | "finish") {
+        super::model::reconcile_sends(&db, task)?;
+    }
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let t = get(&tx, "task", task)?;
     if action == "open" || action == "resume" {
@@ -291,13 +294,21 @@ fn control(
     let mut runs = vec![];
     let mut drivers = vec![];
     if kind == "stop" {
+        let nodes = graph["nodes"].clone();
         for (id, state) in graph["activity"]
             .as_object_mut()
             .context("Invalid graph activity")?
         {
             let attempt = state["id"].as_str().unwrap_or_default().to_owned();
+            if nodes[id]["kind"] == "model" {
+                super::model::release_unsent(tx, &attempt, "Task stopped before send")?;
+            }
             let has_run = !attempt.is_empty() && find(tx, "run", &attempt)?.is_some();
             match state["status"].as_str() {
+                Some("running" | "unknown") if nodes[id]["kind"] == "model" => {
+                    state["status"] = json!("cancelled");
+                    cancelled.push(id.clone());
+                }
                 Some("running" | "unknown") if has_run => runs.push(attempt),
                 Some("queued" | "permission_required" | "waiting" | "saving") if !has_run => {
                     if let Some(instance) = state["instance"].as_str() {

@@ -63,6 +63,10 @@ enum Task {
         selector: Selector,
         #[arg(long)]
         input: Vec<PathBuf>,
+        #[arg(long)]
+        model: Option<String>,
+        #[arg(long, requires = "model")]
+        model_calls: Option<u64>,
     },
     Resume {
         delivery: String,
@@ -294,9 +298,19 @@ pub fn execute() -> Result<Value> {
                             images.contains(s)
                                 && d.as_str().is_some_and(|k| cfg["tools"].get(k).is_some())
                         }
-                        Some("handoff") => images.contains(s) && images.contains(d),
+                        Some("model") => {
+                            graph_origin(images, s)
+                                && d.as_str().is_some_and(|v| v.starts_with("model:"))
+                        }
+                        Some("handoff") => {
+                            (images.contains(s)
+                                || s.as_str().is_some_and(|v| v.starts_with("model:")))
+                                && images.contains(d)
+                        }
                         Some("preview") => graph_origin(images, s) && d == "studio",
-                        Some("publish") => graph_origin(images, s) && d == &id,
+                        Some("publish") => {
+                            graph_origin(images, s) && (d == &id || d == "graph-metadata")
+                        }
                         Some("export") => {
                             graph_origin(images, s)
                                 && d.as_str().is_some_and(|v| v.starts_with('/'))
@@ -318,9 +332,11 @@ pub fn execute() -> Result<Value> {
                     grants,
                     selector,
                     input,
+                    model,
+                    model_calls,
                 },
         } => {
-            if let Some(key) = selector.identity()? {
+            let result = if let Some(key) = selector.identity()? {
                 ensure!(
                     grants.spool.is_empty()
                         && grants.allow_tool.is_empty()
@@ -330,8 +346,8 @@ pub fn execute() -> Result<Value> {
                 );
                 json!({"task":resolve(&tx,&key,true)?})
             } else {
-                if grants.spool.is_empty() && grants.allow_tool.is_empty() {
-                    bail!("Grant a spool or a downstream tool")
+                if grants.spool.is_empty() && grants.allow_tool.is_empty() && model.is_none() {
+                    bail!("Grant a spool, model or downstream tool")
                 }
                 let (images, tools) = resolve_grants(&tx, &grants)?;
                 let (id, mut t) = new_task(&tx, &images, &grants.editable, inputs(&tx, &input)?)?;
@@ -340,7 +356,16 @@ pub fn execute() -> Result<Value> {
                 }
                 put(&tx, "task", &id, &t)?;
                 json!({"task":id,"mcp_servers":config(json!(["mcp","--task",id]))?})
+            };
+            if let Some(alias) = model {
+                let cfg = crate::config::load()?;
+                let resolved = cfg.aliases().get(&alias).context("Unknown model alias")?;
+                let id = result["task"].as_str().unwrap();
+                let mut t = get(&tx, "task", id)?;
+                t["model_grant"] = json!({"alias":alias,"model":resolved,"budget":model_calls.unwrap_or_else(|| cfg.limit("model_default_calls"))});
+                put(&tx, "task", id, &t)?;
             }
+            result
         }
         Command::Task {
             action: Task::Resume { delivery, editable },
@@ -379,7 +404,7 @@ fn graph_origin(images: &[Value], source: &Value) -> bool {
         || source == "response"
         || source
             .as_str()
-            .is_some_and(|s| s.starts_with("task-input:"))
+            .is_some_and(|s| s.starts_with("task-input:") || s.starts_with("model:"))
 }
 
 pub(crate) fn resume_graph(

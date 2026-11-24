@@ -4,7 +4,7 @@ Settings and user-facing text are configuration, not code.
 
 ## An host
 
-Operational defaults live in [`config/an.json`](../config/an.json) and are compiled into the binary. A host overrides any of them in `$AN_HOME/config.json`. Unknown keys and values that are not positive integers are rejected, so a typo fails instead of being ignored.
+Operational defaults live in [`config/an.json`](../config/an.json) and are compiled into the binary. A host overrides any of them in `$AN_HOME/config.json`. Unknown keys are rejected. Numeric settings require positive integers.
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
@@ -15,6 +15,12 @@ Operational defaults live in [`config/an.json`](../config/an.json) and are compi
 | `transfer_limit_bytes` | 33554432 | Bytes a bridge may return per call |
 | `graph_expansion_budget` | 256 | Nodes drivers may add to one task |
 | `instruction_max_bytes` | 4096 | Size of one relayed instruction |
+| `model_aliases` | `{"local":"qwen3:8b"}` | Trusted alias mapping to installed local Ollama models |
+| `model_default_calls` | 4 | Task quota when the host grants an alias |
+| `ollama_port` | 11434 | Ollama port on 127.0.0.1 |
+| `model_timeout_s` | 120 | HTTP request timeout |
+| `model_input_bytes` | 16384 | Maximum frozen request size |
+| `model_output_tokens` | 256 | Generation limit supplied to Ollama |
 
 Format contracts that admission depends on stay in code: the 64 KiB `spool.yaml` limit, export path budgets and digest shape. An image is therefore admitted identically on every host.
 

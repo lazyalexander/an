@@ -20,7 +20,7 @@ def initial_driver(experiment, spool):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("experiment", choices=["bridge", "cad"])
+    parser.add_argument("experiment", choices=["bridge", "bridge-model", "cad"])
     parser.add_argument("--an", type=Path, default=ROOT / "target/debug/an")
     parser.add_argument("--image", default="an-graph-studio:headless")
     parser.add_argument("--port", type=int, default=0)
@@ -55,7 +55,7 @@ def main():
         workspace = call("workspace", "create", "--spool", spool)["workspace"]
         selector = ["--harness", "graph-demo", "--key", workspace]
         call("workspace", "bind", workspace, *selector)
-        task = call("task", "new", *selector)["task"]
+        task = call("task", "new", *selector, *(["--model","local"] if options.experiment=="bridge-model" else []))["task"]
     env["AN_TURN"] = call("permission", "begin", "--task", task)["turn"]
 
     def graph(action, **args):
@@ -72,7 +72,7 @@ def main():
             if not closed:
                 state = graph("view")
                 for node_id, activity in state["activity"].items():
-                    if activity["status"] == "failed":
+                    if activity["status"] in ("failed", "unknown"):
                         raise RuntimeError(f"{node_id} failed: {activity.get('error', 'unknown error')}")
                 if any(node.get("delivery") for node in state["activity"].values()):
                     for instance in call("state", "--task", task)["instances"]:
