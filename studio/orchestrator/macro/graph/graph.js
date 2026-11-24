@@ -158,10 +158,10 @@ async function render() {
   const title=id=>view.nodes[id]?.title || id;
   el("task").textContent = view.task;
   renderControls();
-  el("graph-nodes").replaceChildren(...nav(activity.map(([id,s])=>[id,title(id)+" · "+(labels[s.status]||s.status)]),
+  el("graph-nodes").replaceChildren(...nav(activity.map(([id,s])=>[id,title(id)+" · "+statusLabel(s.status)]),
     selection?.kind==="node" && selection.id,id=>select("node",id)));
   const active=activity.filter(([id,s])=>!["done","queued","superseded"].includes(s.status) || (selection?.kind==="node" && selection.id===id));
-  el("activity").replaceChildren(...nav(active.map(([id,s])=>[id,title(id)+" · "+(labels[s.status]||s.status)]),
+  el("activity").replaceChildren(...nav(active.map(([id,s])=>[id,title(id)+" · "+statusLabel(s.status)]),
     selection?.kind==="node" && selection.id,id=>select("node",id)));
   el("deliveries").replaceChildren(...nav(deliveries.map(d=>[d.id,d.title || d.node]),selection?.kind==="delivery" && selection.id,id=>select("delivery",id)));
   el("permissions").replaceChildren(...view.permissions.map(r=>{
