@@ -10,7 +10,9 @@
       "done": "已完成", "failed": "失败", "unknown": "结果未知", "superseded": "已替换",
       "permission_required": "等待授权", "cancelled": "已取消"
     },
-    "panel": {"left": "面板已离开绑定的文档", "responded": "回应已提交", "timeout": "面板加载超时", "reload": "重新加载"},
+    "panel": {
+      "submit": "提交决定", "basic": "基础表单", "custom": "专用面板",
+      "left": "面板已离开绑定的文档", "responded": "回应已提交", "timeout": "面板加载超时", "reload": "重新加载"},
     "permission": {"request": "授权 {operation} · {scope} ", "details": "请求详情", "allow_once": "允许一次", "deny": "拒绝"},
     "task": {
       "awaiting_submission": "等待任务提交", "awaiting_authority": "等待有效的宿主授权",

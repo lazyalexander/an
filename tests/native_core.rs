@@ -225,25 +225,23 @@ impl Fixture {
     fn graph_task() -> Self {
         use base64::{engine::general_purpose::STANDARD, Engine};
         let mut f = Fixture::new();
-        let schema = json!({"type":"object","properties":{"choice":{"type":"string","enum":["A","B"]}},"required":["choice"]});
-        let manifest = json!({"version":1,"entry":"index.html","files":{"index.html":"<p>Compare</p>"},"bindings":[],"response":schema});
         f.insert(
             "revision",
             "panel",
-            json!({"panel.json":STANDARD.encode(manifest.to_string())}),
+            json!({"spool/code/panels/test.html":STANDARD.encode("<p>Compare</p>")}),
         );
+        f.insert("admission","demo",json!({"code_revision":"panel","manifest_digest":"example","manifest":{"schema":"an.spool/v2","panels":{"choice":{"kind":"surface","title":"Choose","bindings":["ui"],"html":"spool/code/panels/test.html","decision":{"type":"adjust","value_type":"string","field":"choice","options":["A","B"]}}}}}));
         f.insert(
             "task",
             "task",
-            json!({"work":{},"inputs":{"package":"panel"}}),
+            json!({"work":{"test@demo":"work"},"inputs":{"package":"panel"}}),
         );
         f.insert("turn", "task", json!("active"));
         f.turn = Some("active".into());
         f
     }
     fn surface(id: &str) -> Value {
-        json!({"id":id,"kind":"surface","package":"ui","inputs":{"ui":{"input":"package"}},
-        "outputs":["response"],"response":{"type":"object","properties":{"choice":{"type":"string","enum":["A","B"]}},"required":["choice"]}})
+        json!({"id":id,"kind":"surface","panel":"choice","spool":"test@demo","inputs":{"ui":{"input":"package"}},"outputs":["response"]})
     }
     fn decide_graph(&self, decision: &str) {
         for request in self
@@ -502,11 +500,21 @@ fn captured_driver_proposal_is_reconciled_atomically_under_its_authority() {
     use base64::{engine::general_purpose::STANDARD, Engine};
     use sha2::{Digest, Sha256};
     let stamp = format!("{:x}", Sha256::digest(br#"["active", "legacy", "legacy"]"#));
-    for case in ["valid", "invalid", "expired", "denied", "budget"] {
+    for case in [
+        "valid",
+        "invalid",
+        "legacy-panel",
+        "expired",
+        "denied",
+        "budget",
+    ] {
         let f = Fixture::graph_task();
         let mut children = vec![Fixture::surface("child")];
         if case == "invalid" {
             children.push(Fixture::surface("driver"));
+        }
+        if case == "legacy-panel" {
+            children[0]["package"] = json!("ui");
         }
         if case == "budget" {
             children = (0..2)
@@ -795,4 +803,138 @@ fn host_config_overrides_limits_and_rejects_unknown_settings() {
         .graph("view", json!({}))
         .unwrap_err()
         .contains("positive integer"));
+}
+
+#[test]
+fn new_submissions_require_admitted_panels_but_legacy_receipts_and_deliveries_reopen() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let f = Fixture::graph_task();
+    let legacy = json!({"id":"old","kind":"surface","package":"ui","inputs":{"ui":{"input":"package"}},"response":{"type":"object","properties":{}},"outputs":["response"]});
+    let submission =
+        |node: Value| json!({"base_revision":0,"idempotency_key":"one","nodes":[node]});
+    for node in [
+        legacy.clone(),
+        json!({"id":"pub","kind":"delivery","package":"ui","inputs":{"ui":{"input":"package"}},"outputs":[]}),
+        {
+            let mut n = Fixture::surface("bad");
+            n["spool"] = json!("other@demo");
+            n
+        },
+        {
+            let mut n = Fixture::surface("bad");
+            n["panel"] = json!("absent");
+            n
+        },
+        {
+            let mut n = Fixture::surface("bad");
+            n["response"] = json!({});
+            n
+        },
+    ] {
+        assert!(f.graph("submit", submission(node)).is_err());
+    }
+    let args = submission(legacy.clone());
+    let receipt = json!({"revision":1});
+    f.insert(
+        "graph_submission",
+        r#"["task", "one"]"#,
+        json!({"args":args,"receipt":receipt}),
+    );
+    f.insert("graph","task",json!({"revision":1,"nodes":{"old":legacy},"activity":{"old":{"status":"done"}},"events":[]}));
+    assert_eq!(f.graph("submit", args).unwrap(), receipt);
+    let html = "<p>Historical delivery</p>";
+    let pkg = json!({"version":1,"entry":"index.html","files":{"index.html":html},"bindings":[],"response":null});
+    f.insert(
+        "revision",
+        "old-ui",
+        json!({"panel.json":STANDARD.encode(pkg.to_string())}),
+    );
+    f.insert("graph_delivery","published",json!({"id":"published","task":"task","package":"ui","bindings":{"ui":{"revision":"old-ui"}}}));
+    assert_eq!(
+        f.graph("open", json!({"delivery":"published"})).unwrap()["html"],
+        html
+    );
+
+    // An already waiting v1 surface retains its original attempt and authority.
+    use sha2::{Digest, Sha256};
+    let stamp = format!("{:x}", Sha256::digest(br#"["active", "legacy", "legacy"]"#));
+    let mut interactive = pkg;
+    interactive["response"] = legacy["response"].clone();
+    f.insert(
+        "revision",
+        "old-decision",
+        json!({"panel.json":STANDARD.encode(interactive.to_string())}),
+    );
+    f.insert("graph","task",json!({"revision":1,"nodes":{"old":legacy},"activity":{"old":{
+        "id":"existing","status":"waiting","authority":stamp,"bindings":{"ui":{"revision":"old-decision"}}
+    }},"events":[]}));
+    let request = json!({"node":"old","request":"existing"});
+    assert_eq!(f.graph("panel", request.clone()).unwrap()["html"], html);
+    f.graph("viewed", request.clone()).unwrap();
+    assert_eq!(
+        f.graph(
+            "respond",
+            json!({"node":"old","request":"existing","value":{}})
+        )
+        .unwrap()["status"],
+        "done"
+    );
+}
+
+#[test]
+fn interactive_and_json_answers_compete_for_one_attempt() {
+    use std::{io::Write, process::Stdio};
+    let f = Fixture::graph_task();
+    f.graph(
+        "submit",
+        json!({"base_revision":0,"idempotency_key":"ask","nodes":[Fixture::surface("question")]}),
+    )
+    .unwrap();
+    f.decide_graph("once");
+    let list = f.call(&["decision", "list", "--task", "task"]);
+    let request = list[0]["request"].as_str().unwrap();
+    let answer = |json: bool, data: &[u8]| {
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_an"));
+        cmd.args([
+            "decision",
+            "answer",
+            "--task",
+            "task",
+            "--node",
+            "question",
+            "--request",
+            request,
+        ]);
+        if json {
+            cmd.args(["--json", "-"]);
+        }
+        let mut child = cmd
+            .env("AN_HOME", &f.root)
+            .env("AN_TURN", "active")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        child.stdin.take().unwrap().write_all(data).unwrap();
+        child
+    };
+    assert!(!answer(true, br#"{"choice":"invalid"}"#)
+        .wait()
+        .unwrap()
+        .success());
+    let mut a = answer(false, b"invalid\nA\n");
+    let mut b = answer(true, br#"{"choice":"B"}"#);
+    assert_ne!(a.wait().unwrap().success(), b.wait().unwrap().success());
+    let state = f.graph("state", json!({})).unwrap();
+    assert_eq!(
+        state["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "responded")
+            .count(),
+        1
+    );
+    assert!(!answer(true, br#"{"choice":"A"}"#).wait().unwrap().success());
 }

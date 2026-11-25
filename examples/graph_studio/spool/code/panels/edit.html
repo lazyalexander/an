@@ -1,0 +1,17 @@
+<style>*{box-sizing:border-box}body{margin:24px;font:16px/1.5 system-ui;color:#234239}
+h2{font-size:20px}fieldset{border:0;padding:0;display:flex;gap:14px}label{display:block}
+figure{margin:0;position:relative}img{width:100%;display:block;border-radius:6px}
+button{padding:8px 12px;margin-top:10px}textarea{display:block;width:100%;min-height:52px}
+mark{position:absolute;pointer-events:none;transform:translate(-50%,-50%);border:3px solid #fff;
+border-radius:50%;width:22px;height:22px;background:transparent;box-shadow:0 0 0 2px #b14924}</style><h2>添加第二次标注</h2><figure><img id="preview" alt="第一版绘画"><mark hidden></mark></figure>
+    <button id="save" disabled>保存第二版</button><script>
+    addEventListener("an-ready",()=>{
+      let point=an.draft;
+      preview.src="data:image/svg+xml;base64,"+an.files.preview["selected.svg"];
+      const mark=document.querySelector("mark");
+      function place(){mark.hidden=false;mark.style.left=point.x*100+"%";mark.style.top=point.y*100+"%";save.disabled=false;}
+      if(point)place();
+      preview.onclick=e=>{const r=preview.getBoundingClientRect();point={x:(e.clientX-r.left)/r.width,y:(e.clientY-r.top)/r.height};
+        place();an.saveDraft(point);};
+      save.onclick=()=>an.respond(point);
+    });</script>

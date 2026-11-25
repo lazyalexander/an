@@ -10,6 +10,7 @@ const [mode, experiment, directory, choice="B",note="edge"] = process.argv.slice
     await page.goto(fs.readFileSync(0,"utf8").trim());
     const panel=page.frameLocator("iframe");
     const bridge=experiment==="bridge";
+    if (bridge && ["respond","revise"].includes(mode)) await page.getByRole("button",{name:"专用面板"}).click();
     if(mode==="cross-evidence"){
       await page.locator("#deliveries button").first().click();
       await page.locator("#sources summary").first().click();
@@ -29,20 +30,22 @@ const [mode, experiment, directory, choice="B",note="edge"] = process.argv.slice
         await panel.locator(`#fig${choice} img`).click();
         await panel.locator("#note").fill(note);
       }else{
-        await panel.locator("#speed").focus();
-        await panel.locator("#speed").press("Home");
-        await panel.locator("#speed").press("ArrowRight");
+        const speed = page.getByLabel("seconds");
+        assert.equal(await speed.inputValue(),"3");
+        await speed.selectOption("2");
       }
       await draftSaved;
       await page.reload();
+      if (bridge) await page.getByRole("button",{name:"专用面板"}).click();
       if(bridge){
         assert.equal(await panel.locator("#note").inputValue(),note);
         assert.equal(await panel.locator(`#${choice}`).isChecked(),true);
-      }else assert.equal(await panel.locator("#speed").inputValue(),"2");
+      }else assert.equal(await page.getByLabel("seconds").inputValue(),"2");
       await page.screenshot({path:directory+"/panel.png"});
       await page.setViewportSize({width:390,height:844});
       await page.screenshot({path:directory+"/mobile.png"});
-      await panel.locator(bridge?"#send":"#apply").click();
+      if (bridge) await panel.locator("#send").click();
+      else await page.getByRole("button",{name:"提交决定"}).click();
       await page.getByText(bridge?"等待文档保存":"已完成",{exact:true}).first().waitFor();
     }else{
       if(bridge){

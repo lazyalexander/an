@@ -1,9 +1,11 @@
 mod artifacts;
 mod config;
+mod decision;
 mod graph;
 mod instances;
 mod manifest;
 mod mcp;
+mod panels;
 mod permission;
 mod runtime;
 mod store;
@@ -61,6 +63,10 @@ enum Core {
         #[command(flatten)]
         target: Task,
         action: String,
+    },
+    Decision {
+        #[command(subcommand)]
+        action: decision::Action,
     },
     State(Task),
     Load {
@@ -258,6 +264,7 @@ fn run() -> Result<()> {
             display(graph::host(&target.task, &action, &args)?);
             Ok(())
         }
+        Core::Decision { action } => decision::execute(action),
         Core::State(t) => call(t, &op, json!({})),
         Core::Load { target, spool } => call(target, &op, json!({"spool":spool})),
         Core::Unload { target, instance } => call(target, &op, json!({"instance":instance})),

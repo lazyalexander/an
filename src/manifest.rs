@@ -24,15 +24,16 @@ pub fn parse(raw: &[u8]) -> Result<Value> {
         parser.next_token()?.0 == Event::DocumentEnd && parser.next_token()?.0 == Event::StreamEnd,
         "Expected one YAML document"
     );
-    fields(
-        &value,
-        &["schema", "name", "summary", "inputs", "outputs"],
-        "manifest",
-    )?;
-    ensure!(
-        value["schema"] == "an.spool/v1",
-        "Unsupported manifest schema"
-    );
+    let mut keys = vec!["schema", "name", "summary", "inputs", "outputs"];
+    match value["schema"].as_str() {
+        Some("an.spool/v1") => (),
+        Some("an.spool/v2") => {
+            keys.push("panels");
+            crate::panels::validate(&value["panels"])?;
+        }
+        _ => bail!("Unsupported manifest schema"),
+    }
+    fields(&value, &keys, "manifest")?;
     name(&value["name"], "name")?;
     description(&value["summary"], "summary")?;
     for direction in ["inputs", "outputs"] {
@@ -124,8 +125,7 @@ fn node<I: Iterator<Item = char>>(
         _ => bail!("Unexpected YAML node, anchor, alias or explicit tag"),
     }
 }
-// Resolve the scalar types used by the previous spool/v1 YAML reader. Numeric,
-// timestamp and null scalars have no valid field in this manifest contract.
+// Resolve numeric decision options while preserving v1 string and boolean checks.
 fn plain(value: &str) -> Value {
     static NON_STRING: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
         regex::Regex::new(
@@ -134,6 +134,9 @@ fn plain(value: &str) -> Value {
         |[-+]?[0-9][0-9_]*(?::[0-5]?[0-9])+\.[0-9_]*|[-+]?\.(?:inf|Inf|INF)|\.(?:nan|NaN|NAN)
         |[0-9]{4}-[0-9]{2}-[0-9]{2}|[0-9]{4}-[0-9]{1,2}-[0-9]{1,2}(?:[Tt]|[\x20\t]+)[0-9]{1,2}:[0-9]{2}:[0-9]{2}(?:\.[0-9]*)?(?:[\x20\t]*(?:Z|[-+][0-9]{1,2}(?::[0-9]{2})?))?)$").unwrap()
     });
+    if let Ok(n) = serde_json::from_str::<serde_json::Number>(value) {
+        return Value::Number(n);
+    }
     match value {
         "yes" | "Yes" | "YES" | "true" | "True" | "TRUE" | "on" | "On" | "ON" => json!(true),
         "no" | "No" | "NO" | "false" | "False" | "FALSE" | "off" | "Off" | "OFF" => json!(false),

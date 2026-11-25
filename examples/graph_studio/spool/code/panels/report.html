@@ -1,0 +1,17 @@
+<style>*{box-sizing:border-box}body{margin:24px;font:16px/1.5 system-ui;color:#234239}
+h2{font-size:20px}fieldset{border:0;padding:0;display:flex;gap:14px}label{display:block}
+figure{margin:0;position:relative}img{width:100%;display:block;border-radius:6px}
+button{padding:8px 12px;margin-top:10px}textarea{display:block;width:100%;min-height:52px}
+mark{position:absolute;pointer-events:none;transform:translate(-50%,-50%);border:3px solid #fff;
+border-radius:50%;width:22px;height:22px;background:transparent;box-shadow:0 0 0 2px #b14924}</style><h2>绘画参考与修改记录</h2>
+    <button id="original">原始参考</button> <button id="annotated">显示标注</button>
+    <img id="picture" alt="所选参考图"><p id="note"></p>
+    <script>addEventListener("an-ready",()=>{
+      const show=annotate=>{
+        picture.src="data:image/svg+xml;base64,"+(annotate?an.files.selected["selected.svg"]:an.files.original["candidate.svg"]);
+        original.setAttribute("aria-pressed",String(!annotate));annotated.setAttribute("aria-pressed",String(annotate));
+      };
+      original.onclick=()=>show(false);annotated.onclick=()=>show(true);show(true);
+      const result=JSON.parse(new TextDecoder().decode(Uint8Array.from(atob(an.files.choice["response.json"]),c=>c.charCodeAt(0))));
+      note.textContent=result.choice+" · "+result.note+" ("+result.x.toFixed(2)+", "+result.y.toFixed(2)+")";
+    });</script>

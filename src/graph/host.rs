@@ -10,8 +10,19 @@ pub(super) fn package(
     for (name, binding) in bindings.as_object().context("Expected package bindings")? {
         data[name] = get(db, "revision", field(binding, "revision")?)?;
     }
+    if let Some(panel) = entry.get("declaration") {
+        let mut result = json!({"files":data,"declaration":panel,"response":schema,"assets":{}});
+        if let Some(path) = panel["html"].as_str() {
+            let files = get(db, "revision", field(entry, "code_revision")?)?;
+            result["html"] = json!(String::from_utf8(artifacts::bytes(&files[path])?)?);
+        }
+        return Ok(result);
+    }
     if entry.is_null() {
         return Ok(json!({"files":data}));
+    }
+    if !schema.is_null() {
+        validation::validate_schema(schema)?;
     }
     let name = entry.as_str().context("Expected package binding")?;
     let files = data
@@ -202,10 +213,18 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
         "Stale surface"
     );
     let request = field(&state, "id")?.to_owned();
-    if action == "panel" {
+    if matches!(action, "panel" | "decision") {
         ensure!(state["status"] == "waiting", "Surface closed");
+        let draft = find(&tx, "graph_draft", &request)?.unwrap_or(Value::Null);
+        if action == "decision" {
+            ensure!(
+                node["package"].get("declaration").is_some(),
+                "Expected a declared decision"
+            );
+            return Ok(json!({"draft":draft}));
+        }
         let mut result = package(&tx, &state["bindings"], &node["package"], &node["response"])?;
-        result["draft"] = find(&tx, "graph_draft", &request)?.unwrap_or(Value::Null);
+        result["draft"] = draft;
         return Ok(result);
     }
     if action == "viewed" {
@@ -238,6 +257,21 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
             "Surface closed or unseen"
         );
         response_valid(&node["response"], response)?;
+        if node["package"]
+            .get("declaration")
+            .is_some_and(|p| p["decision"]["type"] == "region")
+        {
+            for (position, size) in [("x", "width"), ("y", "height")] {
+                let start = response[position]
+                    .as_f64()
+                    .context("Invalid region origin")?;
+                let length = response[size].as_f64().context("Invalid region size")?;
+                ensure!(
+                    length > 0.0 && start + length <= 1.0,
+                    "Region extends outside artifact or has zero area"
+                );
+            }
+        }
         state["response"] = response.clone();
         let rev = revision(
             &tx,
