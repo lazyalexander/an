@@ -34,3 +34,26 @@ outputs:
 All shown keys are required. Either port list may be empty. Names start with a lowercase ASCII letter and contain up to 64 lowercase letters, digits or hyphens. Port names must be unique within each direction. Supply nonblank descriptions and a nonempty list of distinct concrete media types without parameters. These declarations help the agent choose a spool. Runtime authorization continues to use workspace and harness policies.
 
 An reads one YAML document, at most 64 KiB, with at most 16 nested collections and 4096 nodes. Duplicate and unknown keys, anchors, aliases, merge keys and explicit tags are rejected. Registration checks the actual image export and binds the manifest digest to the admitted image and platform variant. Existing spool/v1 admissions need re-registration. Rebuild images missing the manifest before registering their new digest. Task state exposes the name and summary; an_skill returns the full admitted interface.
+
+### Declaring panels with an.spool/v2
+
+Use the v1 interface fields and add a `panels` map (which can be empty). Each entry declares a title, kind, required binding names and optionally an `optional` list of additional binding names. These are the panel's artifact slots, independent of guest command ports. An optional `html` path refers to a self-contained regular UTF-8 document under `spool/code/panels/` in the image. The file must fit the admitted code snapshot (1 MiB per file, 8 MiB in total). Existing v1 manifests remain supported.
+
+```yaml
+panels:
+  timing:
+    title: Rotation period in seconds
+    kind: surface
+    bindings: []
+    decision: {type: adjust, field: seconds, value_type: integer, options: [1, 2, 3, 4, 5], default: 3}
+```
+
+| Decision | Required response |
+| --- | --- |
+| `choose`, `compare` | `choice` names one of at least two required artifact bindings |
+| `point` | Normalized `x` and `y` on a bound artifact |
+| `region` | Normalized `x`, `y`, `width`, `height` on a bound artifact |
+| `adjust` | The named `field` of `value_type` (integer, number or string), optionally constrained by `options` and initialized with `default` |
+| `confirm` | Boolean `confirmed` |
+
+Use `decision.extra` to add required text or coordinate fields. Every surface, including a custom HTML one, requires a decision. A delivery panel declares `kind: delivery` and only presents the bound published files. See the full Bridge and CAD declarations in `examples/graph_studio/spool/spool.yaml`.

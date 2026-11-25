@@ -28,8 +28,11 @@ function button(label, action) {
   return b;
 }
 function status(message) { el("status").textContent = message; }
+let flushPanel = () => Promise.resolve();
 function clearPanel() {
+  flushPanel = () => Promise.resolve();
   panelEpoch++;
+  el("content").inert = false;
   clearTimeout(panelTimer);
   channel?.close();
   channel = frame = null;
@@ -51,6 +54,55 @@ function filesPanel(files, parent = el("content")) {
     }
   }
 }
+async function basicPanel(pkg, ref, epoch) {
+  if (epoch !== panelEpoch) return;
+  filesPanel(pkg.files);
+  const form = document.createElement("form");
+  const inputs = new Map();
+  for (const [key, rule] of Object.entries(pkg.response.properties)) {
+    const label = document.createElement("label");
+    label.textContent = key + " ";
+    const options = rule.enum || (rule.type === "boolean" ? [true,false] : null);
+    const input = document.createElement(options ? "select" : "input");
+    if (options) {
+      for (const value of options) input.add(new Option(String(value), JSON.stringify(value)));
+    } else if (rule.type !== "string") {
+      input.type = "number";
+      input.step = rule.type === "integer" ? "1" : "any";
+      input.required = true;
+      if (rule.minimum !== undefined) input.min = rule.minimum;
+      if (rule.maximum !== undefined) input.max = rule.maximum;
+    }
+    const decision = pkg.declaration.decision;
+    const initial = pkg.draft?.[key] ?? (decision.field === key ? decision.default : undefined);
+    if (initial !== undefined) input.value = options ? JSON.stringify(initial) : initial;
+    inputs.set(key, () => options ? JSON.parse(input.value) : input.type === "number" ? input.valueAsNumber : input.value);
+    label.append(input);
+    form.append(label);
+  }
+  const values = () => Object.fromEntries([...inputs].map(([key,read]) => [key,read()]));
+  let writes = Promise.resolve();
+  flushPanel = () => writes;
+  form.oninput = () => {
+    const value = values();
+    writes = writes.catch(()=>{}).then(()=>api("draft",{...ref,value}));
+    writes.catch(error=>status(error.message));
+  };
+  const submit = document.createElement("button");
+  submit.disabled = true;
+  submit.textContent = t("panel.submit");
+  form.append(submit);
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (submit.disabled || epoch !== panelEpoch) return;
+    try { await writes; await api("respond",{...ref,value:values()}); await update(); }
+    catch (error) { status(error.message); }
+  };
+  el("content").append(form);
+  await api("viewed", ref);
+  if (epoch === panelEpoch) submit.disabled = false;
+}
+let customRequest = null;
 function mount(pkg, ref, epoch) {
   frame = document.createElement("iframe");
   frame.title = el("title").textContent;
@@ -68,6 +120,7 @@ function mount(pkg, ref, epoch) {
       const fault=message=>port.postMessage({type:"error",message:String(message)});
       addEventListener("error",e=>fault(e.message));
       port.onmessage=({data})=>{
+        if(data.type==="flush"){port.postMessage({type:"flushed"});return;}
         if(data.type!=="init"){
           dispatchEvent(new CustomEvent("an-result",{detail:data}));
           return;
@@ -107,8 +160,14 @@ function mount(pkg, ref, epoch) {
     channel = pair.port1;
     // Keep edits and submission in message order, including a slow draft write.
     let chain = Promise.resolve();
+    let flushed;
+    flushPanel = () => new Promise(resolve => {
+      flushed = resolve;
+      pair.port1.postMessage({type:"flush"});
+    }).then(()=>chain);
     channel.onmessage = ({data}) => {
       if (epoch !== panelEpoch || !data) return;
+      if(data.type==="flushed"){flushed?.();return;}
       if(data.type==="error"){panelError(data.message);return;}
       if (data.type === "ready") {
         clearTimeout(panelTimer);
@@ -116,13 +175,14 @@ function mount(pkg, ref, epoch) {
         return;
       }
       if (!ref || !["draft","respond"].includes(data.type)) return;
-      chain = chain.then(async () => {
+      chain = chain.catch(()=>{}).then(async () => {
         if (epoch !== panelEpoch) return;
         const result = await api(data.type, {...ref,value:data.value});
         if (epoch !== panelEpoch) return;
         channel.postMessage({type:"saved",operation:data.type,status:result.status});
         if (data.type === "respond") {status(t("panel.responded"));await update();}
-      }).catch(e => {if(epoch===panelEpoch)status(e.message);});
+      });
+      chain.catch(e => {if(epoch===panelEpoch)status(e.message);});
     };
     target.contentWindow.postMessage("an:init", "*", [pair.port2]);
     channel.postMessage({type:"init",html:pkg.html,assets:pkg.assets,files:pkg.files,draft:pkg.draft});
@@ -133,6 +193,9 @@ function mount(pkg, ref, epoch) {
 function panelError(message) {
   clearPanel();
   status(message);
+  if (customRequest && selection?.kind === "node" && view.activity[selection.id]?.id === customRequest) {
+    el("controls").append(button(t("panel.basic"), () => {customRequest=null;instanceKey=null;return render();}));
+  }
   el("controls").append(button(t("panel.reload"), () => {instanceKey=null;return render();}));
 }
 function select(kind,id) {selection = {kind,id};return render();}
@@ -189,7 +252,28 @@ async function render() {
       const ref=kind==="delivery"?null:{node:id,request:s.id};
       const pkg=ref?await api("panel",ref):await api("open",{delivery:id});
       if(epoch!==panelEpoch)return;
-      if(pkg.html) {
+      if (ref && pkg.declaration && pkg.html) {
+        const custom = customRequest === ref.request;
+        const toggle = button(t(custom ? "panel.basic" : "panel.custom"), async () => {
+          toggle.disabled = true;
+          el("content").inert = true;
+          try { await flushPanel(); }
+          finally {
+            if (epoch === panelEpoch) {
+              toggle.disabled = false;
+              el("content").inert = false;
+            }
+          }
+          if (epoch !== panelEpoch) return;
+          customRequest = custom ? null : ref.request;
+          instanceKey = null;
+          return render();
+        });
+        el("controls").append(toggle);
+      }
+      if (ref && pkg.declaration && customRequest !== ref.request) {
+        await basicPanel(pkg,ref,epoch);
+      } else if(pkg.html) {
         mount(pkg,ref,epoch);
         if(kind==="delivery"){
           const details=document.createElement("details"),heading=document.createElement("summary");

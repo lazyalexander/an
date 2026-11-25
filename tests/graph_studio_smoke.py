@@ -136,12 +136,18 @@ def exercise(directory, image, browser, experiment, choice):
             studio, url = start_studio()
             chrome("respond")
         else:
-            assert host("panel", **request)["html"]
+            assert host("panel", **request)["declaration"]["kind"] == "surface"
             host("viewed", **request)
             response = dict(choice=choice, x=.5, y=.25, note=note) if bridge else dict(seconds=2)
             host("draft", **request, value=response)
             assert host("panel", **request)["draft"] == response
-            host("respond", **request, value=response)
+            listed = json.loads(cli("decision","list","--task",task))
+            assert any(row["request"] == request["request"] for row in listed)
+            answer = ["decision","answer","--task",task,"--node",decision,"--request",request["request"]]
+            if bridge:
+                cli(*answer,"--json","-",body=response)
+            else:
+                subprocess.run([binary,*answer],env=env,input="6\n2\n",text=True,check=True)
         # Reconnect after the host persisted the response. The continuation
         # still needs its own handoff permission before it can run.
         agent.close()

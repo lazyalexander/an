@@ -161,9 +161,21 @@ fn validate_rule(rule: &Value) -> Result<()> {
     Ok(())
 }
 
-pub(super) fn response_valid(rule: &Value, value: &Value) -> Result<()> {
+pub(crate) fn response_valid(rule: &Value, value: &Value) -> Result<()> {
     if let Some(options) = rule["enum"].as_array() {
-        ensure!(options.contains(value), "Invalid response choice");
+        ensure!(
+            options
+                .iter()
+                .any(|option| crate::panels::option_equal(option, value)),
+            "Invalid response choice"
+        );
+    }
+    if let Some(n) = value.as_f64() {
+        ensure!(
+            rule["minimum"].as_f64().is_none_or(|min| n >= min)
+                && rule["maximum"].as_f64().is_none_or(|max| n <= max),
+            "Number outside allowed range"
+        );
     }
     match field(rule, "type")? {
         "object" => {

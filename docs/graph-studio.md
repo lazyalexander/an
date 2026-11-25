@@ -1,6 +1,6 @@
 # Incremental tasks in An Studio
 
-An Studio serves a task on loopback. The browser hosts its generated panels. Apple Container runs every business operation in a pinned spool, including document editing, save verification, model generation and export. The Rust host owns scheduling, versions and authorization. Python serves the host projection and the browser never receives the harness turn credential.
+An Studio serves a task on loopback. The browser hosts its admitted panels. Apple Container runs every business operation in a pinned spool, including document editing, save verification, model generation and export. The Rust host owns scheduling, versions and authorization. Python serves the host projection and the browser never receives the harness turn credential.
 
 ## Run an experiment
 
@@ -31,8 +31,8 @@ Call `an_graph_submit` with `base_revision`, `idempotency_key` and a `nodes` arr
 | `run` | Supply a granted digest-pinned `spool`, `argv` and output paths relative to `/output`. Input names match the admitted manifest. Each port receives its bound revision under `/input/<port>/`. Read-only spools support concurrent instances. Editable work is serialized. |
 | `expand` | Runs a pinned, read-only spool in a dedicated short-lived instance with the same input authorization as a run. Declare the single output `subgraph.json`. Write an object with a nonempty `nodes` array there. After confirmed driver cleanup, An requires output authorization for the exact proposal revision before copying its contents into graph metadata. The workspace flow is `["publish", driverSpool, "graph-metadata"]`. The cumulative per-task limit is configurable and defaults to 256 nodes. |
 | `model` | A granted model alias, one `request` binding containing `request.json`, and one output `result.json`. An runs local inference on the host. |
-| `surface` | `package` names an input binding. `response` declares an object schema with declared properties, array items, scalar types, optional enumerations and required keys. Declare the `response` output. For a verified save, add a `document` output and `save: {"node":"save-run","port":"file.ora"}`. The designated run can consume the provisional response. To generate the save run after the user responds, set `continuation` to a declared expand node bound to this response. The saver ID is reserved for this continuation, whose proposal must include it. Other consumers wait for the captured save. |
-| `delivery` | Bind the files to publish with `inputs`, use an empty `outputs` list and optionally name the interactive `package` binding. The group is published after authorization for all its members. |
+| `surface` | Use `spool` and `panel` to select an admitted decision. Bind the declared input names. Declare the `response` output. For a verified save, add a `document` output and `save: {"node":"save-run","port":"file.ora"}`. The designated run can consume the provisional response. To generate the save run after the user responds, set `continuation` to a declared expand node bound to this response. The saver ID is reserved for this continuation, whose proposal must include it. Other consumers wait for the captured save. |
+| `delivery` | Bind the files to publish with `inputs`, use an empty `outputs` list and optionally select a declared presentation using `spool` and `panel`. The group is published after authorization for all its members. |
 
 A repeated identical submission returns its original receipt. A stale base returns `status: conflict` and the current revision. A submission can include `retry` for failed or cancelled node IDs and `supersede` for unconsumed queued nodes or waiting surfaces. Submit replacement nodes under new IDs. An unknown run is reconciled by its reserved ID and kept for investigation.
 
@@ -64,28 +64,19 @@ The person controls a task through the host, never through the agent. Pass `{"ac
 
 The person can type to the agent. Pass `{"text": ..., "revision": N}` to `an graph --task TASK instruct` with the current `AN_TURN`, where `N` is the graph revision the person was looking at; Studio sends it from the box under the work area. An relays the text unchanged and never interprets it. The agent reads it from `an_graph_state` as an event with `actor: "user"`, `kind: "instruction"` and data `text`, `seen_revision`, `revision` and `stale`. `stale` is true when the graph moved on after the person looked. An instruction never answers a waiting surface; the agent may supersede that surface instead. Controls stay separate buttons. The size limit is `instruction_max_bytes` (see [Configuration](configuration.md)).
 
-## Panel packages
+## Declared panels and terminal decisions
 
-A package is a single JSON file produced by a run or imported as a task input. This package presents one confirmation button.
+For a new surface submit a pinned spool reference, a panel ID and artifact bindings. The host derives the response contract when accepting the graph. A read-only delivery can select a declared delivery panel or publish files directly. Previously stored graphs and deliveries retain their original package and request identity.
 
-```json
-{
-  "version": 1,
-  "entry": "index.html",
-  "files": {
-    "index.html": "<button id='accept'>Accept</button><script src='panel.js'></script>",
-    "panel.js": "addEventListener('an-ready', () => { document.querySelector('#accept').onclick = () => an.respond({accepted:true}) })"
-  },
-  "bindings": [],
-  "response": {
-    "type": "object",
-    "properties": {"accepted": {"type": "boolean"}},
-    "required": ["accepted"]
-  }
-}
+Studio opens the basic form and offers the admitted custom view through **专用面板**. For example, choose 2 in the CAD timing form or answer the same waiting request from a terminal with the active task turn:
+
+```sh
+an decision list --task "$task"
+an decision answer --task "$task" --node timing
+printf '%s\n' '{"seconds":2}' | an decision answer --task "$task" --node timing --request "$request" --json -
 ```
 
-The entry can include inline HTML, classic JavaScript and CSS, or name scripts and stylesheets in `files`. Declare each data binding except the package itself in `bindings`. Interactive deliveries use the same format and set `response` to null.
+The list includes the attempt ID, permitted fields and bound artifact versions. Pass the listed request ID when answering a previously inspected decision. Both input modes record the same viewed and responded events. Preview and handoff approvals still use the normal permission commands.
 
 The shell creates an opaque-origin iframe, connects a private message port, then delivers the package. On `an-ready`, `an.files` contains only the named file sets, with base64 file entries. Use `an.draft`, `an.saveDraft(value)` and `an.respond(value)` for a waiting surface. Polling preserves the mounted frame. A new request ID binds a new edit session. The host validates response shape, current authority and request identity and records successful responses once.
 

@@ -314,13 +314,9 @@
                   "type": "string"
                 }
               },
-              "package": {
+              "panel": {
                 "type": "string",
-                "description": "Name of the bound package input. Its JSON file has version:1, entry, files (relative paths to HTML/JS/CSS text), bindings (other input names), and response (null for a delivery). On an-ready, use an.files, an.draft, an.saveDraft(value) and an.respond(value)."
-              },
-              "response": {
-                "type": "object",
-                "description": "Object schema matching the package. Declare object properties, array items, scalar types, optional enum values, and required keys."
+                "description": "Panel ID declared by the task-authorized spool. Bind inputs by declared name."
               },
               "save": {
                 "type": "object",

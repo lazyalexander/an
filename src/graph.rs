@@ -8,7 +8,8 @@ pub use host::host;
 use host::package;
 use scheduler::advance;
 pub use scheduler::wake;
-use validation::{response_valid, validate, validate_schema};
+pub(crate) use validation::response_valid;
+use validation::validate;
 
 use crate::{artifacts, instances, permission, store::*};
 use anyhow::{ensure, Context, Result};
@@ -261,10 +262,6 @@ fn append_nodes(
             }
             "surface" => {
                 ensure!(
-                    node["inputs"].get(field(node, "package")?).is_some(),
-                    "Missing panel package binding"
-                );
-                ensure!(
                     if node.get("save").is_some() {
                         node["outputs"] == json!(["response", "document"])
                     } else {
@@ -272,7 +269,6 @@ fn append_nodes(
                     },
                     "Invalid surface outputs"
                 );
-                validate_schema(&node["response"])?;
             }
             "delivery" => {
                 ensure!(
@@ -280,14 +276,6 @@ fn append_nodes(
                         && node["outputs"] == json!([]),
                     "Expected delivery bindings"
                 );
-                if let Some(package) = node.get("package") {
-                    ensure!(
-                        node["inputs"]
-                            .get(package.as_str().context("Invalid package")?)
-                            .is_some(),
-                        "Missing package"
-                    );
-                }
             }
             _ => anyhow::bail!("Unknown node kind"),
         }
@@ -298,7 +286,57 @@ fn append_nodes(
                 "Duplicate output"
             );
         }
-        nodes.insert(id.to_owned(), node.clone());
+        let mut stored = node.clone();
+        if matches!(node["kind"].as_str(), Some("surface" | "delivery")) {
+            ensure!(
+                node.as_object().unwrap().keys().all(|k| matches!(
+                    k.as_str(),
+                    "id" | "kind"
+                        | "title"
+                        | "after"
+                        | "inputs"
+                        | "outputs"
+                        | "save"
+                        | "continuation"
+                        | "panel"
+                        | "spool"
+                )),
+                "New panels require an admitted declaration"
+            );
+            if node["kind"] == "surface"
+                || node.get("panel").is_some()
+                || node.get("spool").is_some()
+            {
+                let spool = field(node, "spool")?;
+                ensure!(
+                    record["work"].get(spool).is_some(),
+                    "Panel spool outside task"
+                );
+                let admission = get(
+                    db,
+                    "admission",
+                    spool.rsplit_once('@').context("Invalid spool")?.1,
+                )?;
+                let manifest = &admission["manifest"];
+                ensure!(
+                    manifest["schema"] == "an.spool/v2",
+                    "Expected v2 panel declaration"
+                );
+                let panel = manifest["panels"]
+                    .get(field(node, "panel")?)
+                    .context("Unknown panel")?;
+                ensure!(panel["kind"] == node["kind"], "Panel kind mismatch");
+                crate::panels::check_bindings(panel, &node["inputs"])?;
+                if stored.get("title").is_none() {
+                    stored["title"] = panel["title"].clone();
+                }
+                if node["kind"] == "surface" {
+                    stored["response"] = crate::panels::schema(panel)?;
+                }
+                stored["package"] = json!({"declaration":panel,"code_revision":admission["code_revision"],"manifest_digest":admission["manifest_digest"]});
+            }
+        }
+        nodes.insert(id.to_owned(), stored);
     }
     validate(nodes)?;
     for node in additions {

@@ -257,6 +257,28 @@ fn layout(reader: impl Read) -> Result<Value> {
                         .all(|p| paths.get(p).is_some_and(|(t, _)| t.is_dir()))),
         "Invalid spool layout"
     );
+    for (id, panel) in result["manifest"]["panels"]
+        .as_object()
+        .into_iter()
+        .flatten()
+    {
+        if let Some(path) = panel["html"].as_str() {
+            let file = Path::new(path);
+            ensure!(
+                file.ancestors()
+                    .skip(1)
+                    .filter(|p| !p.as_os_str().is_empty())
+                    .all(|p| paths.get(p).is_some_and(|(ty, _)| ty.is_dir())),
+                "Invalid panel directory: {id}"
+            );
+            let bytes = crate::artifacts::bytes(&code[path])
+                .with_context(|| format!("Missing or oversized panel HTML: {id}"))?;
+            ensure!(
+                !std::str::from_utf8(&bytes)?.trim().is_empty(),
+                "Empty panel HTML: {id}"
+            );
+        }
+    }
     result["code_files"] = code;
     result["code_omissions"] = json!(omissions);
     Ok(result)
