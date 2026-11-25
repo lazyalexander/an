@@ -84,7 +84,7 @@ A pipeline without the macro UI still needs somewhere to present surfaces and pe
 | Subagent authority as a strict subset of its parent | Partial: drivers see bound inputs and granted spools; model aliases and call quotas are task-scoped |
 | Model-backed subagents inside drivers | Bridge model mode uses a host-mediated inference result to choose the next subgraph |
 | Presentation without the macro UI (CLI / harness rendering of decision types) | Interactive and JSON CLI implemented; dedicated harness rendering remains open |
-| Native surfaces | Not started (see below) |
+| Native surfaces | Krita native node, saved KRA receipts and Bridge native mode implemented; reference-machine Pencil acceptance gates instance-mode retirement |
 | Turn-level policy to avoid approval fatigue | Not started |
 | Reclamation of unreferenced intermediate artifacts | Not started |
 
@@ -92,4 +92,6 @@ A pipeline without the macro UI still needs somewhere to present surfaces and pe
 
 Pressure painting cannot run in a web panel. Measured on the reference machine: synthetic input reaches the canvas with zero pressure, and macOS delivers the Sidecar Pencil to ordinary applications as a plain mouse. A driver-level injector (Codonic Pad) delivers genuine tablet events to Krita. Pinned versions are in [studio/VERSIONS.md](../studio/VERSIONS.md); the probe evidence is under `studio/spikes/`.
 
-A native surface will therefore dispatch a document to an adapter inside the native application and wait for a save receipt as its response. The legacy instance-mode Studio (`python3 -m orchestrator` without `--task`) already implements this receipt: adopt, re-render and unlock are queued, the Krita adapter saves the live document over its archive, and only its acknowledgement advances state. That mode is frozen and kept only as the reference for the native surface.
+The Bridge native graph sends one versioned layered document to the local Krita adapter. Ordinary saves update the private working copy. **完成并交付** saves the bound canvas, verifies it is clean and submits a separate KRA snapshot. The host checks the attempt, authority, content digest and archive before committing a document output. See [running and verifying the native graph](graph-studio.md#krita-native-painting).
+
+The legacy instance-mode Studio remains available until the new graph passes its physical Pencil and exported-layer gate on the reference machine.

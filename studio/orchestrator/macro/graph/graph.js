@@ -240,7 +240,7 @@ async function render() {
   if (!selection) {status(t("task.awaiting_submission"));return;}
   const {kind,id}=selection;
   const s=view.activity[id] || {};
-  const current=JSON.stringify([kind,id,s.id,s.status,view.authorized]);
+  const current=JSON.stringify([kind,id,s.id,s.status,s.native_phase,s.native_error,view.authorized]);
   if (current===instanceKey) return;
   instanceKey=current;
   clearPanel();
@@ -248,6 +248,10 @@ async function render() {
   el("title").textContent=kind==="delivery" ? (deliveries.find(d=>d.id===id)?.title || deliveries.find(d=>d.id===id)?.node) : title(id);
   status(kind==="delivery"?t("task.delivered"):(s.error || statusLabel(s.status)));
   try {
+    if(kind==="node" && s.status==="waiting" && view.nodes[id].kind==="native" && view.authorized) {
+      status(s.native_error || t("native."+s.native_phase));
+      return;
+    }
     if(kind==="delivery" || (s.status==="waiting" && view.authorized)) {
       const ref=kind==="delivery"?null:{node:id,request:s.id};
       const pkg=ref?await api("panel",ref):await api("open",{delivery:id});

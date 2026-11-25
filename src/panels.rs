@@ -38,7 +38,7 @@ fn validate_panel(id: &str, p: &Value) -> Result<()> {
             .keys()
             .all(|k| matches!(
                 k.as_str(),
-                "kind" | "title" | "bindings" | "optional" | "html" | "decision"
+                "kind" | "title" | "bindings" | "optional" | "html" | "decision" | "adapter"
             )),
         "Unknown panel field"
     );
@@ -63,7 +63,21 @@ fn validate_panel(id: &str, p: &Value) -> Result<()> {
             "Invalid html path"
         );
     }
+    if p["kind"] != "native" {
+        ensure!(
+            p.get("adapter").is_none(),
+            "Adapter requires a native panel"
+        );
+    }
     match p["kind"].as_str() {
+        Some("native") => ensure!(
+            p["adapter"] == "krita"
+                && p["bindings"] == json!(["document"])
+                && ["html", "optional", "decision"]
+                    .iter()
+                    .all(|key| p.get(key).is_none()),
+            "Expected a Krita adapter with one document binding"
+        ),
         Some("surface") => {
             schema(p)?;
         }
