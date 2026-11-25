@@ -64,6 +64,10 @@ enum Core {
         target: Task,
         action: String,
     },
+    Native {
+        #[command(subcommand)]
+        action: graph::native::Action,
+    },
     Decision {
         #[command(subcommand)]
         action: decision::Action,
@@ -264,6 +268,7 @@ fn run() -> Result<()> {
             display(graph::host(&target.task, &action, &args)?);
             Ok(())
         }
+        Core::Native { action } => graph::native::execute(action),
         Core::Decision { action } => decision::execute(action),
         Core::State(t) => call(t, &op, json!({})),
         Core::Load { target, spool } => call(target, &op, json!({"spool":spool})),

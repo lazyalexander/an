@@ -20,7 +20,7 @@ def initial_driver(experiment, spool):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("experiment", choices=["bridge", "bridge-model", "cad"])
+    parser.add_argument("experiment", choices=["bridge", "bridge-model", "bridge-native", "cad"])
     parser.add_argument("--an", type=Path, default=ROOT / "target/debug/an")
     parser.add_argument("--image", default="an-graph-studio:headless")
     parser.add_argument("--port", type=int, default=0)
@@ -63,8 +63,15 @@ def main():
 
     studio = subprocess.Popen([sys.executable, "-m", "orchestrator", "--task", task, "--an", binary,
                                "--port", str(options.port)], cwd=ROOT / "studio", env=env)
+    channel = None
     closed = False
     try:
+        if options.experiment == "bridge-native":
+            channel = subprocess.Popen([binary,"native","serve","--task",task],env=env,stdout=subprocess.PIPE,text=True)
+            connection = channel.stdout.readline().strip()
+            if not connection:
+                raise RuntimeError("Krita channel failed to start")
+            print(f"Krita connection file: {connection}",flush=True)
         graph("submit", base_revision=0, idempotency_key="start",
               nodes=[initial_driver("revise" if options.resume else options.experiment, spool)])
         print(f"Workspace {workspace} · task {task}", flush=True)
@@ -84,6 +91,9 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if channel:
+            channel.terminate()
+            channel.wait()
         studio.terminate()
         studio.wait()
         if not closed:

@@ -353,6 +353,9 @@ fn control(
                         }
                     }
                     state["status"] = json!("cancelled");
+                    if nodes[id]["kind"] == "native" {
+                        state["native_phase"] = json!("cancelled");
+                    }
                     cancelled.push(id.clone());
                 }
                 _ => {}

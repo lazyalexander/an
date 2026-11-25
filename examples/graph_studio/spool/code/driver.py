@@ -82,9 +82,15 @@ def cad(spool):
 
 if __name__ == "__main__":
     stage, spool, *options = sys.argv[1:]
-    if stage in ("select", "model-select"):
+    if stage in ("select", "model-select", "native-select"):
         response = json.loads(Path("/input/choice/response.json").read_text())
         nodes = bridge_result(spool, response)
+        if stage == "native-select":
+            nodes = [nodes[0],
+                     {"id":"paint","kind":"native","spool":spool,"panel":"paint",
+                      "inputs":{"document":ref("compare","document")},"outputs":["document"]},
+                     {"id":"report","kind":"delivery","title":"已保存的 Krita 绘画",
+                      "inputs":{"painting":ref("paint","document")},"outputs":[]}]
         if stage == "model-select":
             nodes = nodes[:1] + [
                 {"id":"prompt","kind":"run","spool":spool,"argv":["python3","/spool/code/driver.py","prompt",spool],
@@ -113,7 +119,9 @@ Path("/output/annotation.txt").write_text(choice["note"])
             nodes.insert(0, run("annotation-note", spool, write_note, ["annotation.txt"],
                                 choice=ref("compare", "response")))
     else:
-        nodes = {"bridge": bridge, "bridge-model":bridge, "cad": cad, "revise": revise}[stage](spool)
+        nodes = {"bridge": bridge, "bridge-model":bridge,"bridge-native":bridge, "cad": cad, "revise": revise}[stage](spool)
+        if stage == "bridge-native":
+            nodes[-1]["argv"][2] = "native-select"
         if stage == "bridge-model":
             nodes[-1]["argv"][2] = "model-select"
     if stage in ("bridge","bridge-model") and options == ["--verify-overlap"]:

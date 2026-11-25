@@ -385,12 +385,15 @@ fn step(
     let t = get(&tx, "task", task)?;
     let delivery = node["kind"] == "delivery";
     let op = if delivery { "publish" } else { "preview" };
+    let native = node["kind"] == "native";
     // Keep grants for the whole set atomic when one file still needs consent.
     tx.execute_batch("SAVEPOINT graph_access")?;
     for (name, item) in bound.as_object().unwrap() {
         let origin = super::binding_origin(item);
         let dest = if delivery {
             t["workspace"].as_str().unwrap_or(task)
+        } else if native {
+            "native:krita"
         } else {
             "studio"
         };
@@ -443,6 +446,12 @@ fn step(
         state["delivery"] = json!(attempt);
         state["status"] = json!("done");
     } else {
+        if native {
+            let files = get(&tx, "revision", field(&bound["document"], "revision")?)?;
+            let (ext, _) = super::native::document(&files)?;
+            state["native_extension"] = json!(ext);
+            state["native_phase"] = json!("awaiting_adapter");
+        }
         state["status"] = json!("waiting");
     }
     // Commit permission consumption with its result, even across a process exit.

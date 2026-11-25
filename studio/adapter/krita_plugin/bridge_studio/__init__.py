@@ -20,3 +20,9 @@ Krita.instance().addExtension(BridgeStudioExtension(Krita.instance()))
 Krita.instance().addDockWidgetFactory(
     DockWidgetFactory(DOCKER_ID, DockWidgetFactoryBase.DockRight, BridgeDocker)
 )
+
+from .native import NativeDocker
+
+Krita.instance().addDockWidgetFactory(
+    DockWidgetFactory("an_native_paint", DockWidgetFactoryBase.DockRight, NativeDocker)
+)
