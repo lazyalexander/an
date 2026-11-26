@@ -138,6 +138,12 @@ fn call(t: Task, op: &str, a: Value) -> Result<()> {
 fn run() -> Result<()> {
     let op = std::env::args().nth(1).unwrap_or_default();
     match op.as_str() {
+        "task-cursors" => {
+            display(permission::cursors(serde_json::from_reader(
+                std::io::stdin(),
+            )?)?);
+            return Ok(());
+        }
         "mcp" | "server" => return tokio::runtime::Runtime::new()?.block_on(mcp::execute()),
         "workspace" | "task" | "deliveries" => {
             display(workspace::execute()?);

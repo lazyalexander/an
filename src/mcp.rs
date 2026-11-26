@@ -449,7 +449,8 @@ pub async fn execute() -> Result<()> {
                 id
             };
             let record = get(&connect()?, "task", &task)?;
-            let bootstrap = env::var("AN_TURN").unwrap_or_default().is_empty();
+            let bootstrap = env::var("AN_TURN").unwrap_or_default().is_empty()
+                && env::var("AN_AGENT_TOKEN").unwrap_or_default().is_empty();
             if !bootstrap {
                 crate::transfer::Transfer::recover()?;
                 crate::graph::wake(&task)?;
