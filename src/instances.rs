@@ -46,6 +46,34 @@ fn items(db: &Connection, kind: &str, task: &str) -> Result<Vec<Value>> {
     }
     Ok(out)
 }
+/// Called in the same transaction as task closure. A later finish can retry cleanup.
+pub(crate) fn request_task_unload(db: &Connection, task: &str) -> Result<()> {
+    for mut instance in items(db, "instance", task)? {
+        if instance["status"] != "unloaded" {
+            ensure!(
+                instance["active"].is_null(),
+                "Settle the active instance before closing"
+            );
+            instance["intent"] = json!("unload");
+            save(db, "instance", &instance)?;
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn finish_unloads(db: &mut Connection, task: &str, lock: &File) -> Result<Value> {
+    let mut pending = Vec::new();
+    for mut instance in items(db, "instance", task)? {
+        if instance["status"] != "unloaded" && instance["intent"] == "unload" {
+            reconcile(db, &mut instance, lock)?;
+            if instance["status"] != "unloaded" {
+                pending.push(instance["id"].clone());
+            }
+        }
+    }
+    Ok(json!({"closed":true,"cleanup_pending":pending}))
+}
+
 fn observe(i: &mut Value, f: &File) -> String {
     match runtime::list(f) {
         Err(e) => {
@@ -503,7 +531,12 @@ fn submit(
     save(&tx, "instance", i)?;
     tx.commit()?;
     match launch(&id, &lease) {
-        Ok(child) => reap(child),
+        Ok(child) => {
+            // The caller holds the task lock until the spawned worker has an owner.
+            r["worker_pid"] = json!(child.id());
+            reap(child);
+            save(db, "run", &r)?;
+        }
         Err(e) => {
             let tx = db.transaction()?;
             for (key, record) in tickets {
@@ -823,13 +856,18 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
         "Missing worker lease"
     );
     let mut db = connect()?;
+    let task = string(&get(&db, "run", id)?, "task")?.to_owned();
+    let worker_lock = lock(&db, &task)?;
     let mut r = get(&db, "run", id)?;
-    let task = string(&r, "task")?.to_owned();
+    ensure!(
+        r["worker_pid"].as_u64() == Some(u64::from(std::process::id())),
+        "Run belongs to another worker"
+    );
     let instance = string(&r, "instance")?.to_owned();
     let mut quiet = true;
     let run = (|| -> Result<()> {
         let mut child = {
-            let f = lock(&db, &task)?;
+            let f = worker_lock;
             let mut i = get(&db, "instance", &instance)?;
             if i["active"] != id || i["intent"] != "load" {
                 return Ok(());
@@ -980,6 +1018,37 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
 mod tests {
     use super::*;
     #[test]
+    fn closing_marks_only_this_tasks_settled_instances() -> Result<()> {
+        let mut db = Connection::open_in_memory()?;
+        db.execute_batch("CREATE TABLE objects(kind,id,body,PRIMARY KEY(kind,id))")?;
+        for (id, task, active) in [
+            ("warm", "one", Value::Null),
+            ("busy", "one", json!("attempt")),
+            ("other", "two", Value::Null),
+        ] {
+            put(
+                &db,
+                "instance",
+                id,
+                &json!({"task":task,"id":id,"status":"running","intent":"load","active":active}),
+            )?;
+        }
+        {
+            let tx = db.transaction()?;
+            assert!(request_task_unload(&tx, "one").is_err());
+        }
+        assert_eq!(get(&db, "instance", "warm")?["intent"], "load");
+        let mut busy = get(&db, "instance", "busy")?;
+        busy["active"] = Value::Null;
+        save(&db, "instance", &busy)?;
+        request_task_unload(&db, "one")?;
+        request_task_unload(&db, "one")?;
+        assert_eq!(get(&db, "instance", "warm")?["intent"], "unload");
+        assert_eq!(get(&db, "instance", "busy")?["intent"], "unload");
+        assert_eq!(get(&db, "instance", "other")?["intent"], "load");
+        Ok(())
+    }
+    #[test]
     fn named_inputs_preserve_approvals_and_tickets_until_all_ports_commit() -> Result<()> {
         // One subprocess owns its environment and throwaway registry.
         if std::env::var_os("AN_RESERVATION_CHILD").is_none() {
@@ -1042,6 +1111,7 @@ mod tests {
             get(&db, "revision", string(&run, "input")?)?,
             json!({"a/data":"YQ==","b/data":"YQ==","c/data":"YQ=="})
         );
+        assert!(run["worker_pid"].as_u64().is_some());
         assert_eq!(get(&db, "handoff", "handoff-one")?["used"], accepted);
         Ok(())
     }

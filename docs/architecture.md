@@ -146,7 +146,7 @@ Experiment packages under `examples/` own prompts, document transformations, app
 | Image model nodes (sketch to finished painting) | Implemented: local SDXL + ControlNet scribble service and OpenAI backend behind the same node; local path verified end to end (33 s per image) |
 | Outbound curation: stage summaries and readable failure reasons | Implemented without a model: agent and driver submissions fold into titled stages with progress; failures carry a reason category shown as locale text |
 | Observations: plugin snapshots of what the person sees, as versioned context | Not started |
-| Spool catalog retrieval and composition evaluation | Not started |
+| Spool catalog retrieval and composition evaluation | Task-scoped MCP catalog and a [seven-case composition benchmark](../examples/composition/README.md). Codex selection accuracy and live execution are awaiting measurement. |
 
 ## Sketch surface
 

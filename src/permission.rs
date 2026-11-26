@@ -45,7 +45,10 @@ pub fn current(db: &Connection, task: &str) -> Result<String> {
     if host_valid(db, task, &host)? {
         return Ok(epoch.to_owned());
     }
-    if matches!(env::args().nth(1).as_deref(), Some("mcp" | "_model-worker")) {
+    if matches!(
+        env::args().nth(1).as_deref(),
+        Some("mcp" | "_worker" | "_model-worker")
+    ) {
         let token = env::var("AN_AGENT_TOKEN").unwrap_or_default();
         if !token.is_empty()
             && find(db, "agent_auth", &hash(token.as_bytes()))? == Some(json!([task, epoch]))

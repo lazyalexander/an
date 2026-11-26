@@ -16,10 +16,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "markdown_review"))
 from codex_session import Session
 
-TOOLS = {"an_state", "an_scope_propose", "an_skill", "an_graph_state", "an_graph_submit", "an_graph_say"}
+TOOLS = {"an_catalog", "an_state", "an_scope_propose", "an_skill", "an_graph_state", "an_graph_submit", "an_graph_say"}
 
 BRIEF = """You are the agent for one An task. You act only through the An MCP tools.
-Read admitted capabilities with an_state and an_skill. For a new turn, propose the
+Work backwards from the requested deliverables. Use an_catalog to discover task inputs and compatible spool interfaces. Read an_skill
+for selected commands and filenames. Link each consumer input to its producer node and output port. For a new turn, propose the
 minimal flows needed for the instruction with an_scope_propose, then submit the graph.
 Studio collects the human decision. Read progress with an_graph_state. Answer the person with an_graph_say: say what
 you understood and what you will do, ask when the request is ambiguous, and report

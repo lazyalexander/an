@@ -155,6 +155,30 @@ pub fn require(db: &Connection, image: &str) -> Result<Value> {
     );
     Ok(v)
 }
+/// A task-scoped read of admitted interfaces. Discovery never loads or reconciles an instance.
+pub fn catalog(db: &Connection, task_id: &str) -> Result<Value> {
+    let task = get(db, "task", task_id)?;
+    let mut spools = json!({});
+    for image in task["work"]
+        .as_object()
+        .context("Invalid task work")?
+        .keys()
+    {
+        if let Some(admission) = record(db, image)? {
+            spools[image] = admission["manifest"].clone();
+        }
+    }
+    let inputs: Vec<_> = task["inputs"]
+        .as_object()
+        .into_iter()
+        .flat_map(|m| m.keys())
+        .collect();
+    Ok(
+        json!({"inputs":inputs,"spools":spools,"model":task["model_grant"],
+        "delivery_destination":task["workspace"].as_str().unwrap_or(task_id)}),
+    )
+}
+
 pub fn summary(db: &Connection, image: &str) -> Result<Value> {
     let Some(mut v) = record(db, image)? else {
         return Ok(json!({"status":"needs_admission"}));
