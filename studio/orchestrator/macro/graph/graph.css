@@ -17,3 +17,11 @@ details { margin-top:24px } summary { cursor:pointer } pre { white-space:pre-wra
 @media(max-width:650px){main{display:block}aside{border:0;border-bottom:1px solid #d3dcd5;padding:10px 16px}nav{display:flex;overflow-x:auto}nav button{flex-shrink:0}aside h2{margin:6px 0}}
 header nav { display:flex;gap:8px;margin-left:auto } header nav button { padding:4px 10px;font-size:14px;background:transparent;color:#fff;border-color:rgba(255,255,255,.55) } #control-state { font:13px system-ui;color:#ffd79a }
 #instruct { display:flex;gap:8px;margin-top:24px;position:sticky;bottom:0;background:#f8f8f4;padding:12px 0 } #instruct[hidden] { display:none } #instruct textarea { flex:1;font:inherit;padding:8px;border:1px solid #bbcbbf;border-radius:5px;resize:vertical }
+#timeline { list-style:none;padding:0;display:grid;gap:12px }
+#timeline li { border-left:2px solid #bbcbbf;padding:6px 12px;overflow-wrap:anywhere }
+#timeline article { margin-top:12px }
+@media(max-width:650px){header{flex-wrap:wrap}main{display:flex;flex-direction:column}aside{order:2}section{padding:16px}#instruct textarea{min-width:0}}
+#timeline #title, aside h2:has(+ #deliveries:empty) { display:none }
+#timeline li > div:first-child > button { font-weight:600;text-align:left }
+#content form { display:flex;flex-wrap:wrap;gap:12px;align-items:center }
+#content form select, #content form input { font:inherit;padding:5px }
