@@ -64,6 +64,17 @@ The person controls a task through the host, never through the agent. Pass `{"ac
 
 Run Studio for a workspace instead of a task: `(cd studio && python3 -m orchestrator --workspace WORKSPACE_ID --an ../target/debug/an)`. The page opens on a text box. Typing a sentence binds a fresh session, creates the task, begins its turn and records the sentence as the task's first instruction. Studio prints one `agent:` line to its own stdout with the task ID and the MCP server configuration, including that turn, for the operator's agent harness. The browser never receives the turn. Use **新任务** to return to the text box.
 
+## Image model nodes
+
+An image alias in `model_aliases` (see [Configuration](configuration.md)) makes a granted task's `model` nodes produce images: `an task new --model sketch-local` or `--model sketch-remote`. Containers have no GPU, so inference stays on the host like text models, under the same authorization, quota, at-most-once sending and evidence.
+
+An image node binds `request` (`request.json` with `prompt` and optional `size` of `1024x1024`, `1536x1024` or `1024x1536`) and optionally `image` (one PNG, for example a sketch rendered as dark lines on white), and declares the output `result.png`. All bound ports are approved together.
+
+- **`local`** calls a loopback image service. `services/image_local.py` keeps SDXL base 1.0 with the xinsir ControlNet scribble model resident on Apple Silicon; run it with a Python environment that has torch (MPS), diffusers, transformers and accelerate and the weights in the Hugging Face cache. An unreachable service fails the node without sending.
+- **`openai`** sends the request to the OpenAI Images API (`edits` with an image, `generations` without). An reads the key from the macOS Keychain entry named by `keychain` (account `an`) at send time and passes it to curl through a private 0600 header file; it never enters the registry, logs, process arguments or containers. Store it with `security add-generic-password -U -a an -s an.openai -w KEY`.
+
+The sketch experiment uses this path: `driver.py sketch SPOOL --model=ALIAS` adds a container step that renders the strokes to `control.png` and writes the prompt from the person's note, then the image node, and delivers the sketch, the line art and the painting. `python3 tests/sketch_smoke.py --model sketch-local` runs it end to end.
+
 ## Agent runner
 
 Studio wakes the task's agent itself when `agent.command` is set in its configuration (see [Configuration](configuration.md)). The runner watches each served task and wakes the agent on an instruction, an answered surface, or resuming the task. Events that arrive while the agent is still working are collected into the next wake.

@@ -16,6 +16,9 @@ Operational defaults live in [`config/an.json`](../config/an.json) and are compi
 | `graph_expansion_budget` | 256 | Nodes drivers may add to one task |
 | `instruction_max_bytes` | 4096 | Size of one relayed instruction |
 | `agent_message_max_bytes` | 4096 | Size of one agent message to the person |
+| `image_port` | 11435 | Loopback port of the local image service |
+| `image_timeout_s` | 600 | One image generation |
+| `image_output_bytes` | 33554432 | Size of an image input or result |
 | `model_aliases` | `{"local":"qwen3:8b"}` | Trusted alias mapping to installed local Ollama models |
 | `model_default_calls` | 4 | Task quota when the host grants an alias |
 | `ollama_port` | 11434 | Ollama port on 127.0.0.1 |
@@ -30,3 +33,5 @@ Format contracts that admission depends on stay in code: the 64 KiB `spool.yaml`
 [`studio/config/studio.json`](../studio/config/studio.json) selects the locale and holds Studio settings (`graph.poll_ms`, `graph.panel_timeout_ms`, `graph.max_body_bytes`). The `agent` section configures the [agent runner](graph-studio.md#agent-runner): `command` (null disables it), `poll_ms`, `timeout_s` per wake, and `env`, the extra variable names passed to the agent. Pass `--config FILE` to `python3 -m orchestrator` to override them; the same unknown-key rule applies.
 
 Task Studio reads its labels from `studio/config/locales/<locale>.json`. The legacy experiment owns its instance manifests and translations, including Krita panel text, under `examples/legacy_studio/config/`.
+
+`model_aliases` maps an alias to a local Ollama model name, or to an image backend object: `{"kind": "image", "backend": "local", "model": ...}` or `{"kind": "image", "backend": "openai", "model": ..., "keychain": SERVICE}`. API keys are never configuration; they live in the Keychain entry named by `keychain`.

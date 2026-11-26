@@ -8,11 +8,25 @@
   "instruction_max_bytes": 4096,
   "agent_message_max_bytes": 4096,
   "model_aliases": {
-    "local": "qwen3:8b"
+    "local": "qwen3:8b",
+    "sketch-local": {
+      "kind": "image",
+      "backend": "local",
+      "model": "sdxl-base-1.0+controlnet-scribble"
+    },
+    "sketch-remote": {
+      "kind": "image",
+      "backend": "openai",
+      "model": "gpt-image-2-2026-04-21",
+      "keychain": "an.openai"
+    }
   },
   "model_default_calls": 4,
   "ollama_port": 11434,
   "model_timeout_s": 120,
   "model_input_bytes": 16384,
-  "model_output_tokens": 256
+  "model_output_tokens": 256,
+  "image_port": 11435,
+  "image_timeout_s": 600,
+  "image_output_bytes": 33554432
 }

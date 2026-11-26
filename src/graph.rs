@@ -224,13 +224,23 @@ fn append_nodes(
                             .context("No task model grant")?,
                     "Model outside task grant"
                 );
-                ensure!(
-                    node["inputs"]
-                        .as_object()
-                        .is_some_and(|m| m.len() == 1 && m.contains_key("request"))
-                        && node["outputs"] == json!(["result.json"]),
-                    "Expected request binding and result.json"
-                );
+                if model::is_image(&record["model_grant"]["model"]) {
+                    ensure!(
+                        node["inputs"].as_object().is_some_and(|m| {
+                            m.contains_key("request")
+                                && m.keys().all(|k| k == "request" || k == "image")
+                        }) && node["outputs"] == json!(["result.png"]),
+                        "Expected request (and optional image) binding and result.png"
+                    );
+                } else {
+                    ensure!(
+                        node["inputs"]
+                            .as_object()
+                            .is_some_and(|m| m.len() == 1 && m.contains_key("request"))
+                            && node["outputs"] == json!(["result.json"]),
+                        "Expected request binding and result.json"
+                    );
+                }
                 ensure!(
                     node.as_object().unwrap().keys().all(|k| matches!(
                         k.as_str(),
