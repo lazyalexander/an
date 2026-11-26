@@ -571,6 +571,14 @@ pub(crate) fn dispatch_locked(
             "Task is closed"
         );
     }
+    if matches!(op, "load" | "run") {
+        ensure!(
+            !find(db, "graph", task)?
+                .as_ref()
+                .is_some_and(crate::graph::paused),
+            "Task paused"
+        );
+    }
     match op {
         "load" => {
             return load(
@@ -722,7 +730,15 @@ pub(crate) fn dispatch_locked(
                 tx.commit()?;
             }
             reconcile(db, &mut i, lock)?;
-            let r = owned(db, task, id)?;
+            let mut r = owned(db, task, id)?;
+            if r["status"] == "cancel_pending"
+                && i["active"].is_null()
+                && matches!(i["intent"].as_str(), Some("stop" | "unload"))
+                && matches!(i["status"].as_str(), Some("stopped" | "unloaded"))
+            {
+                r["status"] = json!("cancelled");
+                put(db, "run", id, &r)?;
+            }
             return Ok(json!({"id":id,"status":r["status"],"spool":r["spool"]}));
         }
         "run" | "unload" => {}

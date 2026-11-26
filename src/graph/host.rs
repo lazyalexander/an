@@ -345,9 +345,38 @@ fn control(
     permission::current(tx, task)?;
     ensure!(t["closed"] != true, "Task closed");
     let mut cancelled = vec![];
-    let mut runs = vec![];
+    let mut runs = Vec::new();
     let mut drivers = vec![];
     if kind == "stop" {
+        // Record cancellation under the task lock before any fallible runtime
+        // calls. A worker waiting to start sees the stop intent after restart.
+        let mut query = tx.prepare("SELECT id, body FROM objects WHERE kind='run' AND json_extract(body,'$.task')=? AND json_extract(body,'$.status') IN ('running','unknown','cancel_pending') ORDER BY id")?;
+        let active = query
+            .query_map([task], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+            })?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        for (id, body) in active {
+            let mut run: Value = serde_json::from_str(&body)?;
+            if let Some(instance) = run["instance"].as_str() {
+                let mut i = get(tx, "instance", instance)?;
+                if i["active"] != id
+                    && !(i["active"].is_null()
+                        && matches!(i["intent"].as_str(), Some("stop" | "unload")))
+                {
+                    continue;
+                }
+                if i["intent"] == "load" {
+                    i["intent"] = json!("stop");
+                    put(tx, "instance", instance, &i)?;
+                }
+            }
+            if run["status"] != "unknown" || run["instance"].is_string() {
+                run["status"] = json!("cancel_pending");
+                put(tx, "run", &id, &run)?;
+            }
+            runs.push(id);
+        }
         let nodes = graph["nodes"].clone();
         for (id, state) in graph["activity"]
             .as_object_mut()
@@ -357,28 +386,47 @@ fn control(
             if nodes[id]["kind"] == "model" {
                 super::model::release_unsent(tx, &attempt, "Task stopped before send")?;
             }
-            let has_run = !attempt.is_empty() && find(tx, "run", &attempt)?.is_some();
-            match state["status"].as_str() {
-                Some("running" | "unknown") if nodes[id]["kind"] == "model" => {
-                    state["status"] = json!("cancelled");
-                    cancelled.push(id.clone());
-                }
-                Some("running" | "unknown") if has_run => runs.push(attempt),
-                Some("queued" | "permission_required" | "waiting" | "saving") if !has_run => {
-                    if let Some(instance) = state["instance"].as_str() {
-                        if instance == format!("driver-{attempt}")
-                            && find(tx, "instance", instance)?.is_some()
-                        {
+            if let Some(instance) = state["instance"].as_str() {
+                if instance == format!("driver-{attempt}") {
+                    if let Some(mut i) = find(tx, "instance", instance)? {
+                        if i["status"] != "unloaded" {
+                            i["intent"] = json!("unload");
+                            put(tx, "instance", instance, &i)?;
                             drivers.push(instance.to_owned());
                         }
                     }
-                    state["status"] = json!("cancelled");
-                    if nodes[id]["kind"] == "native" {
-                        state["native_phase"] = json!("cancelled");
-                    }
-                    cancelled.push(id.clone());
                 }
-                _ => {}
+            }
+            if matches!(
+                state["status"].as_str(),
+                Some(
+                    "running"
+                        | "unknown"
+                        | "cleanup_pending"
+                        | "queued"
+                        | "permission_required"
+                        | "waiting"
+                        | "saving"
+                        | "cancel_pending"
+                )
+            ) {
+                if runs.contains(&attempt) {
+                    state["status"] = json!("cancel_pending");
+                    continue;
+                }
+                if state["instance"]
+                    .as_str()
+                    .is_some_and(|i| drivers.iter().any(|d| d == i))
+                {
+                    state["status"] = json!("cleanup_pending");
+                    state["after_cleanup"] = json!("cancelled");
+                    continue;
+                }
+                state["status"] = json!("cancelled");
+                if nodes[id]["kind"] == "native" {
+                    state["native_phase"] = json!("cancelled");
+                }
+                cancelled.push(id.clone());
             }
         }
     }

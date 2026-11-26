@@ -144,3 +144,22 @@ Headless comparisons use `python3 tests/markdown_review_smoke.py` and the same c
 | Minutes to announcement | 3 | 1 | 0 | Only public items reach the draft |
 
 In the negative minutes case the graph attempts to bind the original minutes to the formatter. Its workspace permits only organizer-to-formatter handoff, and the attempted run fails before the input is mounted. The model denial case checks that no backend generation or quota reservation occurs.
+
+### Redirect a live Markdown review
+
+Build the CLI with `cargo build --locked` and the example with
+`container build --tag an-markdown-review:replan examples/markdown_review/spool`.
+Run `python3 examples/markdown_review/replan.py` with a signed-in Codex CLI and
+the configured local Ollama model. Open the printed Studio URL, confirm the
+initial routes, then enter a new instruction when the conflicting edits appear.
+The harness reconnects to the same Codex thread and reads the instruction by
+event cursor. Its graph submission can cite that cursor with
+`instruction_cursor`; delivery sources retain the submission event.
+The experiment uses public repository fixtures. The evidence directory printed
+at startup contains the tool inventory and private session records.
+
+Pass `--browser-test allow` or `--browser-test deny` to exercise the published
+or refused delivery with headless Chrome and playwright-core. Set
+`PLAYWRIGHT_CORE` if the module lives outside Node's search path.
+Pause blocks new direct loads and runs, including implicit instance selection,
+while allowing running work to settle. Stop also cancels active direct runs.

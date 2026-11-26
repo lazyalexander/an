@@ -739,6 +739,17 @@ fn stop_requests_cancellation_of_running_work() {
         "activity":{"job":{"attempt":1,"id":"live","status":"running","run":"live"}}}),
     );
     let stopped = f.graph("control", json!({"action":"stop"})).unwrap();
+    f.graph("control", json!({"action":"resume"})).unwrap();
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["job"]["status"],
+        "cancel_pending"
+    );
+    assert!(f
+        .graph(
+            "submit",
+            json!({"base_revision":1,"idempotency_key":"retry","nodes":[],"retry":["job"]})
+        )
+        .is_err());
     assert_eq!(stopped["cancelling"], json!(["live"]));
     assert_eq!(
         f.call(&["status", "--task", "task", "live"])["status"],
@@ -1177,5 +1188,191 @@ fn explicit_ask_requires_a_new_confirmation_despite_a_host_allowance() {
     assert_eq!(
         f.graph("state", json!({})).unwrap()["activity"]["review"]["status"],
         "waiting"
+    );
+}
+
+#[test]
+fn pause_gates_direct_load_and_both_run_selectors_before_reservation() {
+    let f = Fixture::graph_task();
+    f.insert("task", "other", json!({"work":{}}));
+    f.graph("control", json!({"action":"pause"})).unwrap();
+    for args in [
+        vec!["load", "--task", "task", "--spool", "unavailable"],
+        vec![
+            "run",
+            "--task",
+            "task",
+            "--spool",
+            "unavailable",
+            "--",
+            "true",
+        ],
+        vec![
+            "run",
+            "--task",
+            "task",
+            "--instance",
+            "unavailable",
+            "--",
+            "true",
+        ],
+    ] {
+        let out = f.run(&args);
+        assert!(String::from_utf8_lossy(&out.stderr).contains("Task paused"));
+    }
+    assert_eq!(
+        f.call(&["permission", "pending", "--task", "task"]),
+        json!([])
+    );
+    let count: usize =
+        f.db.query_row(
+            "SELECT count(*) FROM objects WHERE kind IN ('instance','run','model_call')",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(count, 0);
+    let different = f.run(&["run", "--task", "other", "--spool", "missing", "--", "true"]);
+    assert!(String::from_utf8_lossy(&different.stderr).contains("Load the spool first"));
+    f.graph("control", json!({"action":"resume"})).unwrap();
+    let out = f.run(&["run", "--task", "task", "--spool", "missing", "--", "true"]);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Load the spool first"));
+}
+
+#[test]
+fn repeated_stop_includes_direct_runs_and_leaves_other_tasks_alone() {
+    let f = Fixture::graph_task();
+    for (task, id) in [("task", "direct"), ("other", "independent")] {
+        f.insert("run", id, json!({"id":id,"task":task,"status":"running"}));
+    }
+    for _ in 0..2 {
+        let stopped = f.graph("control", json!({"action":"stop"})).unwrap();
+        assert_eq!(stopped["cancelling"], json!(["direct"]));
+        assert_eq!(
+            f.call(&["status", "--task", "task", "direct"])["status"],
+            "cancel_pending"
+        );
+    }
+    let status:String=f.db.query_row("SELECT json_extract(body,'$.status') FROM objects WHERE kind='run' AND id='independent'",[],|r|r.get(0)).unwrap();
+    assert_eq!(status, "running");
+}
+
+#[test]
+fn submission_records_only_an_authorized_instruction_and_replays_once() {
+    let f = Fixture::graph_task();
+    f.graph("control", json!({"action":"pause"})).unwrap();
+    let sent = f
+        .graph("instruct", json!({"revision":0,"text":"Keep the original"}))
+        .unwrap();
+    let args = json!({"base_revision":0,"idempotency_key":"redirect","instruction_cursor":sent["cursor"],"nodes":[Fixture::surface("replacement")]});
+    for cursor in [json!(1), json!(0), json!(999), json!("2")] {
+        let mut bad = args.clone();
+        bad["instruction_cursor"] = cursor;
+        assert!(f
+            .graph("submit", bad)
+            .unwrap_err()
+            .contains("current task and authority"));
+    }
+    let accepted = f.graph("submit", args.clone()).unwrap();
+    assert_eq!(f.graph("submit", args.clone()).unwrap(), accepted);
+    let state = f.graph("state", json!({})).unwrap();
+    let linked: Vec<_> = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["instruction_cursor"] == sent["cursor"])
+        .collect();
+    assert_eq!(linked.len(), 1);
+    assert_eq!(linked[0]["nodes"], json!(["replacement"]));
+    let policy = f.root.join("policy");
+    fs::write(&policy, r#"{"default":"ask","effects":[]}"#).unwrap();
+    f.call(&[
+        "permission",
+        "policy",
+        "--task",
+        "task",
+        "--file",
+        policy.to_str().unwrap(),
+    ]);
+    let mut stale = args;
+    stale["idempotency_key"] = json!("another");
+    stale["base_revision"] = json!(1);
+    assert!(f
+        .graph("submit", stale)
+        .unwrap_err()
+        .contains("current task and authority"));
+}
+
+#[test]
+fn direct_start_queued_on_the_task_lock_observes_the_committed_pause() {
+    use std::process::Stdio;
+    let f = Fixture::graph_task();
+    f.graph("control", json!({"action":"resume"})).unwrap();
+    let lock = fs::File::open(f.root.join("locks/task")).unwrap();
+    lock.lock().unwrap();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_an"))
+        .env("AN_HOME", &f.root)
+        .args(["run", "--task", "task", "--spool", "missing", "--", "true"])
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    assert!(child.try_wait().unwrap().is_none());
+    f.db.execute("UPDATE objects SET body=json_set(body,'$.control','paused') WHERE kind='graph' AND id='task'",[]).unwrap();
+    drop(lock);
+    let result = child.wait_with_output().unwrap();
+    assert!(String::from_utf8_lossy(&result.stderr).contains("Task paused"));
+}
+
+#[test]
+fn redirect_closes_an_already_viewed_decision() {
+    let f = Fixture::graph_task();
+    f.graph(
+        "submit",
+        json!({"base_revision":0,"idempotency_key":"start","nodes":[Fixture::surface("choice")]}),
+    )
+    .unwrap();
+    f.decide_graph("once");
+    let state = f.graph("state", json!({})).unwrap();
+    let request = json!({"node":"choice","request":state["activity"]["choice"]["id"]});
+    f.graph("viewed", request.clone()).unwrap();
+    let sent = f
+        .graph("instruct", json!({"revision":1,"text":"Keep the original"}))
+        .unwrap();
+    f.graph("submit",json!({"base_revision":1,"instruction_cursor":sent["cursor"],"idempotency_key":"redirect","supersede":["choice"],"nodes":[]})).unwrap();
+    let mut old = request;
+    old["value"] = json!({"choice":"A"});
+    assert!(f.graph("respond", old).is_err());
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["choice"]["status"],
+        "superseded"
+    );
+}
+
+#[test]
+fn stop_reconciles_idle_instance_for_an_indeterminate_attempt() {
+    let f = Fixture::graph_task();
+    f.insert("instance","idle", json!({"id":"idle","name":"an-idle","task":"task","intent":"stop","status":"cleanup_pending","active":null}));
+    f.insert(
+        "run",
+        "attempt",
+        json!({"id":"attempt","instance":"idle","task":"task","status":"unknown"}),
+    );
+    f.insert(
+        "graph",
+        "task",
+        json!({"revision":1,"events":[],"nodes":{"job":{"id":"job","kind":"run"}},
+        "activity":{"job":{"id":"attempt","run":"attempt","status":"unknown"}}}),
+    );
+    let stopped = f.graph("control", json!({"action":"stop"})).unwrap();
+    assert_eq!(stopped["cancelling"], json!(["attempt"]));
+    // Simulate runtime confirmation on a later connection.
+    f.insert(
+        "instance",
+        "idle",
+        json!({"id":"idle","task":"task","active":null,"intent":"stop","status":"unloaded"}),
+    );
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["job"]["status"],
+        "cancelled"
     );
 }

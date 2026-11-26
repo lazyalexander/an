@@ -8,6 +8,7 @@ mod validation;
 pub use host::host;
 use host::package;
 use scheduler::advance;
+pub(crate) use scheduler::paused;
 pub use scheduler::wake;
 pub(crate) use validation::response_valid;
 use validation::validate;
@@ -58,6 +59,22 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         advance(&mut db, task, &mut graph, &lock)?;
         return Ok(prior["receipt"].clone());
     }
+    let instruction_cursor = args.get("instruction_cursor");
+    if let Some(cursor) = instruction_cursor {
+        let authority = hash(canonical(&permission::stamp(&tx, task)?).as_bytes());
+        ensure!(
+            cursor.as_u64().is_some_and(|n| n > 0)
+                && graph["events"]
+                    .as_array()
+                    .context("Missing graph events")?
+                    .iter()
+                    .any(|e| e["cursor"] == *cursor
+                        && e["actor"] == "user"
+                        && e["kind"] == "instruction"
+                        && e["data"]["authority"] == authority),
+            "Expected an instruction from the current task and authority"
+        );
+    }
     if args["base_revision"] != graph["revision"] {
         return Ok(json!({"status":"conflict","revision":graph["revision"]}));
     }
@@ -94,7 +111,11 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
     let rev = graph["revision"].as_u64().unwrap();
     let events = graph["events"].as_array_mut().unwrap();
     let cursor = events.len() + 1;
-    events.push(json!({"cursor":cursor,"time_ms":now_ms(),"actor":"agent","kind":"submitted","revision":rev,"retry":args["retry"],"supersede":args["supersede"],"nodes":additions.iter().map(|n|&n["id"]).collect::<Vec<_>>()}));
+    let mut submission = json!({"cursor":cursor,"time_ms":now_ms(),"actor":"agent","kind":"submitted","revision":rev,"retry":args["retry"],"supersede":args["supersede"],"nodes":additions.iter().map(|n|&n["id"]).collect::<Vec<_>>()});
+    if let Some(cursor) = instruction_cursor {
+        submission["instruction_cursor"] = cursor.clone();
+    }
+    events.push(submission);
     let receipt = json!({"revision":rev,"cursor":cursor,"status":"accepted"});
     put(&tx, "graph", task, &graph)?;
     put(
