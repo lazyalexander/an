@@ -116,8 +116,8 @@ The native channel asks an installed adapter for its supported extensions, snaps
 | Turn-level policy to avoid approval fatigue | Implemented for declared graph routes. Markdown review and minutes-to-announcement exercise the shared CLI and Studio authorization card. |
 | Reclamation of unreferenced intermediate artifacts | Not started |
 | Agent messages to the person (`an_graph_say`) | Implemented: idempotent, revision- and instruction-linked, shown in the timeline |
-| Starting a task from a sentence in the macro UI | Implemented: workspace Studio creates the task and hands the agent its MCP config; nothing wakes the agent yet |
-| Harness-neutral agent runner | Not started: examples wake agents from scripts |
+| Starting a task from a sentence in the macro UI | Implemented: workspace Studio creates the task and the runner wakes the agent |
+| Harness-neutral agent runner | Implemented in the Studio controller: wakes on instructions, answers and resume; at most once; pause and stop respected; Codex adapter |
 | Curation layer (original kept, context attached, outbound summaries) | Partial: instructions carry revision and turn; no outbound summaries |
 | Presentation plugin contract beyond Krita | Not started |
 | Remote model providers with host-held credentials | Not started: host-local Ollama only |

@@ -23,7 +23,8 @@ def inventory(tools):
 
 
 class Session:
-    def __init__(self, directory, binary, task, env):
+    def __init__(self, directory, binary, task, env, tools=TOOLS):
+        self.tools = set(tools)
         self.work = directory / "agent"
         self.work.mkdir(exist_ok=True)
         home = directory / "codex"
@@ -88,7 +89,7 @@ class Session:
             "mcp_servers.an.command": str(binary),
             "mcp_servers.an.args": ["mcp", "--task", task],
             "mcp_servers.an.env_vars": ["AN_HOME", "AN_TURN"],
-            "mcp_servers.an.enabled_tools": sorted(TOOLS),
+            "mcp_servers.an.enabled_tools": sorted(self.tools),
             "mcp_servers.an.default_tools_approval_mode": "approve",
             "mcp_servers.an.required": True,
         }
@@ -100,6 +101,10 @@ class Session:
             (home / "auth.json").symlink_to(auth.resolve(strict=True))
 
     def check_tools(self, directory):
+        cache = directory / "tools.json"
+        expected = sorted({"mcp__an__" + name for name in self.tools})
+        if cache.exists() and set(expected) <= set(json.loads(cache.read_text())):
+            return  # preflight already passed for this tool set in this state dir
         # Inspect the model-facing request produced by the installed CLI. The
         # probe has no provider credentials and never returns a model action.
         captured = []
@@ -144,7 +149,7 @@ class Session:
                 + probe.stdout.decode()[-1000:]
             )
         names = captured[0]
-        required = {"mcp__an__" + name for name in TOOLS}
+        required = {"mcp__an__" + name for name in self.tools}
         harmless = {
             "request_user_input",
             "update_plan",
