@@ -1,0 +1,49 @@
+# Parent relationships and requested deliverables are evaluator-only.
+[[case]]
+name = "rough"
+sentence = "把这些笔画还原成草图，保留铅笔的效果。"
+inputs = ["strokes.json"]
+parents = { sketch = "strokes.json" }
+deliver = ["sketch"]
+
+[[case]]
+name = "ink"
+sentence = "Turn the recorded pen movements into clean black line art and deliver just the inked version."
+inputs = ["strokes.json"]
+parents = { sketch = "strokes.json", line-art = "sketch" }
+deliver = ["line-art"]
+
+[[case]]
+name = "flat-colour"
+sentence = "把手写笔迹做成平涂插图，同时交给我可以单独使用的黑白线稿。"
+inputs = ["strokes.json"]
+parents = { sketch = "strokes.json", line-art = "sketch", painting = "line-art" }
+deliver = ["line-art", "painting"]
+
+[[case]]
+name = "review"
+sentence = "Which TODO items in the document are still open? Deliver a Markdown report with line numbers."
+inputs = ["draft.md", "frame.obj"]
+parents = { markdown-review = "draft.md" }
+deliver = ["markdown-review"]
+
+[[case]]
+name = "projection"
+sentence = "给我模型在 XY 平面上的原始轮廓。"
+inputs = ["frame.obj"]
+parents = { cad = "frame.obj" }
+deliver = ["cad"]
+
+[[case]]
+name = "parallel"
+sentence = "Deliver a clean black outline of the mechanical model and a separate TODO review of its design notes."
+inputs = ["frame.obj", "draft.md", "strokes.json"]
+parents = { cad = "frame.obj", line-art = "cad", markdown-review = "draft.md" }
+deliver = ["line-art", "markdown-review"]
+
+[[case]]
+name = "unsupported"
+sentence = "把这段说明合成为一段有声旁白，交付音频文件。"
+inputs = ["draft.md"]
+parents = {}
+deliver = []

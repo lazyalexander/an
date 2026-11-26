@@ -1,0 +1,35 @@
+# Fixture interfaces. Each entry becomes a separately registered immutable image.
+[sketch]
+summary = "Convert recorded pen strokes to a rough SVG drawing."
+input = "strokes"
+accepts = "application/json"
+output = "sketch.svg"
+produces = "image/svg+xml"
+
+[line-art]
+summary = "Clean a rough SVG drawing or a projected outline into monochrome ink lines."
+input = "drawing"
+accepts = "image/svg+xml"
+output = "lines.svg"
+produces = "image/svg+xml"
+
+[painting]
+summary = "Apply flat colour to a clean SVG line drawing."
+input = "lines"
+accepts = "image/svg+xml"
+output = "painting.svg"
+produces = "image/svg+xml"
+
+[markdown-review]
+summary = "Review Markdown for unresolved TODO items and report their line numbers."
+input = "document"
+accepts = "text/markdown"
+output = "review.md"
+produces = "text/markdown"
+
+[cad]
+summary = "Project OBJ wireframe vertices and edges onto the XY plane as an SVG outline."
+input = "mesh"
+accepts = "model/obj"
+output = "projection.svg"
+produces = "image/svg+xml"

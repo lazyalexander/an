@@ -1,5 +1,10 @@
 [
   {
+    "name": "an_catalog",
+    "description": "Discover task inputs and admitted spool interfaces without starting containers. Compare input and output ports, then read an_skill for the selected spool commands and output filenames.",
+    "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": false}
+  },
+  {
     "name": "an_skill",
     "description": "Read an admitted spool skill before loading",
     "inputSchema": {

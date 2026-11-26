@@ -22,8 +22,69 @@ def inventory(tools):
     return names
 
 
+def restricted_exec(directory, model_name):
+    """Create a read-only Codex profile shared by the planner and the MCP adapter."""
+    codex = shutil.which("codex")
+    if not codex:
+        raise FileNotFoundError("Codex CLI is required")
+    catalog = json.loads(
+        subprocess.check_output([codex, "debug", "models", "--bundled"])
+    )
+    model = next((m for m in catalog["models"] if m["slug"] == model_name), None)
+    if model is None:
+        raise ValueError(f"Model {model_name} absent from installed Codex catalog")
+    model.update(
+        shell_type="disabled",
+        apply_patch_tool_type=None,
+        tool_mode="direct",
+        experimental_supported_tools=[],
+        supports_search_tool=False,
+        node_repl_disabled=True,
+        multi_agent_version=None,
+        use_responses_lite=False,
+    )
+    catalog_file = directory / "catalog.json"
+    catalog_file.write_text(json.dumps({"models": [model]}))
+    args = [
+        codex,
+        "exec",
+        "--ignore-user-config",
+        "--ignore-rules",
+        "--sandbox",
+        "read-only",
+        "--skip-git-repo-check",
+        "-m",
+        model_name,
+    ]
+    for feature in (
+        "shell_tool",
+        "unified_exec",
+        "view_image",
+        "image_generation",
+        "computer_use",
+        "apps",
+        "plugins",
+        "multi_agent",
+        "multi_agent_v2",
+        "goals",
+        "code_mode",
+        "skill_search",
+        "tool_suggest",
+    ):
+        args.extend(["--disable", feature])
+    settings = {
+        "web_search": "disabled",
+        "model_catalog_json": str(catalog_file),
+        "model_reasoning_effort": "low",
+        "project_doc_max_bytes": 0,
+    }
+    for k, v in settings.items():
+        args.extend(["-c", k + "=" + json.dumps(v)])
+    return args
+
+
 class Session:
-    def __init__(self, directory, binary, task, env, tools=TOOLS):
+    def __init__(self, directory, binary, task, env, tools=TOOLS, model_name=MODEL):
         self.tools = set(tools)
         self.work = directory / "agent"
         self.work.mkdir(exist_ok=True)
@@ -40,56 +101,8 @@ class Session:
         }
         self.env["CODEX_HOME"] = str(home)
         self.session_file = directory / "thread"
-        self.codex = shutil.which("codex")
-        catalog = json.loads(
-            subprocess.check_output([self.codex, "debug", "models", "--bundled"])
-        )
-        model = next(m for m in catalog["models"] if m["slug"] == MODEL)
-        model.update(
-            shell_type="disabled",
-            apply_patch_tool_type=None,
-            tool_mode="direct",
-            experimental_supported_tools=[],
-            supports_search_tool=False,
-            node_repl_disabled=True,
-            multi_agent_version=None,
-            use_responses_lite=False,
-        )
-        catalog_file = directory / "catalog.json"
-        catalog_file.write_text(json.dumps({"models": [model]}))
-        self.args = [
-            self.codex,
-            "exec",
-            "--ignore-user-config",
-            "--ignore-rules",
-            "--sandbox",
-            "read-only",
-            "--skip-git-repo-check",
-            "--json",
-            "-m",
-            MODEL,
-        ]
-        for feature in (
-            "shell_tool",
-            "unified_exec",
-            "view_image",
-            "image_generation",
-            "computer_use",
-            "apps",
-            "plugins",
-            "multi_agent",
-            "multi_agent_v2",
-            "goals",
-            "code_mode",
-            "skill_search",
-            "tool_suggest",
-        ):
-            self.args.extend(["--disable", feature])
+        self.args = restricted_exec(directory, model_name) + ["--json"]
         settings = {
-            "web_search": "disabled",
-            "model_catalog_json": str(catalog_file),
-            "model_reasoning_effort": "low",
-            "project_doc_max_bytes": 0,
             "mcp_servers.an.command": str(binary),
             "mcp_servers.an.args": ["mcp", "--task", task],
             "mcp_servers.an.env_vars": ["AN_HOME", "AN_AGENT_TOKEN"],

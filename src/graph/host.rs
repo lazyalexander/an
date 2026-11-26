@@ -109,7 +109,9 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
     }
     if action == "finish" {
         if t["closed"] == true {
-            return Ok(json!({"closed":true}));
+            instances::request_task_unload(&tx, task)?;
+            tx.commit()?;
+            return instances::finish_unloads(&mut db, task, &_lock);
         }
         permission::current(&tx, task)?;
         for state in graph["activity"]
@@ -128,6 +130,7 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
         }
         let unresolved:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM objects WHERE kind='run' AND json_extract(body,'$.task')=? AND json_extract(body,'$.status') IN ('running','unknown','cancel_pending'))",[task],|r|r.get(0))?;
         ensure!(!unresolved, "Unresolved run");
+        instances::request_task_unload(&tx, task)?;
         let mut closed = t;
         closed["closed"] = json!(true);
         put(&tx, "task", task, &closed)?;
@@ -135,7 +138,7 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
         event(&mut graph, "host", "closed", task, json!({}));
         put(&tx, "graph", task, &graph)?;
         tx.commit()?;
-        return Ok(json!({"closed":true}));
+        return instances::finish_unloads(&mut db, task, &_lock);
     }
     if action == "view" {
         let authorized = permission::current(&tx, task).is_ok();
