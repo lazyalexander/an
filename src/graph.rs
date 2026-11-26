@@ -49,6 +49,11 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         graph["model_calls"] = json!(model::history(&db, task)?);
         return Ok(graph);
     }
+    if op == "graph_say" {
+        let receipt = say(&tx, task, &mut graph, args)?;
+        tx.commit()?;
+        return Ok(receipt);
+    }
     let key = canonical(&json!([task, field(args, "idempotency_key")?]));
     if let Some(prior) = find(&tx, "graph_submission", &key)? {
         ensure!(
@@ -381,4 +386,64 @@ fn append_nodes(
     }
     graph["revision"] = json!(graph["revision"].as_u64().unwrap() + 1);
     Ok(())
+}
+
+/// Record a message from the agent to the person.
+///
+/// Messages are text only and never carry decisions; those stay typed
+/// surfaces. Each message names the graph revision it refers to and, when it
+/// answers an instruction, that instruction's event cursor. A repeated
+/// idempotency key returns the original receipt instead of a second message.
+fn say(tx: &Connection, task: &str, graph: &mut Value, args: &Value) -> Result<Value> {
+    ensure!(get(tx, "task", task)?["closed"] != true, "Task closed");
+    let text = field(args, "text")?;
+    ensure!(!text.trim().is_empty(), "Empty message");
+    let max = crate::config::load()?.limit("agent_message_max_bytes");
+    ensure!(text.len() as u64 <= max, "Message exceeds {max} bytes");
+    let purpose = args["purpose"].as_str().unwrap_or("progress");
+    ensure!(
+        matches!(purpose, "progress" | "question" | "result"),
+        "Unknown message purpose {purpose}"
+    );
+    let key = canonical(&json!([task, "say", field(args, "idempotency_key")?]));
+    if let Some(prior) = find(tx, "graph_message", &key)? {
+        ensure!(
+            prior["args"] == *args,
+            "Idempotency key reused with different content"
+        );
+        return Ok(prior["receipt"].clone());
+    }
+    let events = graph["events"].as_array().context("Invalid graph events")?;
+    let reply_to = match args.get("reply_to") {
+        None | Some(Value::Null) => Value::Null,
+        Some(cursor) => {
+            let cursor = cursor.as_u64().context("Expected an instruction cursor")?;
+            ensure!(
+                events
+                    .iter()
+                    .any(|e| e["cursor"] == cursor && e["kind"] == "instruction"),
+                "reply_to must name an instruction"
+            );
+            json!(cursor)
+        }
+    };
+    let revision = graph["revision"].clone();
+    let authority = hash(canonical(&permission::stamp(tx, task)?).as_bytes());
+    event(
+        graph,
+        "agent",
+        "message",
+        task,
+        json!({"text":text,"purpose":purpose,"reply_to":reply_to,"revision":revision,"authority":authority}),
+    );
+    put(tx, "graph", task, graph)?;
+    let receipt =
+        json!({"cursor":graph["events"].as_array().map_or(0, Vec::len),"revision":revision});
+    put(
+        tx,
+        "graph_message",
+        &key,
+        &json!({"args":args,"receipt":receipt}),
+    )?;
+    Ok(receipt)
 }

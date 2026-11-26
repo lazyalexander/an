@@ -8,6 +8,8 @@ if (location.hash) {
 let view, selection, instanceKey, channel, frame, panelTimer, panelEpoch = 0;
 // All user-facing text and timing come from studio/config via /config.json.
 let strings = {}, settings = {};
+// The task on screen. A workspace Studio starts with none and creates one from the text box.
+let currentTask = null, workspaceMode = false;
 function t(key, vars = {}) {
   const text = key.split(".").reduce((node, part) => node?.[part], strings);
   return typeof text === "string" ? text.replace(/\{(\w+)\}/g, (_, name) => vars[name] ?? "") : key;
@@ -15,7 +17,8 @@ function t(key, vars = {}) {
 const statusLabel = status => strings.status?.[status] ?? status;
 async function api(action, body = {}) {
   const response = await fetch("/api/" + action, {method:"POST",
-    headers:{"Authorization":"Bearer " + key, "Content-Type":"application/json"},
+    headers:{"Authorization":"Bearer " + key, "Content-Type":"application/json",
+             ...(currentTask ? {"X-An-Task": currentTask} : {})},
     body:JSON.stringify(body)});
   const value = await response.json();
   if (!response.ok) throw Error(value.error || response.statusText);
@@ -238,6 +241,10 @@ function renderTimeline(title, deliveries) {
     let label = t("timeline." + (row.action || row.kind));
     let action;
     if (row.kind === "instruction") label += " · " + row.text;
+    if (row.kind === "message") {
+      label = t("timeline." + (row.purpose === "question" ? "question" : "message")) + " · " + row.text;
+      item.dataset.actor = "agent";
+    }
     if (row.node) {
       label += " · " + title(row.node);
       if (row.response !== undefined) label += " · " + JSON.stringify(row.response);
@@ -446,17 +453,45 @@ function renderControls() {
   el("control-state").textContent = view.closed ? t("control.closed") : paused ? t("control.paused") : "";
   if (!view.authorized || view.closed) {
     el("instruct").hidden = true;
-    return el("task-controls").replaceChildren();
+    return el("task-controls").replaceChildren(
+      ...(workspaceMode ? [button(t("start.new"), () => openTask(null))] : []));
   }
   const control = action => api("control", {action}).then(update);
   el("task-controls").replaceChildren(
     paused ? button(t("control.resume"), () => control("resume")) : button(t("control.pause"), () => control("pause")),
-    button(t("control.stop"), () => confirm(t("control.stop_confirm")) && control("stop")));
+    button(t("control.stop"), () => confirm(t("control.stop_confirm")) && control("stop")),
+    ...(workspaceMode ? [button(t("start.new"), () => openTask(null))] : []));
   el("instruct").hidden = false;
 }
 let inFlight;
+function openTask(id) {
+  currentTask = id;
+  try { id ? sessionStorage.setItem("studio-task", id) : sessionStorage.removeItem("studio-task"); } catch {}
+  view = undefined; selection = undefined; instanceKey = null;
+  el("timeline").replaceChildren(); el("content").replaceChildren(); el("controls").replaceChildren();
+  return update();
+}
+// With no task yet, the page is only the text box: typing starts a task.
+function renderLobby() {
+  el("task").textContent = "";
+  el("control-state").textContent = "";
+  el("task-controls").replaceChildren();
+  el("title").textContent = t("start.heading");
+  status(t("start.prompt"));
+  el("instruct").hidden = false;
+  el("instruct").querySelector("button").textContent = t("start.send");
+  el("instruction").placeholder = t("start.placeholder");
+  el("sources").hidden = true;
+}
 function update(){
-  if(!inFlight)inFlight=api("view").then(v=>{view=v;return render();}).catch(e=>status(e.message)).finally(()=>{inFlight=null;});
+  if (!currentTask) { renderLobby(); return Promise.resolve(); }
+  el("instruct").querySelector("button").textContent = t("instruction.send");
+  el("instruction").placeholder = t("instruction.placeholder");
+  el("sources").hidden = false;
+  if(!inFlight)inFlight=api("view").then(v=>{view=v;return render();}).catch(e=>{
+    if (workspaceMode && e.message === "Unknown task") return openTask(null);
+    status(e.message);
+  }).finally(()=>{inFlight=null;});
   return inFlight;
 }
 // Free text goes to the agent unchanged, tagged with the revision on screen.
@@ -465,6 +500,15 @@ el("instruct").onsubmit = async event => {
   event.preventDefault();
   const text = el("instruction").value;
   if (!text.trim()) return;
+  if (!currentTask) {
+    try {
+      const started = await api("start", {text});
+      el("instruction").value = "";
+      await openTask(started.task);
+      status(t("start.started"));
+    } catch (e) { status(e.message); }
+    return;
+  }
   try {
     const sent = await api("instruct", {text, revision: view.revision ?? 0});
     el("instruction").value = "";
@@ -473,6 +517,10 @@ el("instruct").onsubmit = async event => {
 };
 fetch("/config.json").then(r => r.json()).then(config => {
   strings = config.strings; settings = config.settings;
+  workspaceMode = config.workspace;
+  let remembered = null;
+  try { remembered = sessionStorage.getItem("studio-task"); } catch {}
+  currentTask = config.task || (workspaceMode ? remembered : null);
   document.documentElement.lang = config.locale;
   document.title = t("title");
   for (const node of document.querySelectorAll("[data-t]")) node.textContent = t(node.dataset.t);

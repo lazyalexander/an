@@ -15,6 +15,7 @@ Operational defaults live in [`config/an.json`](../config/an.json) and are compi
 | `transfer_limit_bytes` | 33554432 | Bytes a bridge may return per call |
 | `graph_expansion_budget` | 256 | Nodes drivers may add to one task |
 | `instruction_max_bytes` | 4096 | Size of one relayed instruction |
+| `agent_message_max_bytes` | 4096 | Size of one agent message to the person |
 | `model_aliases` | `{"local":"qwen3:8b"}` | Trusted alias mapping to installed local Ollama models |
 | `model_default_calls` | 4 | Task quota when the host grants an alias |
 | `ollama_port` | 11434 | Ollama port on 127.0.0.1 |

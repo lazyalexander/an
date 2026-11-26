@@ -29,3 +29,4 @@ header nav { display:flex;gap:8px;margin-left:auto } header nav button { padding
 #intent fieldset { margin:8px 0;min-width:0;overflow-wrap:anywhere;border:1px solid #bbcbbf }
 #intent details { margin-top:4px }
 #intent section { padding:0 }
+#timeline li[data-actor="agent"] > div { color:#183d34;background:#eef5f0;border-left:3px solid #649882;padding:6px 10px;border-radius:4px }

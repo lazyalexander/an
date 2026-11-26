@@ -1,6 +1,6 @@
 # Architecture
 
-An lets an agent run industrial work for one person. An is the only hub: the person, the agents and any presentation layer are its clients. The person has one input, instructions and controls sent to An, and one output, the deliveries An publishes. Everything between them is planned by agents, executed in Apple Container and recorded by An. Painting, CAD and animation are instances of this shape, not separate products.
+An lets an agent run industrial work for one person. An is the only hub: the person, the agents and any presentation layer are its clients. It is the layer between the person and the agent: it curates what passes in each direction, and it chains isolated container programs and agents into a recorded pipeline. The person has one input, instructions and controls sent to An, and one output, the deliveries An publishes. Everything between them is planned by agents, executed in Apple Container and recorded by An. Painting, CAD and animation are instances of this shape, not separate products.
 
 ## Final form
 
@@ -8,7 +8,7 @@ An lets an agent run industrial work for one person. An is the only hub: the per
 2. **Every action passes through An.** The person instructs An, and An relays the instruction to the agent. The agent acts only through An: graph submissions, transfers and model calls are An operations. Nothing addresses an agent, a container or another agent out of band.
 3. **Each part of the work runs in its own container.** Temporary code, temporary artifacts and secrets stay inside the container that needs them. Every transfer between containers crosses an An permission check.
 4. **No one draws a pipeline.** There is no predefined graph and no template. Agents decide the next step from the last result. A container may use a fixed internal procedure. Between containers, the graph grows as work happens: it is the execution record and the provenance, not a plan.
-5. **Presentation is per pipeline.** A pipeline may use the macro UI, the CLI or the harness conversation. A headless batch pipeline needs no page. Intervention is mandatory in every pipeline; the macro UI is only one way to present it.
+5. **A text box whenever a person is involved.** The macro UI resembles a mainstream agent harness: the person starts and steers work by typing, and the agent answers in the same timeline. Work that needs more than text, such as pressure painting or image and model inspection, is added as presentation plugins. A headless batch pipeline may use only the CLI. Intervention is mandatory in every pipeline.
 
 ## How the parts fit
 
@@ -40,6 +40,25 @@ An separates two channels from the person:
 - **Controls** are executed by An directly and never relayed: stop or pause a task, cancel work, deny or approve a permission request. They must work even when an agent is stuck or unwilling.
 - **Instructions** express intent ("use B", "rotate slower") and are relayed to the agent, which decides what to do. An relays the text unchanged. It adds a record: sender, time, turn and the graph revision the person was looking at. An agent that receives an instruction against an older revision can detect that it is stale. An never interprets or rewrites an instruction; doing so would make it a second agent.
 
+## Curation between the person and the agent
+
+An curates both directions, without becoming a second agent:
+
+- **The original is always kept.** Curation adds a layer on top of the original text and never replaces it. Both are recorded, and the agent can read both.
+- **Person to agent:** An attaches context, not new intent: the graph revision the person was looking at, the selected node or artifact and the turn. It does not paraphrase what the person meant.
+- **Agent to person:** An turns agent output into timeline entries: messages, stage summaries, decisions and deliveries. Prompts, tool calls and the agent loop stay hidden. This direction matters most, because it is what makes the macro UI readable.
+- **Curation by a model is a graph step.** If a model rewrites or summarises, it runs as a recorded node with its own inputs and outputs, so every change can be traced. Nothing on the relay path is rewritten silently.
+
+## Starting work and agent replies
+
+- **Start from a sentence.** The person opens the macro UI for a workspace and types what they want. An creates a task, begins a turn and records the sentence as the task's first instruction. The agent attached to that task picks it up.
+- **The agent talks through An.** The agent posts messages to the person with `an_graph_say`: progress, a question, or a result. Each message is recorded with the graph revision it refers to and, when it answers an instruction, that instruction's cursor. Messages appear in the timeline; they never carry decisions, which stay typed surfaces.
+- **The agent runner belongs to the product.** Whatever wakes the agent when a task starts, an instruction arrives or a surface is answered must be a harness-neutral part of An, not an example script.
+
+## Presentation plugins
+
+A plugin presents a kind of surface that a panel package cannot: pressure painting in a native application, image or 3D rendering, or other specialised viewers. The Krita native surface is the first plugin: the graph dispatches a document, and the plugin returns a save receipt. Further plugins follow the same contract: An dispatches a frozen input, the plugin presents it outside the agent's reach, and its result enters the graph as a validated response.
+
 ## Agent boundary
 
 - The harness exposes only task-scoped An MCP to the agent. A general shell under the controller's identity defeats the boundary and is not permitted.
@@ -63,7 +82,8 @@ The macro UI follows a harness layout:
 
 - **Timeline, center.** Only An-level records: the person's instructions, the agent's stage summaries, decisions, failures and deliveries. No prompts, tool calls, agent loop or scrolling logs.
 - **Side panel.** The surfaces waiting for the person and the outputs to check. It widens or switches to a focus view when an image or model needs room. Pressure painting stays in the native application.
-- **Instruction box, bottom.** Free text is relayed unchanged to the agent with the current graph revision. Text never answers a waiting surface; the agent may supersede that surface in response.
+- **Instruction box, bottom.** Always present when a person is involved. Without a task it starts one. In a task, free text is relayed with its original kept and its context attached. Text never answers a waiting surface; the agent may supersede that surface in response.
+- **Agent messages** appear in the timeline next to the instructions they answer.
 - **Controls.** Stop, pause, approve and deny are separate buttons executed by An. They are never parsed from text.
 
 A pipeline without the macro UI still needs somewhere to present surfaces and permission requests. Either it contains no surface nodes, or its harness renders the declared decision types. Controls and deliveries remain available through the CLI.
@@ -95,6 +115,12 @@ The native channel asks an installed adapter for its supported extensions, snaps
 | Native surfaces | Krita native node, saved KRA receipts and Bridge native mode implemented; reference-machine Pencil acceptance gates instance-mode retirement |
 | Turn-level policy to avoid approval fatigue | Implemented for declared graph routes. Markdown review and minutes-to-announcement exercise the shared CLI and Studio authorization card. |
 | Reclamation of unreferenced intermediate artifacts | Not started |
+| Agent messages to the person (`an_graph_say`) | Implemented: idempotent, revision- and instruction-linked, shown in the timeline |
+| Starting a task from a sentence in the macro UI | Implemented: workspace Studio creates the task and hands the agent its MCP config; nothing wakes the agent yet |
+| Harness-neutral agent runner | Not started: examples wake agents from scripts |
+| Curation layer (original kept, context attached, outbound summaries) | Partial: instructions carry revision and turn; no outbound summaries |
+| Presentation plugin contract beyond Krita | Not started |
+| Remote model providers with host-held credentials | Not started: host-local Ollama only |
 
 ## Native surfaces
 

@@ -6,6 +6,7 @@ import socket
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -126,3 +127,29 @@ def test_task_page_labels_statuses_only_through_config():
     script = (STUDIO / "orchestrator" / "macro" / "graph" / "graph.js").read_text(encoding="utf-8")
     assert "labels[" not in script
     assert "statusLabel(s.status)" in script
+
+
+def test_workspace_studio_exposes_start_without_leaking_the_turn():
+    port = _free_port()
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "orchestrator", "--workspace", "w", "--an", "/usr/bin/false",
+         "--port", str(port)], cwd=STUDIO, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        text=True)
+    try:
+        url = proc.stdout.readline().strip().split("macro UI: ")[1]
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/config.json", timeout=2) as r:
+            served = json.loads(r.read())
+        assert served["workspace"] is True and served["task"] is None
+        key = url.split("#", 1)[1]
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/view", data=b"{}", method="POST",
+            headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
+        try:
+            urllib.request.urlopen(request, timeout=2)
+            raise AssertionError("view without a task must fail")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 409 and b"Unknown task" in exc.read()
+    finally:
+        proc.terminate()
+        proc.wait(timeout=5)
+    assert "AN_TURN" not in json.dumps(served)
