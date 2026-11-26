@@ -394,7 +394,9 @@ function renderIntent(card) {
     }
     const section = document.createElement("fieldset");
     const label = document.createElement("label");
-    const source = row.source.input || row.source.node + " / " + row.source.port;
+    const source = row.source.input || (row.source.producer_port
+      ? t("intent.anyRun") + " · " + JSON.stringify(row.producer_argv) + " / " + row.source.producer_port
+      : row.source.node + " / " + row.source.port);
     const destination = row.destination === "graph-metadata" ? t("intent.metadata") :
         row.operation === "publish" ? t("intent.workspace") : short(row.destination);
     const origin = row.source.input ? source : short(row.origin) + " · " + source;
