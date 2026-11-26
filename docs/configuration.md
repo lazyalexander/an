@@ -35,3 +35,14 @@ Format contracts that admission depends on stay in code: the 64 KiB `spool.yaml`
 Task Studio reads its labels from `studio/config/locales/<locale>.json`. The legacy experiment owns its instance manifests and translations, including Krita panel text, under `examples/legacy_studio/config/`.
 
 `model_aliases` maps an alias to a local Ollama model name, or to an image backend object: `{"kind": "image", "backend": "local", "model": ...}` or `{"kind": "image", "backend": "openai", "model": ..., "keychain": SERVICE}`. API keys are never configuration; they live in the Keychain entry named by `keychain`.
+
+
+Studio and the headless controller accept JSON or TOML overrides through `--config`. They apply the same validation to both formats. For example:
+
+```toml
+[agent]
+poll_ms = 500
+timeout_s = 900
+```
+
+The repository-owned `studio/an_host/controller.toml` declares the graph operations the presentation can forward and the import boundary checked by the Studio tests.

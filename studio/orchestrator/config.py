@@ -2,12 +2,15 @@
 
 
 import json
+import tomllib
 from pathlib import Path
 
 CONFIG_DIR = Path(__file__).resolve().parents[1] / "config"
 
 
 def _read(path: Path):
+    if Path(path).suffix == ".toml":
+        return tomllib.loads(Path(path).read_text(encoding="utf-8"))
     return json.loads(Path(path).read_text(encoding="utf-8"))
 
 

@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 from orchestrator import config
-from orchestrator.runner import Runner
+from an_host.runner import Runner
 
 ROOT = Path(__file__).resolve().parents[2]
 BINARY = ROOT / "target" / "debug" / "an"
