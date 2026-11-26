@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Pressure probe</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;background:#f4f2ee;font:14px system-ui;-webkit-user-select:none;user-select:none}
+canvas{position:fixed;inset:0;touch-action:none;background:#fff}
+#bar{position:fixed;left:8px;top:8px;display:flex;gap:6px;align-items:center;background:#ffffffe0;padding:6px 8px;border-radius:8px;box-shadow:0 1px 4px #0002;z-index:2}
+#bar button{font:inherit;padding:4px 10px}
+#stats{position:fixed;right:8px;top:8px;background:#183d34;color:#fff;padding:8px 10px;border-radius:8px;font:12px ui-monospace,monospace;white-space:pre;z-index:2}
+</style></head><body>
+<canvas id="c"></canvas>
+<div id="bar">
+  <input id="color" type="color" value="#1d3557">
+  <label>大小 <input id="size" type="range" min="1" max="40" value="12"></label>
+  <label><input id="smooth" type="checkbox" checked>稳定器</label>
+  <button id="undo">撤销</button><button id="clear">清空</button><button id="send">上传记录</button>
+</div>
+<div id="stats">等待笔输入…</div>
+<script>
+"use strict";
+// Borrowed from Krita's brush pipeline, reduced to what a sketch needs:
+//  - pressure curve (KisCubicCurve): a soft S-curve on raw pressure;
+//  - spacing-based dabs (KisPaintOpUtils/KisDistanceInformation): stamp
+//    dabs every `spacing * diameter` along the path, interpolating pressure;
+//  - weighted smoothing (KisToolFreehandHelper "weighted" mode);
+//  - every hardware sample via getCoalescedEvents, as Krita reads every tablet event.
+const key = location.hash.slice(1);
+const canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
+const dpr = window.devicePixelRatio || 1;
+let strokes = [], current = null, raw = [];
+function resize() {
+  canvas.width = innerWidth * dpr; canvas.height = innerHeight * dpr;
+  canvas.style.width = innerWidth + "px"; canvas.style.height = innerHeight + "px";
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0); redraw();
+}
+const curve = p => p * p * (3 - 2 * p);           // smoothstep pressure curve
+const SPACING = 0.15;
+function dab(x, y, p, color, size) {
+  const r = Math.max(0.4, size * curve(p) / 2);
+  ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
+}
+function drawSegment(s, a, b) {
+  const dist = Math.hypot(b.x - a.x, b.y - a.y);
+  const step = Math.max(0.5, s.size * SPACING * Math.max(curve(Math.max(a.p, b.p)), .1));
+  s.carry = s.carry || 0;
+  let t = s.carry;
+  while (t <= dist) {
+    const k = dist ? t / dist : 0;
+    dab(a.x + (b.x - a.x) * k, a.y + (b.y - a.y) * k, a.p + (b.p - a.p) * k, s.color, s.size);
+    t += step;
+  }
+  s.carry = t - dist;
+}
+function redraw() {
+  ctx.clearRect(0, 0, innerWidth, innerHeight);
+  for (const s of strokes) { s.carry = 0; for (let i = 1; i < s.pts.length; i++) drawSegment(s, s.pts[i - 1], s.pts[i]); }
+}
+function point(e, prev) {
+  let p = e.pointerType === "mouse" ? 0.5 : e.pressure;
+  const pt = {x: e.offsetX, y: e.offsetY, p, tx: e.tiltX, ty: e.tiltY, t: e.timeStamp};
+  if (smooth.checked && prev) {             // weighted smoothing toward the new sample
+    const w = 0.45; pt.x = prev.x + (pt.x - prev.x) * w; pt.y = prev.y + (pt.y - prev.y) * w;
+  }
+  return pt;
+}
+canvas.addEventListener("pointerdown", e => {
+  canvas.setPointerCapture(e.pointerId);
+  current = {color: color.value, size: +size.value, type: e.pointerType, pts: [point(e)]};
+  strokes.push(current); record(e, "down");
+});
+canvas.addEventListener("pointermove", e => {
+  if (!current) { record(e, "hover"); return; }
+  const coalesced = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
+  const events = coalesced.length ? coalesced : [e];
+  for (const ev of events) {
+    const prev = current.pts[current.pts.length - 1], pt = point(ev, prev);
+    current.pts.push(pt); drawSegment(current, prev, pt); record(ev, "move");
+  }
+  latency.push(performance.now() - e.timeStamp);
+});
+const end = e => { if (current) { record(e, "up"); current = null; } };
+canvas.addEventListener("pointerup", end); canvas.addEventListener("pointercancel", end);
+undo.onclick = () => { strokes.pop(); redraw(); };
+clear.onclick = () => { strokes = []; raw = []; latency = []; redraw(); show(); };
+
+// ---- measurement ----
+let latency = [];
+function record(e, phase) {
+  raw.push({phase, type: e.pointerType, p: +e.pressure.toFixed(4), tx: e.tiltX, ty: e.tiltY,
+            tw: e.twist, az: e.azimuthAngle, al: e.altitudeAngle, w: e.width, h: e.height, t: +e.timeStamp.toFixed(2)});
+  if (raw.length % 20 === 0) show();
+}
+function stats() {
+  const pen = raw.filter(r => r.phase === "move" && r.type === "pen");
+  const ps = pen.map(r => r.p), ts = pen.map(r => r.t);
+  let hz = 0;
+  if (ts.length > 10) { const gaps = ts.slice(1).map((t, i) => t - ts[i]).filter(g => g > 0 && g < 50).sort((a, b) => a - b);
+    hz = gaps.length ? Math.round(1000 / gaps[gaps.length >> 1]) : 0; }
+  const lat = latency.slice().sort((a, b) => a - b);
+  return {ua: navigator.userAgent, types: [...new Set(raw.map(r => r.type))], samples: raw.length,
+    pen_samples: pen.length, pressure_min: Math.min(...ps), pressure_max: Math.max(...ps),
+    distinct_pressures: new Set(ps).size, tilt_seen: pen.some(r => r.tx || r.ty || r.al < Math.PI / 2),
+    coalesced: !!PointerEvent.prototype.getCoalescedEvents, median_hz: hz,
+    event_latency_ms_p50: lat.length ? +lat[lat.length >> 1].toFixed(1) : null};
+}
+function show() {
+  const s = stats();
+  document.getElementById("stats").textContent =
+    `类型 ${s.types.join(",") || "-"}\n笔采样 ${s.pen_samples}\n压感 ${isFinite(s.pressure_min) ? s.pressure_min + "–" + s.pressure_max : "-"}\n不同压感值 ${s.distinct_pressures}\n倾斜 ${s.tilt_seen ? "有" : "无"}\n采样率 ~${s.median_hz} Hz\n事件延迟 p50 ${s.event_latency_ms_p50 ?? "-"} ms`;
+}
+send.onclick = async () => {
+  const r = await fetch("/report", {method: "POST", headers: {"Authorization": "Bearer " + key, "Content-Type": "application/json"},
+    body: JSON.stringify({stats: stats(), strokes: strokes.map(s => ({color: s.color, size: s.size, type: s.type, pts: s.pts})), raw})});
+  send.textContent = r.ok ? "已上传" : "上传失败";
+};
+addEventListener("resize", resize); resize();
+</script></body></html>
