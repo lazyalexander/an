@@ -12,4 +12,6 @@ Agent 通过 MCP 连接 An，使用工作区中的 spool。每个 spool 都是�
 
 运行 `cargo build --release --locked` 构建 Rust CLI 和 stdio MCP 网关。运行 spool 需要 Apple Container。
 
+框架位于 `src/` 和 `studio/`。面向具体应用的 spool、旧版实例 UI 和原生文档校验器位于 `examples/`。运行 `cargo build --release --locked --no-default-features` 可构建不含实验适配器的宿主。
+
 [架构](docs/architecture.md) · [Spool 镜像规范](docs/spool-images.md) · [工作区绑定](docs/workspaces.md) · [权限机制](docs/permissions.md) · [增量任务与宏 UI](docs/graph-studio.md) · [配置](docs/configuration.md)

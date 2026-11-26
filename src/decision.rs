@@ -117,7 +117,7 @@ pub fn execute(action: Action) -> Result<()> {
         );
         ensure!(
             row.get("adapter").is_none(),
-            "Complete and deliver the document in Krita"
+            "Complete and deliver the document in the native editor"
         );
         let mut args = json!({"node":node,"request":row["request"]});
         let decision = graph::host(target, "decision", &args)?;

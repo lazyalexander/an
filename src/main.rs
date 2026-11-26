@@ -1,3 +1,4 @@
+mod adapters;
 mod artifacts;
 mod config;
 mod decision;

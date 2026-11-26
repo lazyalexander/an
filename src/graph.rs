@@ -233,6 +233,9 @@ fn append_nodes(
                 let spool = field(node, "spool")?;
                 let digest = spool.rsplit_once('@').context("Invalid image reference")?.1;
                 let manifest = get(db, "admission", digest)?["manifest"].clone();
+                if let Some(panels) = manifest.get("panels") {
+                    crate::panels::validate(panels)?;
+                }
                 let ports = manifest["inputs"]
                     .as_array()
                     .context("Invalid manifest inputs")?;
@@ -334,6 +337,7 @@ fn append_nodes(
                     manifest["schema"] == "an.spool/v2",
                     "Expected v2 panel declaration"
                 );
+                crate::panels::validate(&manifest["panels"])?;
                 let panel = manifest["panels"]
                     .get(field(node, "panel")?)
                     .context("Unknown panel")?;

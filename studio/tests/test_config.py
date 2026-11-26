@@ -14,7 +14,7 @@ from orchestrator import config
 
 STUDIO = Path(__file__).resolve().parent.parent
 CJK = re.compile(r"[一-鿿]")
-CODE = [p for root in ("orchestrator", "adapter", "blender_addon", "pipeline")
+CODE = [p for root in ("orchestrator",)
         for p in (STUDIO / root).rglob("*")
         if p.suffix in {".py", ".js", ".html"} and "__pycache__" not in p.parts]
 
@@ -79,17 +79,6 @@ def test_every_text_key_used_by_the_pages_and_docker_exists():
     for key in graph_keys:
         _lookup(strings["graph"], key)
 
-    static = STUDIO / "orchestrator" / "macro" / "static"
-    legacy = set(re.findall(r"chrome\.(\w+)", (static / "app.js").read_text(encoding="utf-8")))
-    legacy |= set(re.findall(r'data-t="(\w+)"', (static / "index.html").read_text(encoding="utf-8")))
-    for key in legacy:
-        _lookup(strings["legacy"], key)
-
-    docker = (STUDIO / "adapter" / "krita_plugin" / "bridge_studio" / "docker.py").read_text()
-    for key in set(re.findall(r'_t\("(\w+)"', docker)):
-        _lookup(strings["krita"], key)
-
-
 def _free_port():
     with socket.socket() as s:
         s.bind(("127.0.0.1", 0))
@@ -125,7 +114,7 @@ def test_task_page_serves_text_and_timing_from_config():
 def test_boot_rejects_a_misspelled_override(tmp_path):
     bad = tmp_path / "studio.json"
     bad.write_text(json.dumps({"graph": {"poll": 5}}))
-    proc = subprocess.run([sys.executable, "-m", "orchestrator", "--fake", "--config", str(bad)],
+    proc = subprocess.run([sys.executable, "-m", "orchestrator", "--task", "example", "--config", str(bad)],
                           cwd=STUDIO, capture_output=True, text=True, timeout=30, check=False)
     assert proc.returncode == 2
     assert "unknown setting graph.poll" in proc.stderr

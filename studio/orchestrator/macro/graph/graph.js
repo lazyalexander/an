@@ -41,18 +41,30 @@ function clearPanel() {
   el("trace").replaceChildren();
   el("sources").open = false;
 }
+// Preview small, printable UTF-8 artifacts from any spool. Render as text only.
+function textPreview(encoded) {
+  if (encoded.length > 65536) return null;
+  try {
+    const bytes = Uint8Array.from(atob(encoded), c => c.charCodeAt(0));
+    const text = new TextDecoder("utf-8", {fatal:true}).decode(bytes);
+    return /[\x00-\x08\x0b\x0c\x0e-\x1f\x7f-\x9f]/.test(text) ? null : text;
+  } catch {
+    return null;
+  }
+}
 function filesPanel(files, parent = el("content")) {
   for (const [name, group] of Object.entries(files)) {
     for (const [filename, entry] of Object.entries(group)) {
       const a = document.createElement("a");
-      a.href = "data:application/octet-stream;base64," + (entry.data || entry);
+      a.href = "data:application/octet-stream;base64," + (entry.data ?? entry);
       a.download = filename;
       a.textContent = name + " / " + filename;
       const row = document.createElement("p");
       row.append(a);
-      if (/\.(md|txt|diff)$/i.test(filename) && (entry.data || entry).length <= 65536) {
+      const text = textPreview(entry.data ?? entry);
+      if (text !== null) {
         const preview = document.createElement("pre");
-        preview.textContent = new TextDecoder().decode(Uint8Array.from(atob(entry.data || entry), c=>c.charCodeAt(0)));
+        preview.textContent = text;
         row.append(preview);
       }
       parent.append(row);

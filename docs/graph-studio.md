@@ -99,7 +99,7 @@ Approve input access, click a new point on the V1 preview, and save. The new del
 
 ## Krita native painting
 
-Build the example spool as described above, install the Krita adapter with `studio/adapter/install.sh` and enable the Bridge Studio Python plugin in Krita. Open the **An · 原生绘画** docker. Run the demo with `bridge-native` and select the printed `connect.json` using **连接任务…**. The example follows the Bridge comparison with a native paint step and publishes the returned KRA.
+Build the example spool as described above, install the Krita adapter with `examples/legacy_studio/adapter/install.sh` and enable the Bridge Studio Python plugin in Krita. Open the **An · 原生绘画** docker. Run the demo with `bridge-native` and select the printed `connect.json` using **连接任务…**. The example follows the Bridge comparison with a native paint step and publishes the returned KRA.
 
 A task can also run its adapter independently of Studio:
 
