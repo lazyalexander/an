@@ -38,6 +38,16 @@ panels:
     kind: surface
     bindings: []
     decision: {type: adjust, field: seconds, value_type: integer, options: [1, 2, 3, 4, 5], default: 3}
+  sketch:
+    title: 画一张草稿
+    kind: surface
+    bindings: []
+    optional: [reference]
+    decision: {type: sketch, extra: {note: text}}
+  finished:
+    title: 整理后的线稿
+    kind: delivery
+    bindings: [sketch, finished]
   paint:
     title: 原生压感绘画
     kind: native

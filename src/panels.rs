@@ -135,6 +135,22 @@ pub fn schema(panel: &Value) -> Result<Value> {
             }
         }
         "confirm" => props["confirmed"] = json!({"type":"boolean"}),
+        "sketch" => {
+            // A pressure drawing, optionally over one reference artifact.
+            // Points are normalized [x, y, pressure] so any screen size maps
+            // onto the same canvas, and downstream spools need no viewport.
+            ensure!(
+                names(&panel["bindings"])?.len() <= 1,
+                "sketch takes at most one reference artifact"
+            );
+            let stroke = json!({"type":"object","additionalProperties":false,
+                "required":["color","size","points"],
+                "properties":{
+                    "color":{"type":"string"},
+                    "size":{"type":"number","minimum":0.5,"maximum":200},
+                    "points":{"type":"array","items":{"type":"array","items":coordinate}}}});
+            props["strokes"] = json!({"type":"array","items":stroke});
+        }
         "adjust" => {
             keys.extend(["field", "value_type", "options", "default"]);
             let field = d["field"]
@@ -213,6 +229,27 @@ pub fn check_bindings(panel: &Value, inputs: &Value) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sketch_declares_normalized_pressure_strokes() {
+        let panel = json!({"kind":"surface","title":"Draw","bindings":["reference"],
+            "decision":{"type":"sketch","extra":{"note":"text"}}});
+        let rule = schema(&panel).unwrap();
+        let good = json!({"note":"roof", "strokes":[{"color":"#1d3557","size":12,
+            "points":[[0.1,0.2,0.3],[0.15,0.25,0.9]]}]});
+        crate::graph::response_valid(&rule, &good).unwrap();
+        for bad in [
+            json!({"note":"x","strokes":[{"color":"#000","size":12,"points":[[1.5,0.2,0.3]]}]}),
+            json!({"note":"x","strokes":[{"color":"#000","size":12,"points":[[0.1,0.2,0.3]],"t":1}]}),
+            json!({"note":"x","strokes":[{"color":"#000","points":[]}]}),
+            json!({"note":"x"}),
+        ] {
+            assert!(crate::graph::response_valid(&rule, &bad).is_err(), "{bad}");
+        }
+        let mut two = panel.clone();
+        two["bindings"] = json!(["a", "b"]);
+        assert!(schema(&two).is_err());
+    }
     #[test]
     fn numeric_options_round_trip_through_browser_json() {
         let mut panel = json!({"kind":"surface","title":"Adjust","bindings":[],"decision":{"type":"adjust","value_type":"number","field":"append","options":[1.0],"default":1}});
