@@ -120,6 +120,13 @@ impl Gateway {
             let op = &name[3..];
             let mut value = if matches!(op, "graph_submit" | "graph_state" | "graph_say") {
                 crate::graph::dispatch(&self.task, op, &args)?
+            } else if op == "scope_propose" {
+                let mut db = connect()?;
+                let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+                let card =
+                    crate::intent::propose(&tx, &self.task, json!({"turn_scope": args["routes"]}))?;
+                tx.commit()?;
+                crate::intent::public(card)
             } else if op == "deliveries" {
                 deliveries(&connect()?, &self.task, args["after"].as_i64().unwrap_or(0))?
             } else {

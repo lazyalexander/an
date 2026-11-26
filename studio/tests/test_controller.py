@@ -116,3 +116,50 @@ def test_presentation_import_boundary():
         if name == "an_host" or name.startswith("an_host."):
             assert any(name == root or name.startswith(root + ".")
                        for root in rules["host_imports"]), name
+
+
+def test_ended_turn_retires_even_without_agent(tmp_path, monkeypatch):
+    from an_host.controller import controller
+
+    monkeypatch.setenv("AN_HOME", str(tmp_path))
+    workspace, _ = setup_workspace(tmp_path)
+    options = dict(binary=str(BINARY), workspace=workspace, harness="studio", task=None,
+                   agent={**load()["agent"], "command": None})
+    with controller(tmp_path / "scope", options) as (request, servers):
+        task = request("start", None, {"text": "retire"})["task"]
+        turn = servers[task]["an"]["env"]["AN_TURN"]
+        subprocess.run([BINARY, "permission", "end", "--task", task],
+                       env={**os.environ, "AN_TURN": turn}, check=True)
+        file = tmp_path / "controllers/scope/tasks.json"
+        deadline = time.monotonic() + 5
+        while task in json.loads(file.read_text()) and time.monotonic() < deadline:
+            time.sleep(.05)
+        assert task not in servers and turn not in file.read_text()
+        assert not request("view", task, {})["authorized"]
+
+
+def test_agent_can_propose_and_only_operator_can_decide(tmp_path, monkeypatch):
+    from an_host.controller import controller
+    from fake_agent import Mcp
+
+    monkeypatch.setenv("AN_HOME", str(tmp_path))
+    workspace, _ = setup_workspace(tmp_path)
+    options = dict(binary=str(BINARY), workspace=workspace, harness="studio", task=None,
+                   agent={**load()["agent"], "command": None})
+    with controller(tmp_path / "scope", options) as (request, servers):
+        task = request("start", None, {"text": "review the draft"})["task"]
+        agent = Mcp(servers[task]["an"])
+        try:
+            tools = agent.tools()
+            assert "an_scope_propose" in tools and not any("decide" in name for name in tools)
+            state = agent.tool("an_state", {})
+            spool = next(iter(state["spools"]))
+            route = {"operation": "publish", "origin": spool, "source": {"producer_port": "subgraph.json"},
+                     "destination": "graph-metadata", "producer_argv": ["generate"]}
+            card = agent.tool("an_scope_propose", {"routes": [route]})
+            assert card["status"] == "pending"
+            assert request("view", task, {})["intent"]["id"] == card["id"]
+            decision = request("intent-decide", task, {"id": card["id"], "decisions": ["allow"]})
+            assert decision["status"] == "decided"
+        finally:
+            agent.close()

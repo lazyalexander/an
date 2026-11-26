@@ -3,6 +3,7 @@ from contextlib import contextmanager
 import json
 import os
 import subprocess
+import threading
 import tomllib
 import uuid
 from pathlib import Path
@@ -38,13 +39,30 @@ def controller(directory, options):
     storage.mkdir(parents=True, mode=0o700, exist_ok=True)
     state = storage / "tasks.json"
     mcp = json.loads(state.read_text()) if state.exists() else {}
+    guard = threading.Lock()
     turns = {key: servers["an"]["env"]["AN_TURN"] for key, servers in mcp.items()}
     if task:
         turn = os.environ.get("AN_TURN")
         turns[task] = turn
         mcp[task] = {"an": {"command": binary, "args": ["mcp", "--task", task],
                             "env": {k: os.environ[k] for k in ("AN_HOME", "AN_TURN") if k in os.environ}}}
-    runner = Runner(binary, options["agent"], turns, mcp)
+    def retire(key):
+        with guard:
+            if key not in turns:
+                return
+            history = storage / "closed"
+            history.mkdir(exist_ok=True, mode=0o700)
+            (history / key).touch(mode=0o600)
+            mcp.pop(key, None)
+            turns.pop(key)
+            save()
+        with runner.guard:
+            proc = runner.procs.get(key)
+            if proc and proc.poll() is None:
+                proc.terminate()
+            runner.status_by_task.pop(key, None)
+
+    runner = Runner(binary, options["agent"], turns, mcp, retire=retire)
 
     def save():
         pending = state.with_suffix(".tmp")
@@ -52,7 +70,7 @@ def controller(directory, options):
         os.replace(pending, state)
 
     def an(command, body, turn=None):
-        env = {**os.environ, "AN_TURN": turn} if turn else None
+        env = {**os.environ, "AN_TURN": turn} if turn is not None else None
         proc = subprocess.run([binary, *command], input=json.dumps(body), text=True,
                               capture_output=True, check=False, env=env)
         if proc.returncode:
@@ -70,9 +88,10 @@ def controller(directory, options):
         servers = bound["mcp_servers"]
         for server in servers.values():
             server.setdefault("env", {})["AN_TURN"] = turn
-        mcp[created] = servers
-        save()
-        turns[created] = turn  # expose to the runner after saving its connection
+        with guard:
+            mcp[created] = servers
+            save()
+            turns[created] = turn  # expose to the runner after saving its connection
         return {"task": created}
 
     def dispatch(action, current, body):
@@ -83,6 +102,13 @@ def controller(directory, options):
             if not isinstance(text, str) or not text.strip():
                 raise ValueError("Empty instruction")
             return start(text)
+        if (isinstance(current, str) and current.isalnum() and current not in turns
+                and action in ("view", "deliveries", "open") and (storage / "closed" / current).is_file()):
+            def read(name, args):
+                return an(["graph", "--task", current, name], args, "")
+            if action == "view":
+                return task_view(read, {"state": "off"})
+            return read(action, body)
         if current not in turns:
             raise ValueError("Unknown task")
         turn = turns[current]

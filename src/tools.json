@@ -385,6 +385,16 @@
     }
   },
   {
+    "name": "an_scope_propose",
+    "description": "Before submitting a graph for a new instruction, propose the minimal turn routes for the person to review in Studio. Each route has operation, origin, source, destination. Use source.input for a named task input, source.node and source.port for an exact output, or source.producer_port and producer_argv for recurring immutable spool outputs. Name graph-metadata for subgraph publication and model:<granted alias> for model inputs. Only the person can approve.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {"routes": {"type": "array", "minItems": 1, "items": {"type": "object"}}},
+      "required": ["routes"],
+      "additionalProperties": false
+    }
+  },
+  {
     "name": "an_graph_say",
     "description": "Post a message to the person in the task timeline. Use for progress, a question or a result; ask for decisions with surfaces instead. Pass reply_to with an instruction's event cursor when answering it.",
     "inputSchema": {

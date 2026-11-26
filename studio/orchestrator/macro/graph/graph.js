@@ -401,6 +401,12 @@ function renderIntent(card) {
         row.operation === "publish" ? t("intent.workspace") : short(row.destination);
     const origin = row.source.input ? source : short(row.origin) + " · " + source;
     label.textContent = origin + " → " + destination + " ";
+    if (row.operation === "model") {
+      const backend = card.model.model;
+      label.append(document.createTextNode(
+        (typeof backend === "string" ? "Ollama / " + backend : backend.backend + " / " + backend.model)
+        + " · " + t("intent.budget") + " " + card.model.budget + " "));
+    }
     const field = document.createElement("select");
     for (const value of ["allow","ask","deny"]) field.add(new Option(t("intent."+value),value));
     fields[index] = field;
