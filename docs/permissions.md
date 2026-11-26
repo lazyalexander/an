@@ -39,3 +39,16 @@ The decision can also be `deny` or an ordered JSON array such as `["allow","ask"
 Each route requires four fields: `operation`, `source`, `origin`, and `destination`. Use a graph input reference (`{"input":"minutes.json"}`) or a producer output (`{"node":"organize","port":"summary.json"}`). Task inputs have origin `task-input:<name>`; An fills in their immutable version. For a future output supply the producer origin (registered image digest, model alias origin, or `response`). To preapprove a read-only spool output, also declare `producer_argv` with the complete command and arguments. An compares it with the recorded invocation that produced the bound file. A missing or different command, an editable producer, or a change from the first authorized revision requires an individual decision for the actual revision. Destinations are task spool references, `model:<alias>`, `studio`, the task's delivery destination or `graph-metadata`. Proposal publication is a distinct route from publishing a delivery. See the trusted declarations in the Markdown and minutes examples.
 
 The existing workspace and host policy checks run first. A matching intent approval can satisfy an interactive check inside the graph scheduler, including a dynamically proposed child. Unlisted flows follow normal permission handling. An explicit `ask` requires individual confirmation even when a host allowance or turn grant exists. A matching denial fails the flow. Studio keeps unrelated requests, including evidence reads, available while the card is pending. Confirming the card settles covered approvals and denials even when a multi-input node still needs another decision. Model quota checks remain in effect. Replacing a turn or either policy revision invalidates the card. Intent matches record the card ID, route, actual revision and operation details in the effect ledger. The declared output origin identifies the trusted producer; permission matching does not inspect document semantics.
+
+### Turn scopes for changing graphs
+
+The controller may pass an object to `intent-propose` in place of the exact-route array. The operator reviews the rules together in Studio. Replace spool names with the task's admitted spool identifiers.
+
+```json
+{"turn_scope":[
+  {"operation":"input","origin":"task-input:original","source":{"input":"original"},"destination":"converter"},
+  {"operation":"handoff","origin":"converter","producer_argv":["convert"],"source":{"producer_port":"output"},"destination":"viewer"}
+]}
+```
+
+The first rule pins the named input revision. The second covers every version emitted on that port by that immutable spool command during the turn, regardless of graph node ID. It grants the output itself, including results produced after a separately authorized input. This applies to text, images, scene files and UI preview artifacts alike. A preview uses destination `studio`; a publication names the workspace. Model calls and other unlisted effects require their own decision. Workspace and host denials still apply. The scope expires when its turn or policy stamp changes.

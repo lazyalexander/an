@@ -57,7 +57,16 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
     let permitted = workspace
         .as_ref()
         .and_then(|w| w["policy"]["flows"].as_array());
-    let rows = spec.as_array().context("Expected intent route list")?;
+    // An object opts into a closed scope. Legacy lists retain their fallback policy.
+    let scoped = spec.is_object();
+    let rows = if scoped {
+        ensure!(spec.as_object().unwrap().len() == 1, "Unknown scope field");
+        spec["turn_scope"]
+            .as_array()
+            .context("Expected turn_scope list")?
+    } else {
+        spec.as_array().context("Expected intent route list")?
+    };
     ensure!(
         !rows.is_empty() && rows.len() <= 128,
         "Expected 1 to 128 routes"
@@ -77,6 +86,7 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
         let dest = row["destination"].as_str().context("Missing destination")?;
         let source = &row["source"];
         let fields = source.as_object().context("Expected a graph source")?;
+        let dynamic = scoped && source.get("producer_port").is_some();
         let version = if let Some(name) = source["input"].as_str() {
             ensure!(
                 fields.len() == 1 && origin == format!("task-input:{name}"),
@@ -85,7 +95,22 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
             task_info["inputs"]
                 .get(name)
                 .context("Input outside task")?
+        } else if dynamic {
+            ensure!(
+                fields.len() == 1
+                    && source["producer_port"]
+                        .as_str()
+                        .is_some_and(|p| !p.is_empty())
+                    && image(origin)
+                    && row["producer_argv"].is_array(),
+                "Expected immutable producer command and output port"
+            );
+            &Value::Null
         } else {
+            ensure!(
+                !scoped,
+                "Turn scope requires a named input or producer_port"
+            );
             ensure!(
                 fields.len() == 2
                     && ["node", "port"]
@@ -116,6 +141,10 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
             },
             "Destination or operation outside task"
         );
+        if scoped {
+            ensure!(matches!(op, "input" | "handoff" | "preview" | "publish") && dest != "graph-metadata",
+                "Turn scope supports task inputs, spool handoffs, Studio previews and workspace delivery");
+        }
         if let Some(flows) = permitted {
             let flow_origin = if op == "input" {
                 source["input"].as_str().unwrap_or(origin)
@@ -131,7 +160,7 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
         ensure!(seen.insert(canonical(&r)), "Duplicate intent route");
         if let Some(argv) = row.get("producer_argv") {
             ensure!(
-                source["node"].is_string()
+                (dynamic || source["node"].is_string())
                     && image(origin)
                     && argv.as_array().is_some_and(|a| a
                         .first()
@@ -144,7 +173,7 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
         }
         routes.push(r);
     }
-    let card = json!({"id":uid(),"task":task,"stamp":permission::stamp(db,task)?,"model":task_info["model_grant"],"routes":routes,"status":"pending"});
+    let card = json!({"id":uid(),"task":task,"stamp":permission::stamp(db,task)?,"model":task_info["model_grant"],"routes":routes,"status":"pending","turn_scope":scoped});
     put(db, "intent", task, &card)?;
     Ok(card)
 }
@@ -213,7 +242,13 @@ pub fn route_index(card: &Value, actual: &Value) -> Option<usize> {
         json!({"node":source["node"].as_str()?,"port":source["port"].as_str()?})
     };
     card["routes"].as_array()?.iter().position(|r| {
-        r["source"] == source
+        (r["source"] == source
+            || (card["turn_scope"] == true
+                && source["node"].is_string()
+                && r["source"]["producer_port"].is_string()
+                && r["source"]["producer_port"] == source["port"]
+                && r["producer_argv"].is_array()
+                && r["producer_argv"] == actual["producer_argv"]))
             && ["operation", "origin", "destination"]
                 .iter()
                 .all(|k| r[k] == actual[k])
@@ -235,7 +270,11 @@ pub fn authorize(db: &Connection, task: &str, stamp: &Value, actual: &Value) -> 
         return Ok(Match::Standard);
     };
     let Some(index) = route_index(&card, actual) else {
-        return Ok(Match::Standard);
+        return Ok(if card["turn_scope"] == true {
+            Match::Ask
+        } else {
+            Match::Standard
+        });
     };
     if card["status"] == "pending" {
         return Ok(Match::Pending);
@@ -263,6 +302,9 @@ fn approved_output(db: &Connection, card: &Value, index: usize, actual: &Value) 
     let revision = actual["revision"]
         .as_str()
         .context("Missing graph artifact version")?;
+    if card["turn_scope"] == true && rule["source"]["producer_port"].is_string() {
+        return Ok(Match::Allow(card["id"].clone()));
+    }
     let key = format!(
         "{}:{index}",
         card["id"].as_str().context("Invalid intent ID")?
@@ -285,6 +327,29 @@ pub fn public(mut card: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn turn_scope_follows_the_command_and_port_across_nodes_and_versions() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE objects(kind,id,body,PRIMARY KEY(kind,id))")
+            .unwrap();
+        let card = json!({"id":"scope","stamp":["turn"],"status":"decided","turn_scope":true,
+            "decisions":["allow"], "routes":[{"operation":"handoff","origin":"converter",
+            "source":{"producer_port":"output"},"destination":"viewer","producer_argv":["convert"]}]});
+        put(&db, "intent", "task", &card).unwrap();
+        let check = |r: &Value| authorize(&db, "task", &card["stamp"], r).unwrap();
+        for (node, revision) in [("first", "v1"), ("replanned", "v2")] {
+            let mut r = json!({"operation":"handoff","origin":"converter","destination":"viewer",
+                "source":{"node":node,"port":"output"},"revision":revision,"producer_argv":["convert"]});
+            assert_eq!(check(&r), Match::Allow(json!("scope")));
+            r["destination"] = json!("external");
+            assert_eq!(check(&r), Match::Ask);
+            r["destination"] = json!("viewer");
+            r["producer_argv"] = Value::Null;
+            assert_eq!(check(&r), Match::Ask);
+        }
+        assert_eq!(check(&Value::Null), Match::Ask);
+    }
+
     #[test]
     fn future_output_is_pinned_and_matches_only_its_declared_route() {
         let db = Connection::open_in_memory().unwrap();

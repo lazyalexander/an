@@ -1,6 +1,7 @@
 {
   "graph": {
     "intent": {
+      "anyRun": "本轮每次执行此命令的输出",
       "metadata": "任务图元数据",
       "workspace": "当前交付位置",
       "title": "本轮数据授权",
