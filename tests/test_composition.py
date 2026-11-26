@@ -13,7 +13,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "examples/composition"))
-from relay import reference
+from unittest.mock import Mock, patch
+from relay import reference, verify_cleanup
 from catalog import SPOOLS, manifest
 from evaluate import CASES
 from live import expected_outputs
@@ -27,6 +28,19 @@ BINARY = ROOT / "target/debug/an"
 
 
 class CompositionTests(unittest.TestCase):
+    def test_cleanup_requires_positive_container_evidence(self):
+        runtime = Mock()
+        runtime.close.return_value = True
+        report = {"instances": ["owned"]}
+        with patch("relay.subprocess.check_output", side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                verify_cleanup(runtime, report)
+        self.assertTrue(report["host_cleanup"])
+        self.assertFalse(report["cleanup"])
+        with patch("relay.subprocess.check_output", return_value=b"[]"):
+            verify_cleanup(runtime, report)
+        self.assertTrue(report["cleanup"])
+
     def test_cases_and_oracles(self):
         for case in CASES:
             with self.subTest(case=case["name"]):
