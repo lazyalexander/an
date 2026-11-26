@@ -64,6 +64,20 @@ The person controls a task through the host, never through the agent. Pass `{"ac
 
 Run Studio for a workspace instead of a task: `(cd studio && python3 -m orchestrator --workspace WORKSPACE_ID --an ../target/debug/an)`. The page opens on a text box. Typing a sentence binds a fresh session, creates the task, begins its turn and records the sentence as the task's first instruction. Studio prints one `agent:` line to its own stdout with the task ID and the MCP server configuration, including that turn, for the operator's agent harness. The browser never receives the turn. Use **新任务** to return to the text box.
 
+## Agent runner
+
+Studio wakes the task's agent itself when `agent.command` is set in its configuration (see [Configuration](configuration.md)). The runner watches each served task and wakes the agent on an instruction, an answered surface, or resuming the task. Events that arrive while the agent is still working are collected into the next wake.
+
+The command is harness-neutral. It starts in the task's private state directory under `$AN_HOME/agents/TASK`, which persists across wakes so the agent can resume its session. Its stdin is one JSON object with `task`, `cursor`, the triggering `events`, `mcp_servers` (An MCP for this task, including its turn) and `state_dir`. Its environment holds only `HOME`, `PATH`, `TMPDIR`, the names in `agent.env`, and `AN_HOME`, `AN_TURN`, `AN_TASK`, `AN_BINARY`. Exit 0 means the wake was handled.
+
+A wake is delivered at most once: the runner records the cursor before starting the agent, so a restarted Studio never repeats a wake. A failed wake is shown in the page header and is not retried; the person's next action wakes the agent again. While the task is paused the runner holds the events and wakes once on resume. Stop also ends the agent's current wake.
+
+`examples/agents/codex_agent.py` adapts the Codex CLI: Codex runs with shell, web and file tools disabled, sees only `an_skill`, `an_graph_state`, `an_graph_submit` and `an_graph_say`, and resumes one thread per task.
+
+```json
+{"agent": {"command": ["python3", "/path/to/An/examples/agents/codex_agent.py"], "env": ["CODEX_HOME"]}}
+```
+
 ## Agent messages
 
 The agent answers the person with `an_graph_say`: `text`, an `idempotency_key`, an optional `purpose` (`progress`, `question` or `result`) and an optional `reply_to` naming an instruction's event cursor. An records an `agent`/`message` event with the graph revision, and the timeline shows it next to the instruction. A repeated key returns the original receipt. Messages never carry decisions; ask with a surface. The size limit is `agent_message_max_bytes`.

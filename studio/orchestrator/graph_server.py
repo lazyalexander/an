@@ -16,6 +16,7 @@ from pathlib import Path
 from urllib.parse import urlsplit
 
 from . import config as studio_config
+from .runner import Runner
 
 ASSETS = Path(__file__).parent / "macro" / "graph"
 ACTIONS = {"view", "panel", "viewed", "draft", "respond", "open", "deliveries", "sources", "resume",
@@ -32,6 +33,14 @@ def serve(task, binary, port, launch=False, config=None, workspace=None, harness
                               "task": task, "workspace": workspace is not None}).encode()
     # task -> turn credential held by this controller (None: inherit AN_TURN).
     turns = {task: None} if task else {}
+    # task -> MCP config handed to the agent; the browser never sees it.
+    mcp = {}
+    if task:
+        mcp[task] = {"an": {"command": str(Path(binary).resolve()) if os.sep in binary else binary,
+                            "args": ["mcp", "--task", task],
+                            "env": {k: os.environ[k] for k in ("AN_HOME", "AN_TURN")
+                                    if k in os.environ}}}
+    runner = Runner(binary, config["agent"], turns, mcp)
     key = secrets.token_urlsafe(32)
 
     def an(command, body, turn=None):
@@ -50,12 +59,13 @@ def serve(task, binary, port, launch=False, config=None, workspace=None, harness
         created = an(["task", "new", *selector], {})["task"]
         turn = an(["permission", "begin", "--task", created], {})["turn"]
         an(["graph", "--task", created, "instruct"], {"text": text, "revision": 0}, turn)
-        turns[created] = turn
-        mcp = bound["mcp_servers"]
-        for server in mcp.values():
+        servers = bound["mcp_servers"]
+        for server in servers.values():
             server.setdefault("env", {})["AN_TURN"] = turn
-        # Operator channel for the agent harness; never sent to the browser.
-        print("agent: " + json.dumps({"task": created, "mcp_servers": mcp}), flush=True)
+        mcp[created] = servers
+        turns[created] = turn  # the runner picks the task up from here
+        # Operator channel for an external harness; never sent to the browser.
+        print("agent: " + json.dumps({"task": created, "mcp_servers": servers}), flush=True)
         return {"task": created}
 
     class Handler(BaseHTTPRequestHandler):
@@ -124,6 +134,7 @@ def serve(task, binary, port, launch=False, config=None, workspace=None, harness
                                        for node, row in result[collection].items()}
                     result["permissions"] = graph("requests", {}) if result["authorized"] else []
                     result["deliveries"] = graph("deliveries", {})
+                    result["agent"] = runner.status(current)
                 elif action == "intent-decide":
                     result = an(["permission","intent-decide","--task",current,"--request-id",body["id"],
                                  "--decision",json.dumps(body["decisions"])], {}, turn)
@@ -148,4 +159,8 @@ def serve(task, binary, port, launch=False, config=None, workspace=None, harness
         print(f"macro UI: {url}", flush=True)
         if launch:
             webbrowser.open(url)
-        server.serve_forever()
+        runner.start()
+        try:
+            server.serve_forever()
+        finally:
+            runner.close()

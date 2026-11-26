@@ -451,6 +451,9 @@ el("sources").ontoggle=async()=>{
 function renderControls() {
   const paused = view.control === "paused";
   el("control-state").textContent = view.closed ? t("control.closed") : paused ? t("control.paused") : "";
+  const agent = view.agent || {};
+  el("agent-state").textContent = agent.state === "running" ? t("agent.running")
+    : agent.state === "failed" ? t("agent.failed", {detail: agent.detail || ""}) : "";
   if (!view.authorized || view.closed) {
     el("instruct").hidden = true;
     return el("task-controls").replaceChildren(
@@ -468,6 +471,7 @@ function openTask(id) {
   currentTask = id;
   try { id ? sessionStorage.setItem("studio-task", id) : sessionStorage.removeItem("studio-task"); } catch {}
   view = undefined; selection = undefined; instanceKey = null;
+  el("title").textContent = t("heading");
   el("timeline").replaceChildren(); el("content").replaceChildren(); el("controls").replaceChildren();
   return update();
 }
@@ -476,6 +480,7 @@ function renderLobby() {
   el("task").textContent = "";
   el("control-state").textContent = "";
   el("task-controls").replaceChildren();
+  el("agent-state").textContent = "";
   el("title").textContent = t("start.heading");
   status(t("start.prompt"));
   el("instruct").hidden = false;

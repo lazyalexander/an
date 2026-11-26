@@ -109,6 +109,10 @@
       "started": "任务已创建，等待 agent 接手",
       "new": "新任务",
       "placeholder": "例如：做一张秋天主题的海报，暖色调"
+    },
+    "agent": {
+      "running": "Agent 工作中…",
+      "failed": "Agent 出错：{detail}"
     }
   }
 }

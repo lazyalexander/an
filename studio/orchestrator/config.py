@@ -32,6 +32,17 @@ def load(override: Path | None = None) -> dict:
     for key, value in config["graph"].items():
         if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
             raise ValueError(f"setting graph.{key} must be a positive integer")
+    agent = config["agent"]
+    command = agent["command"]
+    if command is not None and (not isinstance(command, list) or not command
+                                or not all(isinstance(part, str) and part for part in command)):
+        raise ValueError("setting agent.command must be null or a list of strings")
+    for key in ("poll_ms", "timeout_s"):
+        value = agent[key]
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"setting agent.{key} must be a positive integer")
+    if not isinstance(agent["env"], list) or not all(isinstance(n, str) and n for n in agent["env"]):
+        raise ValueError("setting agent.env must be a list of variable names")
     strings(config["locale"])  # fail at boot, not on the first page load
     return config
 

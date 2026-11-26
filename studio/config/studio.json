@@ -4,5 +4,11 @@
     "poll_ms": 1000,
     "panel_timeout_ms": 6000,
     "max_body_bytes": 1048576
+  },
+  "agent": {
+    "command": null,
+    "poll_ms": 500,
+    "timeout_s": 900,
+    "env": []
   }
 }
