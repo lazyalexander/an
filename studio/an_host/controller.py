@@ -38,14 +38,10 @@ def controller(directory, options):
     storage = Path(os.environ["AN_HOME"]) / "controllers" / directory.name
     storage.mkdir(parents=True, mode=0o700, exist_ok=True)
     state = storage / "tasks.json"
-    mcp = json.loads(state.read_text()) if state.exists() else {}
+    records = json.loads(state.read_text()) if state.exists() else {}
     guard = threading.Lock()
-    turns = {key: servers["an"]["env"]["AN_TURN"] for key, servers in mcp.items()}
-    if task:
-        turn = os.environ.get("AN_TURN")
-        turns[task] = turn
-        mcp[task] = {"an": {"command": binary, "args": ["mcp", "--task", task],
-                            "env": {k: os.environ[k] for k in ("AN_HOME", "AN_TURN") if k in os.environ}}}
+    turns = {}
+    mcp = {}
     def retire(key):
         with guard:
             if key not in turns:
@@ -62,11 +58,11 @@ def controller(directory, options):
                 proc.terminate()
             runner.status_by_task.pop(key, None)
 
-    runner = Runner(binary, options["agent"], turns, mcp, retire=retire)
+    runner = Runner(binary, options["agent"], turns, mcp, retire=retire, refresh=lambda key: delegate(key, turns[key]))
 
     def save():
         pending = state.with_suffix(".tmp")
-        pending.write_text(json.dumps(mcp))
+        pending.write_text(json.dumps({key: {"owner": owner} for key, owner in turns.items()}))
         os.replace(pending, state)
 
     def an(command, body, turn=None):
@@ -77,21 +73,42 @@ def controller(directory, options):
             raise ValueError(proc.stderr.strip() or "An command failed")
         return json.loads(proc.stdout)
 
+    def delegate(key, owner):
+        token = an(["permission", "delegate", "--task", key], {}, owner)["agent_token"]
+        mcp[key] = {"an": {"command": binary, "args": ["mcp", "--task", key],
+                           "env": {"AN_HOME": os.environ["AN_HOME"], "AN_AGENT_TOKEN": token}}}
+
+    for key, record in records.items():
+        turns[key] = record.get("owner") or record.get("an", {}).get("env", {}).get("AN_TURN")
+    if task and task not in turns:
+        turns[task] = os.environ.get("AN_TURN")
+    for key, owner in turns.items():
+        mcp[key] = {}
+        if owner:
+            observed = an(["task-cursors"], {key: owner}).get(key, {})
+            if observed.get("active") and not observed["ended"]:
+                try:
+                    delegate(key, owner)
+                except ValueError as exc:
+                    if "legacy credential" not in str(exc):
+                        raise
+                    owner = an(["permission", "begin", "--task", key], {}, owner)["controller"]
+                    turns[key] = owner
+                    save()
+                    delegate(key, owner)
+
     def start(text):
         """Create a workspace task whose first instruction is the person's sentence."""
         session = uuid.uuid4().hex
         selector = ["--harness", harness, "--session", session]
-        bound = an(["workspace", "bind", workspace, *selector], {})
+        an(["workspace", "bind", workspace, *selector], {})
         created = an(["task", "new", *selector], {})["task"]
-        turn = an(["permission", "begin", "--task", created], {})["turn"]
+        turn = an(["permission", "begin", "--task", created], {})["controller"]
         an(["graph", "--task", created, "instruct"], {"text": text, "revision": 0}, turn)
-        servers = bound["mcp_servers"]
-        for server in servers.values():
-            server.setdefault("env", {})["AN_TURN"] = turn
         with guard:
-            mcp[created] = servers
+            delegate(created, turn)
+            turns[created] = turn
             save()
-            turns[created] = turn  # expose to the runner after saving its connection
         return {"task": created}
 
     def dispatch(action, current, body):

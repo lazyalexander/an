@@ -127,7 +127,7 @@ def test_ended_turn_retires_even_without_agent(tmp_path, monkeypatch):
                    agent={**load()["agent"], "command": None})
     with controller(tmp_path / "scope", options) as (request, servers):
         task = request("start", None, {"text": "retire"})["task"]
-        turn = servers[task]["an"]["env"]["AN_TURN"]
+        turn = json.loads((tmp_path / "controllers/scope/tasks.json").read_text())[task]["owner"]
         subprocess.run([BINARY, "permission", "end", "--task", task],
                        env={**os.environ, "AN_TURN": turn}, check=True)
         file = tmp_path / "controllers/scope/tasks.json"
@@ -163,3 +163,43 @@ def test_agent_can_propose_and_only_operator_can_decide(tmp_path, monkeypatch):
             assert decision["status"] == "decided"
         finally:
             agent.close()
+
+
+def test_agent_token_and_rotation(tmp_path, monkeypatch):
+    from an_host.controller import controller
+    from fake_agent import Mcp
+
+    monkeypatch.setenv("AN_HOME", str(tmp_path))
+    workspace, _ = setup_workspace(tmp_path)
+    options = dict(binary=str(BINARY), workspace=workspace, harness="studio", task=None,
+                   agent={**load()["agent"], "command": None, "poll_ms": 30})
+    with controller(tmp_path / "scope", options) as (request, servers):
+        task = request("start", None, {"text": "first"})["task"]
+        server = servers[task]["an"]
+        assert "AN_TURN" not in server["env"]
+        token = server["env"]["AN_AGENT_TOKEN"]
+        for action in ("begin", "end", "delegate", "decide", "intent-decide", "policy"):
+            # A caller can rename its own token. The host must verify the role.
+            proc = subprocess.run([BINARY, "permission", action, "--task", task],
+                                  env={**os.environ, "AN_TURN": token, "AN_AGENT_TOKEN": token},
+                                  capture_output=True)
+            assert proc.returncode and b"required" in proc.stderr, (action, proc.stderr)
+        stale = Mcp(server)
+        try:
+            owner = json.loads((tmp_path / "controllers/scope/tasks.json").read_text())[task]["owner"]
+            subprocess.run([BINARY, "permission", "begin", "--task", task],
+                           env={**os.environ, "AN_TURN": owner}, check=True, capture_output=True)
+            import pytest
+            with pytest.raises(RuntimeError, match="Active host turn required"):
+                stale.tool("an_state", {})
+            deadline = time.monotonic() + 5
+            while servers[task]["an"]["env"]["AN_AGENT_TOKEN"] == token and time.monotonic() < deadline:
+                time.sleep(.03)
+            fresh = Mcp(servers[task]["an"])
+            try:
+                fresh.tool("an_state", {})
+                assert request("view", task, {})["authorized"]
+            finally:
+                fresh.close()
+        finally:
+            stale.close()

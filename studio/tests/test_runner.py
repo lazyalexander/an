@@ -31,24 +31,27 @@ def task(tmp_path, monkeypatch):
     db.execute("CREATE TABLE IF NOT EXISTS objects (kind, id, body, PRIMARY KEY(kind,id))")
     db.execute("INSERT OR REPLACE INTO objects VALUES('task','t',?)",
                (json.dumps({"work": {}, "inputs": {}}),))
-    db.execute("INSERT OR REPLACE INTO objects VALUES('turn','t',?)", (json.dumps("active"),))
     db.commit()
+    db.close()
+    keys = json.loads(subprocess.check_output([BINARY,"permission","begin","--task","t"]))
+    monkeypatch.setenv("AN_TURN", keys["turn"])
     return home
 
 
 def host(route, **body):
     proc = subprocess.run([BINARY, "graph", "--task", "t", route], input=json.dumps(body),
                           text=True, capture_output=True, check=True,
-                          env={**os.environ, "AN_TURN": "active"})
+                          env=os.environ)
     return json.loads(proc.stdout)
 
 
 def make_runner(home):
     settings = {**config.load()["agent"], "command": [sys.executable, str(FAKE)], "poll_ms": 50,
                 "timeout_s": 30}
+    token = json.loads(subprocess.check_output([BINARY,"permission","delegate","--task","t"]))["agent_token"]
     mcp = {"t": {"an": {"command": str(BINARY), "args": ["mcp", "--task", "t"],
-                        "env": {"AN_HOME": str(home), "AN_TURN": "active"}}}}
-    return Runner(str(BINARY), settings, {"t": "active"}, mcp)
+                        "env": {"AN_HOME": str(home), "AN_AGENT_TOKEN": token}}}}
+    return Runner(str(BINARY), settings, {"t": os.environ["AN_TURN"]}, mcp)
 
 
 def messages():
@@ -85,7 +88,7 @@ def test_instructions_wake_the_same_agent_session_once(task):
     assert first.endswith("收到：做一张秋天的海报") and second.endswith("收到：暖色调一点")
     assert first.split("]")[0] == second.split("]")[0], "same agent session resumed"
     seen = json.loads((task / "agents" / "t" / "env.json").read_text())
-    assert "AN_SECRET_SHOULD_NOT_LEAK" not in seen and "AN_TURN" in seen
+    assert "AN_SECRET_SHOULD_NOT_LEAK" not in seen and "AN_TURN" not in seen and "AN_AGENT_TOKEN" in seen
 
     # A restarted controller never wakes the agent again for handled events.
     restarted = make_runner(task)
@@ -123,7 +126,7 @@ def test_stop_ends_a_running_wake(task, monkeypatch):
 def test_without_a_command_the_runner_is_off(task):
     settings = config.load()["agent"]
     assert settings["command"] is None
-    runner = Runner(str(BINARY), settings, {"t": "active"}, {})
+    runner = Runner(str(BINARY), settings, {"t": os.environ["AN_TURN"]}, {})
     runner.start()
     assert runner.thread is None and runner.status("t") == {"state": "off"}
 

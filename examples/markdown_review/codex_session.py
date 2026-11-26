@@ -29,9 +29,13 @@ class Session:
         self.work.mkdir(exist_ok=True)
         home = directory / "codex"
         home.mkdir(mode=0o700, exist_ok=True)
+        env = dict(env)
+        if not env.get("AN_AGENT_TOKEN") and env.get("AN_TURN"):
+            grant = subprocess.check_output([binary, "permission", "delegate", "--task", task], env=env)
+            env["AN_AGENT_TOKEN"] = json.loads(grant)["agent_token"]
         self.env = {
             k: env[k]
-            for k in ("HOME", "PATH", "TMPDIR", "AN_HOME", "AN_TURN")
+            for k in ("HOME", "PATH", "TMPDIR", "AN_HOME", "AN_AGENT_TOKEN")
             if k in env
         }
         self.env["CODEX_HOME"] = str(home)
@@ -88,7 +92,7 @@ class Session:
             "project_doc_max_bytes": 0,
             "mcp_servers.an.command": str(binary),
             "mcp_servers.an.args": ["mcp", "--task", task],
-            "mcp_servers.an.env_vars": ["AN_HOME", "AN_TURN"],
+            "mcp_servers.an.env_vars": ["AN_HOME", "AN_AGENT_TOKEN"],
             "mcp_servers.an.enabled_tools": sorted(self.tools),
             "mcp_servers.an.default_tools_approval_mode": "approve",
             "mcp_servers.an.required": True,

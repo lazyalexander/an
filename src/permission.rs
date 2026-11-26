@@ -1,7 +1,7 @@
 use crate::store::*;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::{Parser, ValueEnum};
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 use std::{collections::HashSet, env, fs, path::PathBuf};
 #[derive(Parser)]
@@ -27,6 +27,7 @@ enum Commands {
 #[derive(Clone, ValueEnum)]
 enum Action {
     Begin,
+    Delegate,
     End,
     Pending,
     Preview,
@@ -38,12 +39,51 @@ enum Action {
     IntentDecide,
 }
 pub fn current(db: &Connection, task: &str) -> Result<String> {
-    let turn = env::var("AN_TURN").unwrap_or_default();
-    ensure!(
-        !turn.is_empty() && get(db, "turn", task)? == turn,
-        "Active host turn required"
-    );
-    Ok(turn)
+    let active = get(db, "turn", task)?;
+    let epoch = active.as_str().context("Active host turn required")?;
+    let host = env::var("AN_TURN").unwrap_or_default();
+    if host_valid(db, task, &host)? {
+        return Ok(epoch.to_owned());
+    }
+    if matches!(env::args().nth(1).as_deref(), Some("mcp" | "_model-worker")) {
+        let token = env::var("AN_AGENT_TOKEN").unwrap_or_default();
+        if !token.is_empty()
+            && find(db, "agent_auth", &hash(token.as_bytes()))? == Some(json!([task, epoch]))
+        {
+            return Ok(epoch.to_owned());
+        }
+    }
+    bail!("Active host turn required")
+}
+
+fn host_valid(db: &Connection, task: &str, secret: &str) -> Result<bool> {
+    if secret.is_empty() {
+        return Ok(false);
+    }
+    let digest = json!(hash(secret.as_bytes()));
+    if let Some(keys) = find(db, "host_auth", task)? {
+        return Ok(keys["controller"] == digest || keys["turn"] == digest);
+    }
+    Ok(find(db, "turn", task)? == Some(json!(secret)))
+}
+
+pub fn cursors(args: Value) -> Result<Value> {
+    let mut db = connect()?;
+    let tx = db.transaction()?;
+    let mut result = json!({});
+    for (task, secret) in args.as_object().context("Expected task credentials")? {
+        let Some(record) = find(&tx, "task", task)? else {
+            continue;
+        };
+        let epoch = find(&tx, "turn", task)?.unwrap_or(Value::Null);
+        let valid = host_valid(&tx, task, secret.as_str().unwrap_or(""))?;
+        let (cursor,paused): (i64,bool) = tx.query_row(
+            "SELECT coalesce(json_array_length(body,'$.events'),0), coalesce(json_extract(body,'$.control')='paused',0) FROM objects WHERE kind='graph' AND id=?",
+            [task], |r| Ok((r.get(0)?,r.get(1)?))).optional()?.unwrap_or_default();
+        result[task] = json!({"closed":record["closed"]==true,"ended":epoch.is_null(),"active":valid,
+            "generation":hash(canonical(&epoch).as_bytes()),"cursor":cursor,"paused":paused});
+    }
+    Ok(result)
 }
 fn context(db: &Connection, task: &str) -> Result<(String, Value, Value)> {
     let turn = current(db, task)?;
@@ -268,16 +308,54 @@ pub fn execute() -> Result<Value> {
     );
     let result = if matches!(action, Action::Begin) {
         ensure!(get(&tx, "task", &task)?["closed"] != true, "Task is closed");
-        let turn = uid();
-        put(&tx, "turn", &task, &json!(turn))?;
-        if file.is_some() {
-            set_host(&tx, &turn, read_policy()?)?;
+        let previous = find(&tx, "host_auth", &task)?;
+        if previous.is_some() || find(&tx, "turn", &task)?.is_some_and(|v| v.is_string()) {
+            ensure!(
+                host_valid(&tx, &task, &env::var("AN_TURN").unwrap_or_default())?,
+                "Controller credential required"
+            );
         }
-        json!({"turn":turn})
+        let epoch = uid();
+        let turn = uid();
+        let controller = uid();
+        let owner = previous
+            .as_ref()
+            .map(|k| k["controller"].clone())
+            .unwrap_or_else(|| json!(hash(controller.as_bytes())));
+        put(
+            &tx,
+            "host_auth",
+            &task,
+            &json!({"controller":owner,"turn":hash(turn.as_bytes())}),
+        )?;
+        put(&tx, "turn", &task, &json!(epoch))?;
+        if file.is_some() {
+            set_host(&tx, &epoch, read_policy()?)?;
+        }
+        let mut result = json!({"turn":turn});
+        if previous.is_none() {
+            result["controller"] = json!(controller);
+        }
+        result
     } else {
         let turn = current(&tx, &task)?;
         match action {
             Action::Begin => unreachable!(),
+            Action::Delegate => {
+                ensure!(
+                    find(&tx, "host_auth", &task)?.is_some(),
+                    "Begin a new turn before delegating a legacy credential"
+                );
+                let token =
+                    hash(canonical(&json!(["agent", env::var("AN_TURN")?, turn])).as_bytes());
+                put(
+                    &tx,
+                    "agent_auth",
+                    &hash(token.as_bytes()),
+                    &json!([task, turn]),
+                )?;
+                json!({"agent_token":token})
+            }
             Action::IntentShow => crate::intent::public(crate::intent::show(&tx, &task)?),
             Action::IntentPropose => {
                 crate::intent::public(crate::intent::propose(&tx, &task, read_policy()?)?)
