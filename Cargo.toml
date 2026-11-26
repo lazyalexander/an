@@ -4,7 +4,7 @@ version = "0.5.0"
 edition = "2021"
 description = "Task-scoped MCP gateway and OCI spool scheduler"
 license = "Apache-2.0"
-include = ["/src/**", "/config/an.json", "/examples/krita-format/validator.rs", "/tests/native_core.rs", "/LICENSE", "/README.md", "/Cargo.lock"]
+include = ["/src/**", "/config/an.json", "/tests/native_core.rs", "/LICENSE", "/README.md", "/Cargo.lock"]
 autoexamples = false
 
 [dependencies]
@@ -21,9 +21,3 @@ yaml-rust2 = "0.11"
 tar = "0.4"
 libc = "0.2"
 regex = "1"
-zip = { version = "9", optional = true, default-features = false, features = ["deflate-flate2-zlib-rs"] }
-quick-xml = { version = "0.39", optional = true }
-
-[features]
-default = ["krita-experiment"]
-krita-experiment = ["dep:zip", "dep:quick-xml"]

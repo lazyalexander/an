@@ -83,7 +83,7 @@ def controller(directory, options):
                 result = graph("view", {})
             # Keep execution evidence behind the explicit sources/evidence actions.
             for collection, fields in (("nodes", ("id", "kind", "title")),
-                                ("activity", ("id", "status", "native_phase", "native_error"))):
+                                ("activity", ("id", "status"))):
                 result[collection] = {node: {field: row[field] for field in fields if field in row}
                                for node, row in result[collection].items()}
             result["permissions"] = graph("requests", {}) if result["authorized"] else []

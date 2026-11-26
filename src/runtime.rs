@@ -442,7 +442,7 @@ mod cached_admission_tests {
     use super::*;
 
     #[test]
-    fn cached_panel_requires_adapter_in_current_build() {
+    fn cached_native_panels_need_re_registration() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch("CREATE TABLE objects(kind TEXT,id TEXT,body TEXT,PRIMARY KEY(kind,id))")
             .unwrap();
@@ -450,9 +450,7 @@ mod cached_admission_tests {
             "panels":{"paint":{"kind":"native","title":"Paint","bindings":["document"],"adapter":"krita"}}
         }});
         put(&db, "admission", "digest", &admission).unwrap();
-        assert_eq!(
-            record(&db, "spool@digest").is_ok(),
-            cfg!(feature = "krita-experiment")
-        );
+        // Native application surfaces were removed; such admissions are stale.
+        assert!(record(&db, "spool@digest").is_err());
     }
 }

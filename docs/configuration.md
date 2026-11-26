@@ -32,7 +32,7 @@ Format contracts that admission depends on stay in code: the 64 KiB `spool.yaml`
 
 [`studio/config/studio.json`](../studio/config/studio.json) selects the locale and holds Studio settings (`graph.poll_ms`, `graph.panel_timeout_ms`, `graph.max_body_bytes`). The `agent` section configures the [agent runner](graph-studio.md#agent-runner): `command` (null disables it), `poll_ms`, `timeout_s` per wake, and `env`, the extra variable names passed to the agent. Pass `--config FILE` to `python3 -m orchestrator` to override them; the same unknown-key rule applies.
 
-Task Studio reads its labels from `studio/config/locales/<locale>.json`. The legacy experiment owns its instance manifests and translations, including Krita panel text, under `examples/legacy_studio/config/`.
+Task Studio reads its labels from `studio/config/locales/<locale>.json`.
 
 `model_aliases` maps an alias to a local Ollama model name, or to an image backend object: `{"kind": "image", "backend": "local", "model": ...}` or `{"kind": "image", "backend": "openai", "model": ..., "keychain": SERVICE}`. API keys are never configuration; they live in the Keychain entry named by `keychain`.
 

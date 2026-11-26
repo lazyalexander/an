@@ -117,7 +117,6 @@ Workspace flow rules use `["preview",origin,"studio"]` for viewing and `["publis
 
 Use `an export DELIVERY_ID DESTINATION` to export the published revision. For a closed graph task, pass `--task ACTIVE_TASK_ID` with a current turn in the same workspace. Workspace policies must permit `["export",origin,destination]` for every constituent origin. The host approval covers the complete delivery and its destination.
 
-The legacy instance-mode Studio reads its original ledger and archives. It is frozen as the reference for native surfaces; see [Architecture](architecture.md). Use task mode for the headless graph workflow.
 
 
 ## Reproduce acceptance
@@ -130,22 +129,9 @@ To add a second mark to a Bridge V1 made with the revision-capable image, run
 `python3 examples/graph_studio/demo.py bridge --resume V1_DELIVERY_ID` with the same registry and image.
 Approve input access, click a new point on the V1 preview, and save. The new delivery contains the SVG with both marks and an OpenRaster painting with separate annotation layers. The original delivery remains available under its own ID.
 
-## Krita native painting
+## Sketch to painting
 
-Build the example spool as described above, install the Krita adapter with `examples/legacy_studio/adapter/install.sh` and enable the Bridge Studio Python plugin in Krita. Open the **An · 原生绘画** docker. Run the demo with `bridge-native` and select the printed `connect.json` using **连接任务…**. The example follows the Bridge comparison with a native paint step and publishes the returned KRA.
-
-A task can also run its adapter independently of Studio:
-
-```sh
-an native serve --task "$task"
-an decision list --task "$task"
-```
-
-The channel uses a private same-user Unix socket and the server's current task authority. A declaration of `kind: native` requires `adapter: krita` and `bindings: [document]`. Its graph node uses `kind: native`, the admitted spool and panel ID, and `outputs: ["document"]`. The input revision must contain one ORA or KRA. Authorize preview to `native:krita`; delivery publication and export use `native:krita` as the saved file's origin.
-
-Each attempt has a separate working directory under the An registry. Ordinary saves stay there. **完成并交付** only acts on that attempt's active document. A transport interruption can resend its snapshot. Stop closes the request and preserves the working copy. Restart the channel under the same task and active turn to reconnect.
-
-For automated end-to-end validation run `python3 tests/native_paint_smoke.py --image IMAGE` on the reference machine. This uses a fresh synthetic workspace and Krita's bundled script runner. For the physical gate add `--pencil --directory NEW_EVIDENCE_DIR`. Connect the iPad through Codonic Pad and draw one horizontal light-to-heavy stroke on the prepared transparent Pencil layer. Use ordinary Save, pause briefly, then **完成并交付**. The gate records Qt tablet pressure for this attempt and reopens the exported KRA to read the independent layer's pixels, column widths and digest. Keep the evidence directory for verification.
+Run `python3 examples/graph_studio/demo.py sketch` (or `python3 tests/sketch_smoke.py --browser`) with the example image. The person draws on the sketch canvas with a pen; a container step turns the strokes into pressure-width SVG line art. With an image model grant, a further step renders the strokes as a control image and the host image model node produces the finished painting; see [Image model nodes](#image-model-nodes).
 
 ### Markdown review
 

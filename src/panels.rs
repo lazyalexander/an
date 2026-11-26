@@ -38,7 +38,7 @@ fn validate_panel(id: &str, p: &Value) -> Result<()> {
             .keys()
             .all(|k| matches!(
                 k.as_str(),
-                "kind" | "title" | "bindings" | "optional" | "html" | "decision" | "adapter"
+                "kind" | "title" | "bindings" | "optional" | "html" | "decision"
             )),
         "Unknown panel field"
     );
@@ -63,21 +63,7 @@ fn validate_panel(id: &str, p: &Value) -> Result<()> {
             "Invalid html path"
         );
     }
-    if p["kind"] != "native" {
-        ensure!(
-            p.get("adapter").is_none(),
-            "Adapter requires a native panel"
-        );
-    }
     match p["kind"].as_str() {
-        Some("native") => ensure!(
-            crate::adapters::named(p["adapter"].as_str()).is_some()
-                && p["bindings"] == json!(["document"])
-                && ["html", "optional", "decision"]
-                    .iter()
-                    .all(|key| p.get(key).is_none()),
-            "Expected an installed native adapter with one document binding"
-        ),
         Some("surface") => {
             schema(p)?;
         }

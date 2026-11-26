@@ -437,9 +437,6 @@ fn control(
                     continue;
                 }
                 state["status"] = json!("cancelled");
-                if nodes[id]["kind"] == "native" {
-                    state["native_phase"] = json!("cancelled");
-                }
                 cancelled.push(id.clone());
             }
         }
@@ -496,10 +493,7 @@ fn timeline(graph: &Value, authority: Option<&str>) -> Vec<Value> {
                 row["purpose"] = data["purpose"].clone();
                 row["reply_to"] = data["reply_to"].clone();
             }
-            "waiting"
-                if (node["kind"] == "surface" || node["kind"] == "native")
-                    && data["authority"].as_str() == authority =>
-            {
+            "waiting" if node["kind"] == "surface" && data["authority"].as_str() == authority => {
                 let Some(request) = data["id"].as_str() else {
                     continue;
                 };

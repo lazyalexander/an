@@ -50,11 +50,6 @@
       "permission_required": "等待授权",
       "cancelled": "已取消"
     },
-    "native": {
-      "awaiting_adapter": "等待原生编辑器领取文档",
-      "editing": "等待在原生编辑器中完成并交付",
-      "save_failed": "请在原生编辑器中重新保存"
-    },
     "panel": {
       "submit": "提交决定",
       "basic": "基础表单",
