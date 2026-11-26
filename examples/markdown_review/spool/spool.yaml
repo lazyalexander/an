@@ -1,0 +1,16 @@
+schema: an.spool/v2
+name: markdown-review
+summary: Review two proposed Markdown edits and publish a resolved draft.
+inputs:
+  - {name: source, description: Original Markdown, media_types: [text/markdown], required: false}
+  - {name: reviews, description: Reviewer suggestions, media_types: [application/json], required: false}
+  - {name: analysis, description: Model analysis, media_types: [application/json], required: false}
+  - {name: choice, description: Author decision, media_types: [application/json], required: false}
+outputs:
+  - {name: result, description: Review artifacts, media_types: [application/octet-stream]}
+panels:
+  resolve:
+    title: 选择本次采用的审阅意见
+    kind: surface
+    bindings: [A, B]
+    decision: {type: choose}

@@ -20,9 +20,10 @@ def initial_driver(experiment, spool):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("experiment", choices=["bridge", "bridge-model", "bridge-native", "cad"])
+    parser.add_argument("experiment", choices=["bridge", "bridge-model", "bridge-native", "cad", "markdown"])
     parser.add_argument("--an", type=Path, default=ROOT / "target/debug/an")
-    parser.add_argument("--image", default="an-graph-studio:headless")
+    parser.add_argument("--image")
+    parser.add_argument("--review-case", choices=["compatible","conflict"], default="conflict")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--resume", metavar="V1_DELIVERY")
     options = parser.parse_args()
@@ -37,7 +38,8 @@ def main():
     def call(*args, data=None):
         return json.loads(command(*args, data=data))
 
-    spool = command("register", options.image)
+    markdown = options.experiment == "markdown"
+    spool = command("register", options.image or ("an-markdown-review:headless" if markdown else "an-graph-studio:headless"))
     if options.resume:
         task = call("task", "resume", options.resume)["task"]
         state = call("state", "--task", task)
@@ -55,7 +57,11 @@ def main():
         workspace = call("workspace", "create", "--spool", spool)["workspace"]
         selector = ["--harness", "graph-demo", "--key", workspace]
         call("workspace", "bind", workspace, *selector)
-        task = call("task", "new", *selector, *(["--model","local"] if options.experiment=="bridge-model" else []))["task"]
+        grants = ["--model", "local"] if markdown or options.experiment == "bridge-model" else []
+        if markdown:
+            fixtures = ROOT / "examples/markdown_review/fixtures"
+            grants.extend(["--input", str(fixtures/"original.md"), "--input", str(fixtures/options.review_case/"reviews.json")])
+        task = call("task", "new", *selector, *grants)["task"]
     env["AN_TURN"] = call("permission", "begin", "--task", task)["turn"]
 
     def graph(action, **args):
@@ -75,8 +81,10 @@ def main():
         graph("submit", base_revision=0, idempotency_key="start",
               nodes=[initial_driver("revise" if options.resume else options.experiment, spool)])
         print(f"Workspace {workspace} · task {task}", flush=True)
+        # Keep the review turn open while its author reads the decision history.
+        # A failed review also remains available for inspection and graph retry.
         while studio.poll() is None:
-            if not closed:
+            if not closed and not markdown:
                 state = graph("view")
                 for node_id, activity in state["activity"].items():
                     if activity["status"] in ("failed", "unknown"):
@@ -91,16 +99,24 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
-        if channel:
-            channel.terminate()
-            channel.wait()
-        studio.terminate()
-        studio.wait()
-        if not closed:
-            call("permission", "end", "--task", task)
-            for instance in call("state", "--task", task)["instances"]:
-                if instance["status"] != "unloaded":
-                    call("unload", "--task", task, "--instance", instance["id"])
+        try:
+            if not closed:
+                try:
+                    if markdown and any(s.get("delivery") for s in graph("view")["activity"].values()):
+                        graph("finish")
+                        closed = True
+                finally:
+                    if not closed:
+                        call("permission", "end", "--task", task)
+                for instance in call("state", "--task", task)["instances"]:
+                    if instance["status"] != "unloaded":
+                        call("unload", "--task", task, "--instance", instance["id"])
+        finally:
+            if channel:
+                channel.terminate()
+                channel.wait()
+            studio.terminate()
+            studio.wait()
 
 
 if __name__ == "__main__":

@@ -50,6 +50,11 @@ function filesPanel(files, parent = el("content")) {
       a.textContent = name + " / " + filename;
       const row = document.createElement("p");
       row.append(a);
+      if (/\.(md|txt|diff)$/i.test(filename) && (entry.data || entry).length <= 65536) {
+        const preview = document.createElement("pre");
+        preview.textContent = new TextDecoder().decode(Uint8Array.from(atob(entry.data || entry), c=>c.charCodeAt(0)));
+        row.append(preview);
+      }
       parent.append(row);
     }
   }
@@ -206,6 +211,47 @@ function nav(items, active, action) {
     return b;
   });
 }
+function renderTimeline(title, deliveries) {
+  const list = el("timeline"), detail = el("detail");
+  let target = el("detail-home");
+  const rows = view.timeline || [];
+  for (const [index, row] of rows.entries()) {
+    let item = list.children[index];
+    if (!item || item.dataset.cursor !== String(row.cursor)) {
+      item = document.createElement("li");
+      item.dataset.cursor = row.cursor;
+      item.append(document.createElement("div"));
+      list.insertBefore(item, list.children[index] || null);
+    }
+    let label = t("timeline." + (row.action || row.kind));
+    let action;
+    if (row.kind === "instruction") label += " · " + row.text;
+    if (row.node) {
+      label += " · " + title(row.node);
+      if (row.response !== undefined) label += " · " + JSON.stringify(row.response);
+      const state = view.activity[row.node];
+      if (state?.id === row.request) {
+        label += " · " + statusLabel(state.status);
+        action = () => select("node", row.node);
+        if (selection?.kind === "node" && selection.id === row.node) target = item;
+      }
+    }
+    if (row.delivery) {
+      label += " · " + (deliveries.find(d => d.id === row.delivery)?.title || row.delivery);
+      action = () => select("delivery", row.delivery);
+      if (selection?.kind === "delivery" && selection.id === row.delivery) target = item;
+    }
+    const header = item.firstChild;
+    if (header.textContent !== label || !!header.firstElementChild !== !!action) {
+      header.replaceChildren(action ? button(label, action) : document.createTextNode(label));
+    }
+  }
+  if (detail.parentElement !== target) {
+    target.append(detail);
+    instanceKey = null;
+  }
+  while (list.children.length > rows.length) list.lastChild.remove();
+}
 let lastDelivery;
 async function render() {
   const activity = Object.entries(view.activity || {});
@@ -217,15 +263,13 @@ async function render() {
   const pending = activity.find(([,s])=>s.status==="waiting");
   if ((!selection || (selection.kind==="node" && view.activity[selection.id]?.status!=="waiting" &&
       selection.auto)) && pending) selection={kind:"node",id:pending[0],auto:true};
-  if (!selection && activity.length) selection={kind:"node",id:activity[0][0],auto:true};
+
   const title=id=>view.nodes[id]?.title || id;
   el("task").textContent = view.task;
   renderControls();
   el("graph-nodes").replaceChildren(...nav(activity.map(([id,s])=>[id,title(id)+" · "+statusLabel(s.status)]),
     selection?.kind==="node" && selection.id,id=>select("node",id)));
-  const active=activity.filter(([id,s])=>!["done","queued","superseded"].includes(s.status) || (selection?.kind==="node" && selection.id===id));
-  el("activity").replaceChildren(...nav(active.map(([id,s])=>[id,title(id)+" · "+statusLabel(s.status)]),
-    selection?.kind==="node" && selection.id,id=>select("node",id)));
+  renderTimeline(title, deliveries);
   el("deliveries").replaceChildren(...nav(deliveries.map(d=>[d.id,d.title || d.node]),selection?.kind==="delivery" && selection.id,id=>select("delivery",id)));
   el("permissions").replaceChildren(...view.permissions.map(r=>{
     const article=document.createElement("article");
@@ -237,7 +281,7 @@ async function render() {
     }));
     return article;
   }));
-  if (!selection) {status(t("task.awaiting_submission"));return;}
+  if (!selection) {status(activity.length ? "" : t("task.awaiting_submission"));return;}
   const {kind,id}=selection;
   const s=view.activity[id] || {};
   const current=JSON.stringify([kind,id,s.id,s.status,s.native_phase,s.native_error,view.authorized]);

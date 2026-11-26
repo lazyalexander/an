@@ -113,3 +113,13 @@ The channel uses a private same-user Unix socket and the server's current task a
 Each attempt has a separate working directory under the An registry. Ordinary saves stay there. **完成并交付** only acts on that attempt's active document. A transport interruption can resend its snapshot. Stop closes the request and preserves the working copy. Restart the channel under the same task and active turn to reconnect.
 
 For automated end-to-end validation run `python3 tests/native_paint_smoke.py --image IMAGE` on the reference machine. This uses a fresh synthetic workspace and Krita's bundled script runner. For the physical gate add `--pencil --directory NEW_EVIDENCE_DIR`. Connect the iPad through Codonic Pad and draw one horizontal light-to-heavy stroke on the prepared transparent Pencil layer. Use ordinary Save, pause briefly, then **完成并交付**. The gate records Qt tablet pressure for this attempt and reopens the exported KRA to read the independent layer's pixels, column widths and digest. Keep the evidence directory for verification.
+
+### Markdown review
+
+Build the example with `container build -t an-markdown-review:headless examples/markdown_review/spool`.
+Run `python3 examples/graph_studio/demo.py markdown --review-case conflict` and open the Studio URL.
+The fixture supplies the original Markdown and two paragraph replacement suggestions. The local model classifies the pair. Conflicting replacements open a declared choice with both edits and reasons. The compatible fixture proceeds directly to delivery. Both paths publish the revised Markdown and a unified diff.
+
+The central timeline shows instructions, decisions, deliveries, failures and controls in host event order. Select a waiting decision to answer inline. Inspect execution details through the graph and sources controls. After the task closes its published delivery remains accessible.
+
+Run `python3 tests/markdown_review_smoke.py --browser` for the controlled backend and desktop/mobile Chrome checks. Add `--real` to use the configured local Ollama model. Both modes exercise the compatible case and both conflict answers, and apply each diff to verify the delivered bytes.

@@ -138,6 +138,11 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
     }
     if action == "view" {
         let authorized = permission::current(&tx, task).is_ok();
+        let authority = if authorized {
+            Some(hash(canonical(&permission::stamp(&tx, task)?).as_bytes()))
+        } else {
+            None
+        };
         if !authorized {
             for state in graph["activity"]
                 .as_object_mut()
@@ -155,7 +160,7 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
             }
         }
         return Ok(
-            json!({"task":task,"revision":graph["revision"],"nodes":graph["nodes"],"activity":graph["activity"],"closed":t["closed"]==true,"authorized":authorized,"control":graph.get("control").cloned().unwrap_or(json!("running"))}),
+            json!({"task":task,"revision":graph["revision"],"nodes":graph["nodes"],"activity":graph["activity"],"closed":t["closed"]==true,"authorized":authorized,"timeline":timeline(&graph, authority.as_deref()),"control":graph.get("control").cloned().unwrap_or(json!("running"))}),
         );
     }
     if action == "deliveries" {
@@ -387,6 +392,65 @@ fn control(
     ))
 }
 
+/// Project only user-facing fields. Execution event data may contain prompts,
+/// commands, intermediate results and private binding metadata.
+fn timeline(graph: &Value, authority: Option<&str>) -> Vec<Value> {
+    let mut rows = Vec::new();
+    let mut decisions = std::collections::HashMap::new();
+    for event in graph["events"].as_array().into_iter().flatten() {
+        let id = &event["node"];
+        let data = &event["data"];
+        let kind = event["kind"].as_str().unwrap_or("");
+        let node = &graph["nodes"][id.as_str().unwrap_or("")];
+        let mut row = json!({"cursor":event["cursor"], "time_ms":event["time_ms"]});
+        match kind {
+            "done" if node["kind"] == "delivery" && data["delivery"].is_string() => {
+                row["kind"] = json!("delivery");
+                row["delivery"] = data["delivery"].clone();
+            }
+            _ if authority.is_none() => continue,
+            "instruction" if data["authority"].as_str() == authority => {
+                row["kind"] = json!("instruction");
+                row["text"] = data["text"].clone();
+            }
+            "waiting"
+                if (node["kind"] == "surface" || node["kind"] == "native")
+                    && data["authority"].as_str() == authority =>
+            {
+                let Some(request) = data["id"].as_str() else {
+                    continue;
+                };
+                if decisions.contains_key(request) {
+                    continue;
+                }
+                decisions.insert(request, rows.len());
+                row["kind"] = json!("decision");
+                row["request"] = json!(request);
+                row["node"] = id.clone();
+            }
+            "responded" => {
+                if let Some(&index) = data["request"].as_str().and_then(|key| decisions.get(key)) {
+                    let item: &mut Value = &mut rows[index];
+                    item["response"] = data["response"].clone();
+                }
+                continue;
+            }
+            "failed" | "unknown" => {
+                row["kind"] = json!("failure");
+                row["node"] = id.clone();
+                row["request"] = data["id"].clone();
+            }
+            "paused" | "resumed" | "stopped" | "closed" => {
+                row["kind"] = json!("control");
+                row["action"] = json!(kind);
+            }
+            _ => continue,
+        }
+        rows.push(row);
+    }
+    rows
+}
+
 /// Relay a person's instruction to the agent, unchanged.
 ///
 /// An never interprets the text. It records who sent it (the person, under
@@ -418,9 +482,88 @@ fn instruct(
         "user",
         "instruction",
         task,
-        json!({"text":text,"seen_revision":seen,"revision":current,"stale":stale}),
+        json!({"text":text,"seen_revision":seen,"revision":current,"stale":stale,"authority":hash(canonical(&permission::stamp(tx,task)?).as_bytes())}),
     );
     put(tx, "graph", task, graph)?;
     let cursor = graph["events"].as_array().map_or(0, Vec::len);
-    Ok(json!({"cursor":cursor,"revision":current,"stale":stale}))
+    Ok(
+        json!({"cursor":cursor,"revision":current,"stale":stale,"authority":hash(canonical(&permission::stamp(tx,task)?).as_bytes())}),
+    )
+}
+
+#[cfg(test)]
+mod timeline_tests {
+    use super::*;
+
+    #[test]
+    fn projection_preserves_attempts_and_filters_private_history() {
+        let mut graph = json!({"nodes":{"a":{"kind":"surface"},"b":{"kind":"surface"},
+            "end":{"kind":"delivery"}},"events":[]});
+        let waiting = json!({"id":"first","authority":"current","argv":"hidden"});
+        event(
+            &mut graph,
+            "user",
+            "instruction",
+            "task",
+            json!({"text":"revise","authority":"current"}),
+        );
+        event(&mut graph, "host", "waiting", "a", waiting.clone());
+        event(&mut graph, "host", "waiting", "a", waiting);
+        event(
+            &mut graph,
+            "host",
+            "waiting",
+            "b",
+            json!({"id":"second","authority":"current"}),
+        );
+        event(
+            &mut graph,
+            "user",
+            "responded",
+            "a",
+            json!({"request":"first","response":{"choice":"B"}}),
+        );
+        event(
+            &mut graph,
+            "host",
+            "failed",
+            "job",
+            json!({"id":"job1","error":"hidden"}),
+        );
+        event(&mut graph, "user", "paused", "task", json!({}));
+        event(
+            &mut graph,
+            "host",
+            "running",
+            "job",
+            json!({"prompt":"hidden"}),
+        );
+        event(
+            &mut graph,
+            "host",
+            "waiting",
+            "a",
+            json!({"id":"retry","authority":"current"}),
+        );
+        event(
+            &mut graph,
+            "host",
+            "done",
+            "end",
+            json!({"delivery":"published","bindings":"hidden"}),
+        );
+        let rows = timeline(&graph, Some("current"));
+        assert_eq!(
+            rows.iter()
+                .map(|r| r["cursor"].as_u64().unwrap())
+                .collect::<Vec<_>>(),
+            [1, 2, 4, 6, 7, 9, 10]
+        );
+        assert_eq!(rows[1]["response"]["choice"], "B");
+        assert_eq!(rows[2]["request"], "second");
+        assert!(rows[5].get("response").is_none());
+        assert!(!json!(rows).to_string().contains("hidden"));
+        assert_eq!(timeline(&graph, None), vec![rows[6].clone()]);
+        assert_eq!(timeline(&graph, Some("next")).len(), 3);
+    }
 }

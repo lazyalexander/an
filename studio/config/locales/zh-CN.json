@@ -27,7 +27,8 @@
     "title": "An · 任务工作区",
     "brand": "An Studio",
     "heading": "任务工作区",
-    "nav": {"activity": "任务活动", "deliveries": "工作区交付", "graph": "完整流程", "controls": "任务控制"},
+    "timeline": {"instruction":"指令","decision":"决定","delivery":"交付","failure":"失败","paused":"任务已暂停","resumed":"任务已恢复","stopped":"任务已停止","closed":"任务已结束"},
+    "nav": {"timeline":"任务时间线","activity": "任务活动", "deliveries": "工作区交付", "graph": "完整流程", "controls": "任务控制"},
     "sources": "查看来源",
     "status": {
       "queued": "等待执行", "running": "执行中", "waiting": "等待回应", "saving": "等待文档保存",
