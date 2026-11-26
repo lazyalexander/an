@@ -12,7 +12,7 @@ from .ledger import Ledger
 from .phase import InvalidTransition, NoPose, Phase
 from .pipeline_api import LayerSpec, Pipeline, Session
 
-DEFAULT_RUN_DIR = Path(__file__).resolve().parents[1] / "run"
+DEFAULT_RUN_DIR = (Path(__file__).resolve().parents[1] / "run").resolve()
 POSE_WINDOW_S = 1.0
 ADAPTER_LIVE_MS = 3000
 

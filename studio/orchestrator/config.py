@@ -1,10 +1,5 @@
-"""Studio configuration: settings and every user-facing string live in studio/config/.
+"""Task Studio configuration and localized UI text."""
 
-`studio.json` holds the locale and operational settings; `locales/<locale>.json`
-holds UI text; `instances/<name>.json` holds instance manifests. An override
-file may replace existing settings but never introduce unknown keys, so a typo
-fails loudly instead of being silently ignored.
-"""
 
 import json
 from pathlib import Path
@@ -46,7 +41,3 @@ def strings(locale: str) -> dict:
     if not path.is_file():
         raise ValueError(f"unknown locale {locale!r}")
     return _read(path)
-
-
-def instance_manifest(name: str) -> dict:
-    return _read(CONFIG_DIR / "instances" / f"{name}.json")

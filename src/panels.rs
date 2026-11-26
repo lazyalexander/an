@@ -71,12 +71,12 @@ fn validate_panel(id: &str, p: &Value) -> Result<()> {
     }
     match p["kind"].as_str() {
         Some("native") => ensure!(
-            p["adapter"] == "krita"
+            crate::adapters::named(p["adapter"].as_str()).is_some()
                 && p["bindings"] == json!(["document"])
                 && ["html", "optional", "decision"]
                     .iter()
                     .all(|key| p.get(key).is_none()),
-            "Expected a Krita adapter with one document binding"
+            "Expected an installed native adapter with one document binding"
         ),
         Some("surface") => {
             schema(p)?;

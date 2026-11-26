@@ -28,4 +28,4 @@ Format contracts that admission depends on stay in code: the 64 KiB `spool.yaml`
 
 [`studio/config/studio.json`](../studio/config/studio.json) selects the locale and holds Studio settings (`graph.poll_ms`, `graph.panel_timeout_ms`, `graph.max_body_bytes`). Pass `--config FILE` to `python3 -m orchestrator` to override them; the same unknown-key rule applies.
 
-Every string shown by the task page, the legacy macro UI and the Krita docker lives in `studio/config/locales/<locale>.json`. Instance manifests, including their labels, live in `studio/config/instances/<name>.json`. Tests reject CJK text in Studio code and check that every text key the pages and docker use exists in the locale.
+Task Studio reads its labels from `studio/config/locales/<locale>.json`. The legacy experiment owns its instance manifests and translations, including Krita panel text, under `examples/legacy_studio/config/`.

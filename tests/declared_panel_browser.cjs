@@ -14,7 +14,10 @@ function gate() {
     const page = await browser.newPage();
     const viewed = gate(), firstWrite = gate();
     let draft, requests = 0, response;
-    const pkg = {files:{},assets:{},declaration:{decision:{}},response:{properties:{append:{type:"string"}}},
+    const pkg = {files:{source:{
+      "notes.unknown":Buffer.from("<em>literal preview</em>").toString("base64"),
+      "binary.md":Buffer.from([0xff,0x00]).toString("base64")
+    }},assets:{},declaration:{decision:{}},response:{properties:{append:{type:"string"}}},
       html:'<input id="custom"><script>addEventListener("an-ready",()=>{custom.value=an.draft.append;custom.oninput=()=>an.saveDraft({append:custom.value})})</script>'};
     await page.route("http://studio.test/**",async route=>{
       const name = new URL(route.request().url()).pathname.split("/").pop();
@@ -34,6 +37,8 @@ function gate() {
     await page.goto("http://studio.test/");
     await ack;
     const field = page.getByLabel("append"), submit = page.getByRole("button",{name:"panel.submit"});
+    assert.deepEqual(await page.locator("#content pre").allTextContents(), ["<em>literal preview</em>"]);
+    assert.equal(await page.locator("#content em").count(), 0);
     assert(await field.isVisible());
     assert(await submit.isDisabled());
     viewed.release();

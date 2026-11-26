@@ -1,28 +1,4 @@
 {
-  "native_krita": {
-    "select_document": "请选中本次请求打开的画布",
-    "wrong_path": "画布已另存到其他位置，请重新打开任务工作副本",
-    "save_failed": "Krita 保存失败",
-    "dirty": "画布仍有未保存的修改",
-    "title": "An · 原生绘画",
-    "awaiting": "等待连接任务",
-    "connect": "连接任务…",
-    "finish": "完成并交付",
-    "select_connection": "选择 An 输出的 connect.json",
-    "busy": "工作副本已由另一 Krita 实例打开",
-    "window": "等待 Krita 窗口",
-    "open_failed": "无法打开输入文档",
-    "copy_failed": "无法建立工作副本",
-    "copy_unsaved": "工作副本未保存",
-    "receipt_pending": "等待宿主收录",
-    "delivered": "已交付 · ",
-    "closed": "请求已关闭，工作副本已保留",
-    "painting": "绘画中 · ",
-    "missing_brush": "找不到 Basic-5 Size 压感笔刷",
-    "draw": "请用 Apple Pencil 由轻到重画一笔",
-    "ordinary_save": "请先普通保存一次，再点完成并交付",
-    "reconnect": "画布已关闭，请重新连接任务以打开已保存的工作副本"
-  },
   "graph": {
     "title": "An · 任务工作区",
     "brand": "An Studio",
@@ -35,7 +11,7 @@
       "done": "已完成", "failed": "失败", "unknown": "结果未知", "superseded": "已替换",
       "permission_required": "等待授权", "cancelled": "已取消"
     },
-    "native": {"awaiting_adapter":"等待 Krita 领取文档", "editing":"等待在 Krita 中完成并交付", "save_failed":"请在 Krita 中重新保存"},
+    "native": {"awaiting_adapter":"等待原生编辑器领取文档", "editing":"等待在原生编辑器中完成并交付", "save_failed":"请在原生编辑器中重新保存"},
     "panel": {
       "submit": "提交决定", "basic": "基础表单", "custom": "专用面板",
       "left": "面板已离开绑定的文档", "responded": "回应已提交", "timeout": "面板加载超时", "reload": "重新加载"},
@@ -59,26 +35,5 @@
       "sent": "已转述给 agent",
       "stale": "已转述；任务在你看到之后已更新，agent 会知道这条指令基于旧版本"
     }
-  },
-  "legacy": {
-    "lock": "锁定", "unlock": "解锁", "saving": "正在保存…",
-    "no_preview": "尚无画面", "drawer": "🔧 排查/调整"
-  },
-  "krita": {
-    "hint": "Bridge agent — 控制请在宏UI页面进行",
-    "offline": "orchestrator offline",
-    "broken": "install broken: not a symlink into the repo",
-    "status": "phase={phase}",
-    "pose_age": " pose_age={age}ms",
-    "session": " session={state}",
-    "decision": "{kind} {result}",
-    "saved": "saved",
-    "failed": "failed: {detail}",
-    "restored": "restored {name}",
-    "restore_failed": "restore failed: {error}",
-    "preview_failed": "preview failed: {error}",
-    "pushed": "pushed {name}",
-    "archive_kept": "archive kept: pose_{session}.kra",
-    "push_failed": "push failed: {error}"
   }
 }

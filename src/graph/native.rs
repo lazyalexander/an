@@ -1,9 +1,10 @@
 //! Task-bound local channel for an admitted native document editor.
 use super::*;
+use crate::adapters::Adapter;
 use anyhow::bail;
 use std::{
     fs::{self, OpenOptions},
-    io::{BufRead, BufReader, Cursor, Read, Write},
+    io::{BufRead, BufReader, Read, Write},
     os::unix::{
         fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt},
         net::UnixListener,
@@ -14,14 +15,16 @@ use std::{
 
 #[derive(clap::Subcommand)]
 pub enum Action {
-    /// Serve one active task to the local Krita plugin. Prints its connection file.
+    /// Serve one active task to the selected native editor. Prints its connection file.
     Serve {
         #[arg(long)]
         task: String,
+        #[arg(long)]
+        adapter: Option<String>,
     },
 }
 
-pub(super) fn document(files: &Value) -> Result<(&str, &Value)> {
+pub(super) fn document<'a>(adapter: &Adapter, files: &'a Value) -> Result<(&'a str, &'a Value)> {
     let map = files
         .as_object()
         .context("Invalid native document revision")?;
@@ -35,8 +38,9 @@ pub(super) fn document(files: &Value) -> Result<(&str, &Value)> {
         .and_then(|e| e.to_str())
         .unwrap_or("");
     ensure!(
-        matches!(ext, "kra" | "ora"),
-        "Krita input must be ORA or KRA"
+        adapter.inputs.contains(&ext),
+        "Unsupported document format for {}",
+        adapter.id
     );
     Ok((ext, entry))
 }
@@ -68,12 +72,17 @@ fn atomic_write(path: &Path, data: &[u8]) -> Result<()> {
 }
 
 pub fn execute(action: Action) -> Result<()> {
-    let Action::Serve { task } = action;
+    let Action::Serve { task, adapter } = action;
+    let adapter = match (adapter.as_deref(), crate::adapters::INSTALLED) {
+        (None, [only]) => *only,
+        (name, _) => crate::adapters::named(name).context("Select an installed native adapter")?,
+    };
     permission::current(&connect()?, &task)?;
     wake(&task)?;
     let identity = hash(canonical(&json!([root()?, task])).as_bytes());
     let dir = PathBuf::from("/tmp").join(format!(
-        "an-krita-{}-{}",
+        "an-{}-{}-{}",
+        adapter.id,
         unsafe { libc::geteuid() },
         &identity[..20]
     ));
@@ -92,7 +101,7 @@ pub fn execute(action: Action) -> Result<()> {
     let descriptor = dir.join("connect.json");
     atomic_write(
         &descriptor,
-        &serde_json::to_vec(&json!({"adapter":"krita","task":task,"socket":path}))?,
+        &serde_json::to_vec(&json!({"adapter":adapter.id,"task":task,"socket":path}))?,
     )?;
     println!("{}", descriptor.display());
     std::io::stdout().flush()?;
@@ -106,7 +115,7 @@ pub fn execute(action: Action) -> Result<()> {
                 line.len() <= 8192 && line.ends_with('\n'),
                 "Invalid adapter request"
             );
-            handle(&task, &serde_json::from_str(&line)?)
+            handle(adapter, &task, &serde_json::from_str(&line)?)
         })();
         let body = match response {
             Ok(v) => v,
@@ -125,86 +134,12 @@ pub fn execute(action: Action) -> Result<()> {
     Ok(())
 }
 
-fn verify_document_xml(data: &[u8]) -> Result<()> {
-    use quick_xml::{events::Event, Reader};
-    let mut reader = Reader::from_reader(data);
-    let mut depth = 0usize;
-    let mut root = false;
-    let mut image = false;
-    loop {
-        match reader.read_event()? {
-            Event::Start(tag) => {
-                if depth == 0 {
-                    ensure!(
-                        !root && tag.name().as_ref() == b"DOC",
-                        "Invalid KRA document root"
-                    );
-                    root = true;
-                }
-                if depth == 1 && tag.name().as_ref() == b"IMAGE" {
-                    image = true;
-                }
-                depth += 1;
-                ensure!(depth <= 256, "KRA metadata nesting limit exceeded");
-            }
-            Event::End(_) => depth = depth.checked_sub(1).context("Invalid KRA document")?,
-            Event::Eof => break,
-            _ => {}
-        }
-    }
-    ensure!(root && image && depth == 0, "Missing Krita image");
-    Ok(())
-}
-
-fn verify_snapshot(bytes: &[u8]) -> Result<()> {
-    let mut archive = zip::ZipArchive::new(Cursor::new(bytes)).context("Invalid KRA archive")?;
-    ensure!(archive.len() <= 32768, "Too many KRA members");
-    let mut mime = false;
-    let mut document = false;
-    let mut total = 0u64;
-    for index in 0..archive.len() {
-        let file = archive.by_index(index)?;
-        let name = file.name()?.into_owned();
-        let size = file.size();
-        total = total.checked_add(size).context("KRA size overflow")?;
-        ensure!(
-            total <= 512 * 1024 * 1024,
-            "KRA expands beyond the document limit"
-        );
-        let mut reader = file.take(size + 1);
-        if name == "mimetype" || name == "maindoc.xml" {
-            ensure!(size <= 8 * 1024 * 1024, "Invalid KRA header");
-            let mut data = Vec::new();
-            reader.read_to_end(&mut data)?;
-            ensure!(data.len() as u64 == size, "Truncated KRA header");
-            if name == "mimetype" {
-                ensure!(
-                    !mime && data == b"application/x-krita",
-                    "Invalid KRA MIME type"
-                );
-                mime = true;
-            } else {
-                ensure!(!document, "Duplicate KRA document header");
-                verify_document_xml(&data)?;
-                document = true;
-            }
-        } else {
-            ensure!(
-                std::io::copy(&mut reader, &mut std::io::sink())? == size,
-                "Truncated KRA member"
-            );
-        }
-    }
-    ensure!(mime && document, "Missing KRA document headers");
-    Ok(())
-}
-
-fn read_snapshot(dir: &Path, digest: &str) -> Result<Vec<u8>> {
+fn read_snapshot(adapter: &Adapter, dir: &Path, digest: &str) -> Result<Vec<u8>> {
     let limit = crate::config::load()?.limit("transfer_limit_bytes");
     let file = OpenOptions::new()
         .read(true)
         .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(dir.join("submitted.kra"))?;
+        .open(dir.join(adapter.snapshot))?;
     ensure!(file.metadata()?.is_file(), "Expected regular KRA snapshot");
     let mut bytes = Vec::new();
     file.take(limit + 1).read_to_end(&mut bytes)?;
@@ -212,11 +147,11 @@ fn read_snapshot(dir: &Path, digest: &str) -> Result<Vec<u8>> {
         bytes.len() as u64 <= limit && hash(&bytes) == digest,
         "Snapshot size or digest mismatch"
     );
-    verify_snapshot(&bytes)?;
+    (adapter.verify)(&bytes)?;
     Ok(bytes)
 }
 
-fn handle(task: &str, args: &Value) -> Result<Value> {
+fn handle(adapter: &Adapter, task: &str, args: &Value) -> Result<Value> {
     let mut db = connect()?;
     let _lock = instances::lock(&db, task)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -229,7 +164,9 @@ fn handle(task: &str, args: &Value) -> Result<Value> {
     let nodes = graph["nodes"].as_object().context("Invalid graph")?;
     let id = if op == "poll" {
         let mut waiting = nodes.iter().filter(|(id, node)| {
-            node["kind"] == "native" && graph["activity"][id]["status"] == "waiting"
+            node["package"]["declaration"]["adapter"] == adapter.id
+                && node["kind"] == "native"
+                && graph["activity"][id]["status"] == "waiting"
         });
         let preferred = waiting
             .clone()
@@ -242,7 +179,9 @@ fn handle(task: &str, args: &Value) -> Result<Value> {
         field(args, "node")?.to_owned()
     };
     ensure!(
-        nodes.get(&id).is_some_and(|n| n["kind"] == "native"),
+        nodes.get(&id).is_some_and(
+            |n| n["kind"] == "native" && n["package"]["declaration"]["adapter"] == adapter.id
+        ),
         "Unknown native surface"
     );
     let mut state = graph["activity"][&id].clone();
@@ -273,14 +212,14 @@ fn handle(task: &str, args: &Value) -> Result<Value> {
             private_dir(&dir)?;
             let cached = state["native_extension"]
                 .as_str()
-                .filter(|ext| matches!(*ext, "kra" | "ora"))
+                .filter(|ext| adapter.inputs.contains(ext))
                 .map(|ext| dir.join(format!("input.{ext}")))
                 .filter(|source| source.is_file());
             let source = if let Some(source) = cached {
                 source
             } else {
                 let files = get(&tx, "revision", &input)?;
-                let (ext, entry) = document(&files)?;
+                let (ext, entry) = document(adapter, &files)?;
                 let source = dir.join(format!("input.{ext}"));
                 if !source.is_file() {
                     atomic_write(&source, &artifacts::bytes(entry)?)?;
@@ -316,7 +255,7 @@ fn handle(task: &str, args: &Value) -> Result<Value> {
                 "Document has not been opened"
             );
             let digest = field(args, "digest")?;
-            let bytes = match read_snapshot(&dir, digest) {
+            let bytes = match read_snapshot(adapter, &dir, digest) {
                 Ok(bytes) => bytes,
                 Err(error) => {
                     state["native_phase"] = json!("save_failed");
@@ -327,12 +266,13 @@ fn handle(task: &str, args: &Value) -> Result<Value> {
                     return Err(error);
                 }
             };
-            let revision = revision(&tx, &json!({"painting.kra":STANDARD.encode(bytes)}))?;
-            state["outputs"]["document"] = json!({"revision":revision,"spool":"native:krita"});
+            let revision = revision(&tx, &json!({(adapter.output):STANDARD.encode(bytes)}))?;
+            state["outputs"]["document"] =
+                json!({"revision":revision,"spool":format!("native:{}",adapter.id)});
             state["status"] = json!("done");
             state["native_phase"] = json!("saved");
             state.as_object_mut().unwrap().remove("native_error");
-            let receipt = json!({"adapter":"krita","request":attempt,"input":input,"digest":digest,"revision":revision});
+            let receipt = json!({"adapter":adapter.id,"request":attempt,"input":input,"digest":digest,"revision":revision});
             state["receipt"] = receipt.clone();
             event(&mut graph, "user", "saved", &id, receipt);
             json!({"status":"done","revision":revision})

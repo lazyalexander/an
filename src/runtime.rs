@@ -139,6 +139,9 @@ fn record(db: &Connection, image: &str) -> Result<Option<Value>> {
     if v["spec"] != "spool/v2" || !v["manifest"].is_object() || !v["manifest_digest"].is_string() {
         return Ok(None);
     }
+    if let Some(panels) = v["manifest"].get("panels") {
+        crate::panels::validate(panels)?;
+    }
     v["image"] = json!(image);
     Ok(Some(v))
 }
@@ -432,4 +435,24 @@ pub fn register(db: &Connection, reference: &str) -> Result<String> {
     put(db, "admission", d, &record)?;
     put(db, "image", &image, &json!(image))?;
     Ok(image)
+}
+
+#[cfg(test)]
+mod cached_admission_tests {
+    use super::*;
+
+    #[test]
+    fn cached_panel_requires_adapter_in_current_build() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE objects(kind TEXT,id TEXT,body TEXT,PRIMARY KEY(kind,id))")
+            .unwrap();
+        let admission = json!({"spec":"spool/v2","manifest_digest":"digest","manifest":{
+            "panels":{"paint":{"kind":"native","title":"Paint","bindings":["document"],"adapter":"krita"}}
+        }});
+        put(&db, "admission", "digest", &admission).unwrap();
+        assert_eq!(
+            record(&db, "spool@digest").is_ok(),
+            cfg!(feature = "krita-experiment")
+        );
+    }
 }

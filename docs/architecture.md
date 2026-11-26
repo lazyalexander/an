@@ -68,6 +68,14 @@ The macro UI follows a harness layout:
 
 A pipeline without the macro UI still needs somewhere to present surfaces and permission requests. Either it contains no surface nodes, or its harness renders the declared decision types. Controls and deliveries remain available through the CLI.
 
+## Framework and experiment boundaries
+
+The An host owns tasks, grants, graph transitions, immutable versions and receipt validation. Task Studio starts with `cd studio && python3 -m orchestrator --task TASK`. Its entry point imports only the graph server and configuration. A task's admitted panel declarations supply the decisions shown in the timeline.
+
+Experiment packages under `examples/` own prompts, document transformations, application plugins, demo entry points and fixtures. Markdown review and graph Studio spools run in containers. The earlier Bridge/CAD instance UI, Blender pipeline and pressure probes live under `examples/legacy_studio/`. Start that experiment from its own directory with `python3 -m orchestrator --instance bridge-studio --fake`. Its run directory resolves to the existing local Studio archives.
+
+The native channel asks an installed adapter for its supported extensions, snapshot filename, published filename and byte validator. An authorizes and binds each receipt to the task and attempt before publishing it. The contract lives in `src/adapters.rs`; the Krita archive checks live in `examples/krita-format`. The default binary includes this trusted adapter for existing native graphs. Build the host without experimental adapters using `cargo build --no-default-features`. Manifests requesting an unavailable adapter fail admission. Adding an adapter requires explicit registration in the binary.
+
 ## Status
 
 | Part | State |
@@ -76,7 +84,7 @@ A pipeline without the macro UI still needs somewhere to present surfaces and pe
 | Staged container drivers (`expand`, `continuation`) | Implemented |
 | Delivery resume as a new task | Implemented |
 | Host-side instance reclamation | Implemented for settled runs and drivers |
-| Macro UI with panels, permissions, deliveries | Implemented, with pause/resume/stop buttons and an instruction box; harness layout not started |
+| Macro UI with panels, permissions, deliveries | Implemented with a task timeline, inline decisions, deliveries and task controls |
 | Spool-declared UI and decision types (manifest after v1) | Implemented in `an.spool/v2`, with pinned presentations and host-validated responses |
 | Control channel (pause, resume, stop) | Implemented: host-executed, turn-gated, recorded as user events; not exposed to agents |
 | Instruction relay with revision binding | Implemented: unchanged text, sender turn, seen and current revision, stale flag |
@@ -90,7 +98,7 @@ A pipeline without the macro UI still needs somewhere to present surfaces and pe
 
 ## Native surfaces
 
-Pressure painting cannot run in a web panel. Measured on the reference machine: synthetic input reaches the canvas with zero pressure, and macOS delivers the Sidecar Pencil to ordinary applications as a plain mouse. A driver-level injector (Codonic Pad) delivers genuine tablet events to Krita. Pinned versions are in [studio/VERSIONS.md](../studio/VERSIONS.md); the probe evidence is under `studio/spikes/`.
+Pressure painting cannot run in a web panel. Measured on the reference machine: synthetic input reaches the canvas with zero pressure, and macOS delivers the Sidecar Pencil to ordinary applications as a plain mouse. A driver-level injector (Codonic Pad) delivers genuine tablet events to Krita. Pinned versions are in [examples/legacy_studio/VERSIONS.md](../examples/legacy_studio/VERSIONS.md); the probe evidence is under `examples/legacy_studio/spikes/`.
 
 The Bridge native graph sends one versioned layered document to the local Krita adapter. Ordinary saves update the private working copy. **完成并交付** saves the bound canvas, verifies it is clean and submits a separate KRA snapshot. The host checks the attempt, authority, content digest and archive before committing a document output. See [running and verifying the native graph](graph-studio.md#krita-native-painting).
 
