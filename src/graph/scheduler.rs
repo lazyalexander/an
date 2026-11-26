@@ -404,15 +404,6 @@ fn step(
     let t = get(&tx, "task", task)?;
     let delivery = node["kind"] == "delivery";
     let op = if delivery { "publish" } else { "preview" };
-    let adapter = if node["kind"] == "native" {
-        Some(
-            crate::adapters::named(node["package"]["declaration"]["adapter"].as_str())
-                .context("Native adapter is not installed")?,
-        )
-    } else {
-        None
-    };
-    let destination = adapter.map(|a| format!("native:{}", a.id));
     // Keep grants for the whole set atomic when one file still needs consent.
     tx.execute_batch("SAVEPOINT graph_access")?;
     for (name, item) in bound.as_object().unwrap() {
@@ -420,7 +411,7 @@ fn step(
         let dest = if delivery {
             t["workspace"].as_str().unwrap_or(task)
         } else {
-            destination.as_deref().unwrap_or("studio")
+            "studio"
         };
         if let Some(p) = permission::graph_gate(
             &tx,
@@ -472,12 +463,6 @@ fn step(
         state["delivery"] = json!(attempt);
         state["status"] = json!("done");
     } else {
-        if let Some(adapter) = adapter {
-            let files = get(&tx, "revision", field(&bound["document"], "revision")?)?;
-            let (ext, _) = super::native::document(adapter, &files)?;
-            state["native_extension"] = json!(ext);
-            state["native_phase"] = json!("awaiting_adapter");
-        }
         state["status"] = json!("waiting");
     }
     // Commit permission consumption with its result, even across a process exit.

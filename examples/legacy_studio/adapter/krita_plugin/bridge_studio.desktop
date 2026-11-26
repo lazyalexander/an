@@ -1,7 +1,0 @@
-[Desktop Entry]
-Type=Service
-ServiceTypes=Krita/PythonPlugin
-X-KDE-Library=bridge_studio
-X-Python-Plugin-Id=bridge_studio
-Name=Bridge Studio
-Comment=Bridge Studio orchestrator client: lock, render, paint

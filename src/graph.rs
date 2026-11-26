@@ -1,6 +1,5 @@
 mod host;
 pub mod model;
-pub mod native;
 mod scheduler;
 mod sources;
 mod validation;
@@ -300,14 +299,6 @@ fn append_nodes(
                     "Invalid argv"
                 );
             }
-            "native" => {
-                ensure!(
-                    node["outputs"] == json!(["document"])
-                        && node.get("save").is_none()
-                        && node.get("continuation").is_none(),
-                    "Native surface requires a saved document output"
-                );
-            }
             "surface" => {
                 ensure!(
                     if node.get("save").is_some() {
@@ -335,10 +326,7 @@ fn append_nodes(
             );
         }
         let mut stored = node.clone();
-        if matches!(
-            node["kind"].as_str(),
-            Some("surface" | "native" | "delivery")
-        ) {
+        if matches!(node["kind"].as_str(), Some("surface" | "delivery")) {
             ensure!(
                 node.as_object().unwrap().keys().all(|k| matches!(
                     k.as_str(),

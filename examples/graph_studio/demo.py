@@ -20,7 +20,7 @@ def initial_driver(experiment, spool):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("experiment", choices=["bridge", "bridge-model", "bridge-native", "cad", "markdown"])
+    parser.add_argument("experiment", choices=["bridge", "bridge-model", "cad", "markdown", "sketch"])
     parser.add_argument("--an", type=Path, default=ROOT / "target/debug/an")
     parser.add_argument("--intent", action="store_true", help="propose the Markdown turn intent")
     parser.add_argument("--image")
@@ -72,15 +72,8 @@ def main():
 
     studio = subprocess.Popen([sys.executable, "-m", "orchestrator", "--task", task, "--an", binary,
                                "--port", str(options.port)], cwd=ROOT / "studio", env=env)
-    channel = None
     closed = False
     try:
-        if options.experiment == "bridge-native":
-            channel = subprocess.Popen([binary,"native","serve","--task",task],env=env,stdout=subprocess.PIPE,text=True)
-            connection = channel.stdout.readline().strip()
-            if not connection:
-                raise RuntimeError("Krita channel failed to start")
-            print(f"Krita connection file: {connection}",flush=True)
         if options.intent:
             import tempfile
             sys.path.insert(0,str(ROOT/"examples/markdown_review"))
@@ -123,9 +116,6 @@ def main():
                     if instance["status"] != "unloaded":
                         call("unload", "--task", task, "--instance", instance["id"])
         finally:
-            if channel:
-                channel.terminate()
-                channel.wait()
             studio.terminate()
             studio.wait()
 

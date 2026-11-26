@@ -91,10 +91,6 @@ pub fn execute(action: Action) -> Result<()> {
         let activity = &state["activity"][id];
         if activity["status"] == "waiting" && node["package"]["declaration"].is_object() {
             let d = &node["package"]["declaration"];
-            if node["kind"] == "native" {
-                waiting.push(json!({"node":id,"request":activity["id"],"title":d["title"],"adapter":d["adapter"],"phase":activity["native_phase"],"error":activity["native_error"]}));
-                continue;
-            }
             waiting.push(json!({"node":id,"request":activity["id"],"title":d["title"],"decision":d["decision"],"response":node["response"],"bindings":activity["bindings"]}));
         }
     }
@@ -114,10 +110,6 @@ pub fn execute(action: Action) -> Result<()> {
                 .as_ref()
                 .is_none_or(|r| row["request"] == r.as_str()),
             "Stale decision"
-        );
-        ensure!(
-            row.get("adapter").is_none(),
-            "Complete and deliver the document in the native editor"
         );
         let mut args = json!({"node":node,"request":row["request"]});
         let decision = graph::host(target, "decision", &args)?;

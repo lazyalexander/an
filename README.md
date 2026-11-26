@@ -12,6 +12,6 @@ A spool can pass a frozen artifact directly to another spool or publish it to th
 
 Build the Rust CLI and stdio MCP gateway with `cargo build --release --locked`. Spool execution uses Apple Container.
 
-The framework lives in `src/` and `studio/`. Application spools, the legacy instance UI and the native document validator live under `examples/`. Build the host without experimental adapters with `cargo build --release --locked --no-default-features`.
+The framework lives in `src/` and `studio/`; host services that need the GPU live in `services/`. Application spools and demo entry points live under `examples/`.
 
 [Architecture](docs/architecture.md) · [Spool image format](docs/spool-images.md) · [Workspace bindings](docs/workspaces.md) · [Permissions](docs/permissions.md) · [Incremental tasks and Studio](docs/graph-studio.md) · [Configuration](docs/configuration.md)
