@@ -93,7 +93,7 @@ The native channel asks an installed adapter for its supported extensions, snaps
 | Model-backed subagents inside drivers | Bridge model mode uses a host-mediated inference result to choose the next subgraph |
 | Presentation without the macro UI (CLI / harness rendering of decision types) | Interactive and JSON CLI implemented; dedicated harness rendering remains open |
 | Native surfaces | Krita native node, saved KRA receipts and Bridge native mode implemented; reference-machine Pencil acceptance gates instance-mode retirement |
-| Turn-level policy to avoid approval fatigue | Not started |
+| Turn-level policy to avoid approval fatigue | Implemented for declared graph routes. Markdown review and minutes-to-announcement exercise the shared CLI and Studio authorization card. |
 | Reclamation of unreferenced intermediate artifacts | Not started |
 
 ## Native surfaces

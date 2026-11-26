@@ -340,11 +340,16 @@ pub fn execute() -> Result<Value> {
                 ensure!(
                     grants.spool.is_empty()
                         && grants.allow_tool.is_empty()
-                        && grants.editable.is_empty()
-                        && input.is_empty(),
+                        && grants.editable.is_empty(),
                     "Bound tasks inherit workspace configuration"
                 );
-                json!({"task":resolve(&tx,&key,true)?})
+                let id = resolve(&tx, &key, true)?;
+                if !input.is_empty() {
+                    let mut task = get(&tx, "task", &id)?;
+                    task["inputs"] = inputs(&tx, &input)?;
+                    put(&tx, "task", &id, &task)?;
+                }
+                json!({"task":id})
             } else {
                 if grants.spool.is_empty() && grants.allow_tool.is_empty() && model.is_none() {
                     bail!("Grant a spool, model or downstream tool")

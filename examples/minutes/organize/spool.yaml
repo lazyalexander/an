@@ -1,0 +1,7 @@
+schema: an.spool/v1
+name: minutes-organize
+summary: Prepare summary.json.
+inputs:
+  - {name: minutes, description: Source, media_types: [application/json], required: true}
+outputs:
+  - {name: result, description: Result, media_types: [application/octet-stream]}

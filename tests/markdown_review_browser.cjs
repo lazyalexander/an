@@ -4,9 +4,18 @@ const assert = require("node:assert/strict");
 (async () => {
   const browser = await chromium.launch({channel:"chrome", headless:true});
   try {
-    const [choice, directory] = process.argv.slice(2);
+    const [choice, directory, mode] = process.argv.slice(2);
     const page = await browser.newPage();
     await page.goto(fs.readFileSync(0,"utf8").trim());
+    if (mode==="intent") {
+      await page.setViewportSize({width:390,height:844});
+      const card = page.locator("#intent");
+      await card.getByRole("button",{name:"确认本轮授权"}).waitFor();
+      assert.ok(await page.evaluate(()=>document.documentElement.scrollWidth <= innerWidth));
+      await page.screenshot({path:directory+"/authorization.png"});
+      await card.getByRole("button",{name:"确认本轮授权"}).click();
+      await page.setViewportSize({width:1280,height:800});
+    }
     const timeline = page.locator("#timeline");
     await timeline.getByLabel("choice").waitFor();
     await page.screenshot({path:directory+"/desktop.png"});

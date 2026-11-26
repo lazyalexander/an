@@ -123,3 +123,24 @@ The fixture supplies the original Markdown and two paragraph replacement suggest
 The central timeline shows instructions, decisions, deliveries, failures and controls in host event order. Select a waiting decision to answer inline. Inspect execution details through the graph and sources controls. After the task closes its published delivery remains accessible.
 
 Run `python3 tests/markdown_review_smoke.py --browser` for the controlled backend and desktop/mobile Chrome checks. Add `--real` to use the configured local Ollama model. Both modes exercise the compatible case and both conflict answers, and apply each diff to verify the delivered bytes.
+
+### Text workflow authorization experiments
+
+For interactive Markdown review use `python3 examples/graph_studio/demo.py markdown --intent`. Studio shows the turn authorization card before the first protected transfer. A conflict subsequently opens the separate review decision. Build the minutes experiment's two spool images with the following commands, then open the URL printed by the demo:
+
+```sh
+container build -t an-minutes-organize:test examples/minutes/organize
+container build -t an-minutes-format:test examples/minutes/format
+python3 examples/minutes/demo.py --mode studio
+```
+
+Headless comparisons use `python3 tests/markdown_review_smoke.py` and the same command with `--intent`. Add `--real --browser` for local Ollama and Chrome. For minutes use `--mode baseline`, `--mode intent`, and `--mode intent --attack`. Each case uses an isolated registry. Counts below are unique individual approval requests in baseline mode versus human confirmations in intent mode (one card, zero additional approvals). Business decisions are counted separately.
+
+| Case | Baseline approvals | Intent confirmations | Business decisions | Result |
+| --- | ---: | ---: | ---: | --- |
+| Compatible Markdown edits | 12 | 1 | 0 | Both edits, patch reproduces draft |
+| Markdown conflict A | 15 | 1 | 1 | First edit, patch reproduces draft |
+| Markdown conflict B | 15 | 1 | 1 | Second edit, patch reproduces draft |
+| Minutes to announcement | 3 | 1 | 0 | Only public items reach the draft |
+
+In the negative minutes case the graph attempts to bind the original minutes to the formatter. Its workspace permits only organizer-to-formatter handoff, and the attempted run fails before the input is mounted. The model denial case checks that no backend generation or quota reservation occurs.

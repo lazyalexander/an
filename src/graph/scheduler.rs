@@ -199,14 +199,21 @@ fn accept_expansion(
     );
     let proposal_revision = field(&state["outputs"]["subgraph.json"], "revision")?;
     let origin = &graph["nodes"][id]["spool"];
-    if let Some(request) = permission::gate(
+    if let Some(request) = permission::graph_gate(
         &tx,
         task,
         "publish",
         json!([origin, "graph-metadata", state["id"], proposal_revision]),
         json!([state["id"], proposal_revision]),
         state["proposal_request"].as_str(),
-        Some(json!(["publish", origin, "graph-metadata"])),
+        json!(["publish", origin, "graph-metadata"]),
+        crate::intent::graph_route(
+            &tx,
+            "publish",
+            &json!({"node":id,"port":"subgraph.json"}),
+            "graph-metadata",
+            &state["outputs"]["subgraph.json"],
+        )?,
     )? {
         state["proposal_request"] = request["request_id"].clone();
         state["status"] = json!("permission_required");
@@ -368,7 +375,7 @@ fn step(
             db,
             task,
             "run",
-            &json!({"instance":instance["id"],"argv":node["argv"],"outputs":node["outputs"],"inputs":inputs,"input_requests":state["requests"],"_graph_bindings":private,"_graph_run":attempt}),
+            &json!({"instance":instance["id"],"argv":node["argv"],"outputs":node["outputs"],"inputs":inputs,"input_requests":state["requests"],"_graph_bindings":private,"_graph_sources":node["inputs"],"_graph_run":attempt}),
             lock,
         )?;
         if let Some(request) = result["request_id"].as_str() {
@@ -403,14 +410,15 @@ fn step(
         } else {
             destination.as_deref().unwrap_or("studio")
         };
-        if let Some(p) = permission::gate(
+        if let Some(p) = permission::graph_gate(
             &tx,
             task,
             op,
             json!([origin, name, dest]),
             json!([attempt, item["revision"]]),
             state["requests"][name].as_str(),
-            Some(json!([op, origin, dest])),
+            json!([op, origin, dest]),
+            crate::intent::graph_route(&tx, op, &node["inputs"][name], dest, item)?,
         )? {
             let id = field(&p, "request_id")?;
             let row = get(&tx, "request", id)?;

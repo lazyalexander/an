@@ -243,6 +243,33 @@ impl Fixture {
     fn surface(id: &str) -> Value {
         json!({"id":id,"kind":"surface","panel":"choice","spool":"test@demo","inputs":{"ui":{"input":"package"}},"outputs":["response"]})
     }
+    fn propose(&self, routes: Value) -> String {
+        let path = self.root.join("routes.json");
+        fs::write(&path, routes.to_string()).unwrap();
+        self.call(&[
+            "permission",
+            "intent-propose",
+            "--task",
+            "task",
+            "--file",
+            path.to_str().unwrap(),
+        ])["id"]
+            .as_str()
+            .unwrap()
+            .to_owned()
+    }
+    fn decide_intent(&self, id: &str, decisions: Value) {
+        self.call(&[
+            "permission",
+            "intent-decide",
+            "--task",
+            "task",
+            "--request-id",
+            id,
+            "--decision",
+            &decisions.to_string(),
+        ]);
+    }
     fn decide_graph(&self, decision: &str) {
         for request in self
             .graph("requests", json!({}))
@@ -937,4 +964,218 @@ fn interactive_and_json_answers_compete_for_one_attempt() {
         1
     );
     assert!(!answer(true, br#"{"choice":"A"}"#).wait().unwrap().success());
+}
+
+#[test]
+fn intent_denial_resolves_an_existing_preview_request() {
+    let f = Fixture::graph_task();
+    f.graph("submit", json!({"base_revision":0,"nodes":[Fixture::surface("preview")],"idempotency_key":"preview"})).unwrap();
+    let pending = ["permission", "pending", "--task", "task"];
+    assert_eq!(f.call(&pending).as_array().unwrap().len(), 1);
+    let path = f.root.join("intent.json");
+    let routes = json!([{"operation":"preview","origin":"task-input:package","source":{"input":"package"},"destination":"studio"}]);
+    fs::write(&path, routes.to_string()).unwrap();
+    let card = f.call(&[
+        "permission",
+        "intent-propose",
+        "--task",
+        "task",
+        "--file",
+        path.to_str().unwrap(),
+    ]);
+    f.call(&[
+        "permission",
+        "intent-decide",
+        "--task",
+        "task",
+        "--request-id",
+        card["id"].as_str().unwrap(),
+        "--decision",
+        "deny",
+    ]);
+    assert_eq!(f.call(&pending), json!([]));
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["preview"]["status"],
+        "failed"
+    );
+}
+
+#[test]
+fn intent_decisions_survive_process_restart_and_expire_with_authority() {
+    for change in ["turn", "policy"] {
+        let f = Fixture::graph_task();
+        let file = f.root.join("intent.json");
+        fs::write(&file,json!([{"operation":"preview","origin":"task-input:package","source":{"input":"package"},"destination":"studio"}]).to_string()).unwrap();
+        let card = f.call(&[
+            "permission",
+            "intent-propose",
+            "--task",
+            "task",
+            "--file",
+            file.to_str().unwrap(),
+        ]);
+        assert_eq!(card["routes"][0]["revision"], "panel");
+        assert!(card.get("stamp").is_none());
+        let decide = [
+            "permission",
+            "intent-decide",
+            "--task",
+            "task",
+            "--request-id",
+            card["id"].as_str().unwrap(),
+            "--decision",
+            "allow",
+        ];
+        let first = f.call(&decide);
+        assert_eq!(first, f.call(&decide));
+        assert_eq!(
+            first,
+            f.call(&["permission", "intent-show", "--task", "task"])
+        );
+        f.graph("submit",json!({"base_revision":0,"nodes":[Fixture::surface("before")],"idempotency_key":"first"})).unwrap();
+        assert_eq!(
+            f.graph("state", json!({})).unwrap()["activity"]["before"]["status"],
+            "waiting"
+        );
+        if change == "turn" {
+            f.call(&["permission", "begin", "--task", "task"]);
+        } else {
+            fs::write(&file, r#"{"default":"ask","effects":[]}"#).unwrap();
+            f.call(&[
+                "permission",
+                "policy",
+                "--task",
+                "task",
+                "--file",
+                file.to_str().unwrap(),
+            ]);
+            assert_eq!(
+                f.call(&["permission", "intent-show", "--task", "task"]),
+                Value::Null
+            );
+            f.graph("submit",json!({"base_revision":1,"nodes":[Fixture::surface("after")],"idempotency_key":"second"})).unwrap();
+            assert_eq!(
+                f.graph("state", json!({})).unwrap()["activity"]["after"]["status"],
+                "permission_required"
+            );
+        }
+        assert!(!f.run(&decide).status.success());
+    }
+}
+
+#[test]
+fn mixed_intent_settles_pending_inputs_before_the_node_can_proceed() {
+    for decision in ["ask", "deny"] {
+        let f = Fixture::graph_task();
+        f.insert(
+            "task",
+            "task",
+            json!({"work":{"test@demo":"work"},"inputs":{"a":"panel","b":"panel","other":"panel"}}),
+        );
+        let delivery = |id: &str, inputs: Value| json!({"id":id,"kind":"delivery","inputs":inputs,"outputs":[]});
+        let nodes = [
+            delivery("both", json!({"a":{"input":"a"},"b":{"input":"b"}})),
+            delivery("independent", json!({"c":{"input":"other"}})),
+        ];
+        f.graph(
+            "submit",
+            json!({"base_revision":0,"nodes":nodes,"idempotency_key":"deliver"}),
+        )
+        .unwrap();
+        let route = |name: &str| json!({"operation":"publish","origin":format!("task-input:{name}"),"source":{"input":name},"destination":"task"});
+        let card = f.propose(json!([route("a"), route("b")]));
+        let pending = f.graph("requests", json!({})).unwrap();
+        let pending = pending.as_array().unwrap();
+        assert_eq!(pending.len(), 2);
+        let covered = pending.iter().find(|r| r["scope"][1] == "a").unwrap();
+        assert_eq!(covered["intent"], card);
+        let independent = pending.iter().find(|r| r["scope"][1] == "c").unwrap();
+        assert!(independent.get("intent").is_none());
+        f.call(&[
+            "permission",
+            "decide",
+            "--task",
+            "task",
+            "--request-id",
+            independent["id"].as_str().unwrap(),
+            "--decision",
+            "once",
+        ]);
+        f.decide_intent(&card, json!(["allow", decision]));
+        let pending = f.call(&["permission", "pending", "--task", "task"]);
+        let state = f.graph("state", json!({})).unwrap();
+        assert_eq!(state["activity"]["independent"]["status"], "done");
+        if decision == "deny" {
+            assert_eq!(pending, json!([]));
+            assert_eq!(state["activity"]["both"]["error"], "Denied by turn intent");
+        } else {
+            assert_eq!(pending.as_array().unwrap().len(), 1);
+            assert_eq!(pending[0]["scope"][1], "b");
+            f.decide_graph("once");
+            assert_eq!(
+                f.graph("state", json!({})).unwrap()["activity"]["both"]["status"],
+                "done"
+            );
+        }
+    }
+}
+
+#[test]
+fn explicit_ask_requires_a_new_confirmation_despite_a_turn_grant() {
+    let f = Fixture::graph_task();
+    let submit = |id: &str, rev: u64| {
+        f.graph(
+            "submit",
+            json!({"base_revision":rev,"nodes":[Fixture::surface(id)],"idempotency_key":id}),
+        )
+        .unwrap()
+    };
+    submit("first", 0);
+    f.decide_graph("turn");
+    let id = f.propose(json!([{"operation":"preview","origin":"task-input:package","source":{"input":"package"},"destination":"studio"}]));
+    f.decide_intent(&id, json!(["ask"]));
+    submit("second", 1);
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["second"]["status"],
+        "permission_required"
+    );
+    f.decide_graph("once");
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["second"]["status"],
+        "waiting"
+    );
+}
+
+#[test]
+fn explicit_ask_requires_a_new_confirmation_despite_a_host_allowance() {
+    let f = Fixture::graph_task();
+    f.graph(
+        "submit",
+        json!({"base_revision":0,"nodes":[Fixture::surface("review")],"idempotency_key":"review"}),
+    )
+    .unwrap();
+    let requests = f.graph("requests", json!({})).unwrap();
+    f.graph("control", json!({"action":"pause"})).unwrap();
+    f.call(&[
+        "permission",
+        "effect",
+        "--task",
+        "task",
+        "--request-id",
+        requests[0]["id"].as_str().unwrap(),
+        "--decision",
+        "allow",
+    ]);
+    let card = f.propose(json!([{"operation":"preview","origin":"task-input:package","source":{"input":"package"},"destination":"studio"}]));
+    f.decide_intent(&card, json!(["ask"]));
+    f.graph("control", json!({"action":"resume"})).unwrap();
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["review"]["status"],
+        "permission_required"
+    );
+    f.decide_graph("once");
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["review"]["status"],
+        "waiting"
+    );
 }

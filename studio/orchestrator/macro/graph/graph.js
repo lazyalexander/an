@@ -264,6 +264,63 @@ function renderTimeline(title, deliveries) {
   }
   while (list.children.length > rows.length) list.lastChild.remove();
 }
+function renderIntent(card) {
+  const parent = el("intent");
+  if (card?.status !== "pending") {
+    parent.replaceChildren();
+    delete parent.dataset.id;
+    return;
+  }
+  if (parent.dataset.id === card.id) return;
+  parent.dataset.id = card.id;
+  const form = document.createElement("form");
+  const heading = document.createElement("h2");
+  heading.textContent = t("intent.title");
+  form.append(heading);
+  const fields = [];
+  const groups = new Map();
+  const short = name => name.split("@sha256:")[0];
+  for (const [index,row] of card.routes.entries()) {
+    let group = groups.get(row.operation);
+    if (!group) {
+      group = document.createElement("section");
+      const title = document.createElement("h3");
+      title.textContent = t("intent."+row.operation);
+      group.append(title);
+      groups.set(row.operation,group);
+      form.append(group);
+    }
+    const section = document.createElement("fieldset");
+    const label = document.createElement("label");
+    const source = row.source.input || row.source.node + " / " + row.source.port;
+    const destination = row.destination === "graph-metadata" ? t("intent.metadata") :
+        row.operation === "publish" ? t("intent.workspace") : short(row.destination);
+    const origin = row.source.input ? source : short(row.origin) + " · " + source;
+    label.textContent = origin + " → " + destination + " ";
+    const field = document.createElement("select");
+    for (const value of ["allow","ask","deny"]) field.add(new Option(t("intent."+value),value));
+    fields[index] = field;
+    label.append(field);
+    const details = document.createElement("details"), summary = document.createElement("summary");
+    summary.textContent = t("intent.scope");
+    const pre = document.createElement("pre");
+    pre.textContent = JSON.stringify(row,null,2);
+    if (row.operation === "model") pre.textContent += "\n" + JSON.stringify(card.model,null,2);
+    details.append(summary,pre);
+    section.append(label,details);
+    group.append(section);
+  }
+  const submit = document.createElement("button");
+  submit.textContent = t("intent.submit");
+  form.append(submit);
+  form.onsubmit = async e => {
+    e.preventDefault();
+    submit.disabled = true;
+    try { await api("intent-decide",{id:card.id,decisions:fields.map(f=>f.value)}); await update(); }
+    catch (error) { status(error.message); submit.disabled = false; }
+  };
+  parent.replaceChildren(form);
+}
 let lastDelivery;
 async function render() {
   const activity = Object.entries(view.activity || {});
@@ -281,13 +338,18 @@ async function render() {
   renderControls();
   el("graph-nodes").replaceChildren(...nav(activity.map(([id,s])=>[id,title(id)+" · "+statusLabel(s.status)]),
     selection?.kind==="node" && selection.id,id=>select("node",id)));
+  renderIntent(view.intent);
   renderTimeline(title, deliveries);
   el("deliveries").replaceChildren(...nav(deliveries.map(d=>[d.id,d.title || d.node]),selection?.kind==="delivery" && selection.id,id=>select("delivery",id)));
-  el("permissions").replaceChildren(...view.permissions.map(r=>{
+  const pendingIntent = view.intent?.status === "pending" ? view.intent.id : null;
+  const individualRequests = view.permissions.filter(r => !pendingIntent || r.intent !== pendingIntent);
+  el("permissions").replaceChildren(...individualRequests.map(r=>{
     const article=document.createElement("article");
     article.append(t("permission.request",{operation:r.operation,scope:r.scope.join(" / ")}));
     const details=document.createElement("details"), summary=document.createElement("summary"), detail=document.createElement("pre");
-    summary.textContent=t("permission.details");detail.textContent=JSON.stringify(r.details,null,2);details.append(summary,detail);article.append(details);
+    summary.textContent=t("permission.details");
+    detail.textContent=JSON.stringify(r.revision ? {revision:r.revision,details:r.details} : r.details,null,2);
+    details.append(summary,detail);article.append(details);
     for (const [text,decision] of [[t("permission.allow_once"),"once"],[t("permission.deny"),"deny"]]) article.append(button(text,async()=>{
       await api("decide",{request:r.id,decision}); await update();
     }));

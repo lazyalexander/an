@@ -22,11 +22,14 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("experiment", choices=["bridge", "bridge-model", "bridge-native", "cad", "markdown"])
     parser.add_argument("--an", type=Path, default=ROOT / "target/debug/an")
+    parser.add_argument("--intent", action="store_true", help="propose the Markdown turn intent")
     parser.add_argument("--image")
     parser.add_argument("--review-case", choices=["compatible","conflict"], default="conflict")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--resume", metavar="V1_DELIVERY")
     options = parser.parse_args()
+    if options.intent and options.experiment != "markdown":
+        parser.error("--intent requires markdown")
     if options.resume and options.experiment != "bridge":
         parser.error("--resume requires bridge")
     binary = str(options.an.resolve())
@@ -78,6 +81,14 @@ def main():
             if not connection:
                 raise RuntimeError("Krita channel failed to start")
             print(f"Krita connection file: {connection}",flush=True)
+        if options.intent:
+            import tempfile
+            sys.path.insert(0,str(ROOT/"examples/markdown_review"))
+            from intent import routes
+            with tempfile.NamedTemporaryFile(mode="w", suffix=".json") as spec:
+                json.dump(routes(spool,workspace),spec)
+                spec.flush()
+                call("permission","intent-propose","--task",task,"--file",spec.name)
         graph("submit", base_revision=0, idempotency_key="start",
               nodes=[initial_driver("revise" if options.resume else options.experiment, spool)])
         print(f"Workspace {workspace} · task {task}", flush=True)

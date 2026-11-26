@@ -25,3 +25,7 @@ header nav { display:flex;gap:8px;margin-left:auto } header nav button { padding
 #timeline li > div:first-child > button { font-weight:600;text-align:left }
 #content form { display:flex;flex-wrap:wrap;gap:12px;align-items:center }
 #content form select, #content form input { font:inherit;padding:5px }
+
+#intent fieldset { margin:8px 0;min-width:0;overflow-wrap:anywhere;border:1px solid #bbcbbf }
+#intent details { margin-top:4px }
+#intent section { padding:0 }

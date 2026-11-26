@@ -439,9 +439,17 @@ fn submit(
             if let Some(id) = request {
                 decisions.push((id, get(&tx, "request", id)?));
             }
-            if let Some(mut pending) =
-                permission::gate(&tx, task, operation, scope, details, request, Some(flow))?
+            let pending = if let Some(reference) =
+                port.and_then(|name| args["_graph_sources"].get(name))
             {
+                let input = json!({"source":source,"revision":rev});
+                let binding = args["_graph_bindings"].get(source).unwrap_or(&input);
+                let route = crate::intent::graph_route(&tx, operation, reference, spool, binding)?;
+                permission::graph_gate(&tx, task, operation, scope, details, request, flow, route)?
+            } else {
+                permission::gate(&tx, task, operation, scope, details, request, Some(flow))?
+            };
+            if let Some(mut pending) = pending {
                 let id = string(&pending, "request_id")?.to_owned();
                 let row = get(&tx, "request", &id)?;
                 tx.execute_batch("ROLLBACK TO input_decisions")?;

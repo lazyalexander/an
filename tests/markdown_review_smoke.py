@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import threading
 import time
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURES = ROOT / "examples/markdown_review/fixtures"
@@ -21,6 +22,7 @@ class Backend(BaseHTTPRequestHandler):
             result = {"details":{"format":"gguf"},"model_info":{"general.architecture":"fixture"}}
         else:
             assert self.path == "/api/chat"
+            self.server.chat_count += 1
             edits = json.loads(body["messages"][-1]["content"])["edits"]
             result = {"done":True,"model":body["model"],"prompt_eval_count":10,"eval_count":4,
                       "message":{"content":json.dumps({"conflict":edits[0]["before"] == edits[1]["before"]})}}
@@ -34,7 +36,7 @@ class Backend(BaseHTTPRequestHandler):
         self.wfile.write(b'{"models":[]}')
 
 
-def exercise(directory, case, choice, browser=False):
+def exercise(directory, case, choice, browser=False, intent=False, deny_model=False):
     directory.mkdir(exist_ok=True)
     env = {**os.environ, "AN_HOME":str(directory)}
     def cli(*args, body=None):
@@ -48,29 +50,50 @@ def exercise(directory, case, choice, browser=False):
     env["AN_TURN"] = cli("permission","begin","--task",task)["turn"]
     def graph(action, **body):
         return cli("graph","--task",task,action,body=body)
+    if intent:
+        sys.path.insert(0,str(ROOT/"examples/markdown_review"))
+        from intent import routes
+        rows = routes(spool,task)
+        spec = directory/"intent.json"
+        spec.write_text(json.dumps(rows))
+        card = cli("permission","intent-propose","--task",task,"--file",spec)
+        decisions = ["deny" if deny_model and r["operation"]=="model" else "allow" for r in rows]
+        if not browser:
+            cli("permission","intent-decide","--task",task,"--request-id",card["id"],"--decision",json.dumps(decisions))
+    answered = {}
     graph("submit",base_revision=0,idempotency_key="start",nodes=[{
         "id":"start","kind":"expand","spool":spool,"argv":["python3","/spool/code/driver.py","markdown",spool],
         "outputs":["subgraph.json"]}])
     studio = chrome = None
     try:
         for _ in range(600):
+            if browser and studio is None:
+                studio = subprocess.Popen([sys.executable,"-m","orchestrator","--an",str(ROOT/"target/debug/an"),
+                                           "--task",task],cwd=ROOT/"studio",env=env,stdout=subprocess.PIPE,text=True)
+                url = studio.stdout.readline().strip().split("macro UI: ")[1]
+                chrome = subprocess.Popen(["node",ROOT/"tests/markdown_review_browser.cjs",choice,str(directory),"intent" if intent else "baseline"],
+                                          stdin=subprocess.PIPE,text=True,env=env)
+                chrome.stdin.write(url)
+                chrome.stdin.close()
             for r in graph("requests"):
-                cli("permission","decide","--task",task,"--request-id",r["id"],"--decision","once")
+                if intent:
+                    if browser and cli("permission","intent-show","--task",task)["status"]=="pending":
+                        continue
+                    if browser and not graph("requests"):
+                        continue
+                    raise AssertionError(r)
+                result = cli("permission","decide","--task",task,"--request-id",r["id"],"--decision","once")
+                answered[r["id"]] = {**r,"decision":result["decision"]}
             states = graph("state")["activity"]
+            if deny_model and states.get("analysis",{}).get("status")=="failed":
+                assert "Denied by turn intent" in states["analysis"]["error"]
+                assert not graph("state")["model_calls"]
+                return
             for node,state in states.items():
                 assert state["status"] not in ("failed","unknown"), (node,state)
             if states.get("resolve",{}).get("status") == "waiting":
                 assert choice
-                if browser and studio is None:
-                    import sys
-                    studio = subprocess.Popen([sys.executable,"-m","orchestrator","--an",str(ROOT/"target/debug/an"),
-                                               "--task",task],cwd=ROOT/"studio",env=env,stdout=subprocess.PIPE,text=True)
-                    url = studio.stdout.readline().strip().split("macro UI: ")[1]
-                    chrome = subprocess.Popen(["node",ROOT/"tests/markdown_review_browser.cjs",choice,str(directory)],
-                                              stdin=subprocess.PIPE,text=True,env=env)
-                    chrome.stdin.write(url)
-                    chrome.stdin.close()
-                elif not browser:
+                if not browser:
                     cli("decision","answer","--task",task,"--node","resolve","--request",states["resolve"]["id"],
                         "--json","-",body={"choice":choice})
             if states.get("delivery",{}).get("status") == "done":
@@ -101,12 +124,15 @@ def exercise(directory, case, choice, browser=False):
             assert chrome.wait(timeout=60)==0
         graph("finish")
         assert [r["kind"] for r in graph("view")["timeline"]] == ["delivery"]
-        print(case,choice,delivery,flush=True)
+        (directory/"requests.json").write_text(json.dumps(answered,indent=2))
+        print(case,choice,delivery,"individual approvals",len(answered),"business decisions",int(choice is not None),flush=True)
     finally:
         for process in (chrome,studio):
             if process and process.poll() is None:
                 process.terminate()
                 process.wait()
+        if not graph("view")["closed"]:
+            cli("permission","end","--task",task)
         for instance in cli("state","--task",task)["instances"]:
             if instance["status"] != "unloaded":
                 cli("unload","--task",task,"--instance",instance["id"])
@@ -116,6 +142,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--real",action="store_true")
     parser.add_argument("--browser",action="store_true")
+    parser.add_argument("--intent",action="store_true")
     args = parser.parse_args()
     directory = Path(tempfile.mkdtemp(prefix="markdown-review-"))
     print(directory,flush=True)
@@ -123,6 +150,7 @@ if __name__ == "__main__":
     try:
         if not args.real:
             server = ThreadingHTTPServer(("127.0.0.1",0),Backend)
+            server.chat_count = 0
             threading.Thread(target=server.serve_forever,daemon=True).start()
         for case,choice in [("compatible",None),("conflict","A"),("conflict","B")]:
             folder = directory/(choice or case)
@@ -137,7 +165,15 @@ if __name__ == "__main__":
                     (folder/"config.json").write_text(json.dumps({
                         k:v for k,v in settings.items() if k == "ollama_port" or k.startswith("model_")
                     }))
-            exercise(folder, case, choice, browser=args.browser and choice=="B")
+            exercise(folder, case, choice, browser=args.browser and choice=="B",intent=args.intent)
+        if args.intent and server:
+            folder = directory/"denied"
+            folder.mkdir()
+            (folder/"config.json").write_text(json.dumps({"ollama_port":server.server_port}))
+            before = server.chat_count
+            exercise(folder,"compatible",None,intent=True,deny_model=True)
+            assert before == server.chat_count
+            print("Denied inference: no backend send or reservation",flush=True)
     finally:
         if server:
             server.shutdown()

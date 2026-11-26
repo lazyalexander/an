@@ -84,6 +84,9 @@ def serve(task, binary, port, launch=False, config=None):
                                        for node, row in result[collection].items()}
                     result["permissions"] = graph("requests", {}) if result["authorized"] else []
                     result["deliveries"] = graph("deliveries", {})
+                elif action == "intent-decide":
+                    result = an(["permission","intent-decide","--task",task,"--request-id",body["id"],
+                                 "--decision",json.dumps(body["decisions"])], {})
                 elif action == "decide":
                     if body["decision"] not in ("deny", "once") or body["request"] not in {
                             item["id"] for item in graph("requests", {})}:
