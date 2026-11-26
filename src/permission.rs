@@ -181,7 +181,10 @@ fn gate_inner(
     let key = hash(canonical(&json!([revisions, task, op, scope])).as_bytes());
     let intent = match route {
         Some(actual) => crate::intent::authorize(db, task, &revisions, actual)?,
-        None => crate::intent::authorize(db, task, &revisions, &Value::Null)?,
+        None if !matches!(op, "log" | "preview" | "export") => {
+            crate::intent::authorize(db, task, &revisions, &Value::Null)?
+        }
+        None => crate::intent::Match::Standard,
     };
     let waiting = intent == crate::intent::Match::Pending;
     let individual = intent == crate::intent::Match::Ask;

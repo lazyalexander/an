@@ -23,6 +23,9 @@ wake is reported, not retried; the person's next action wakes the agent again.
 
 import json
 import os
+import select
+import sqlite3
+from contextlib import ExitStack, closing
 import shutil
 import subprocess
 import threading
@@ -38,7 +41,7 @@ def state_root() -> Path:
 
 
 class Runner:
-    def __init__(self, binary, settings, turns, mcp, root=None):
+    def __init__(self, binary, settings, turns, mcp, root=None, retire=None):
         # The agent starts in its own directory: hand it an absolute binary path.
         found = shutil.which(binary)
         self.binary = str(Path(found).resolve()) if found else binary
@@ -54,10 +57,11 @@ class Runner:
         self.guard = threading.Lock()
         self.stop_event = threading.Event()
         self.thread = None
+        self.retire = retire
 
     # -- lifecycle -------------------------------------------------------
     def start(self):
-        if self.command is None:
+        if self.command is None and self.retire is None:
             return
         self.thread = threading.Thread(target=self.loop, daemon=True)
         self.thread.start()
@@ -79,13 +83,47 @@ class Runner:
 
     # -- polling ---------------------------------------------------------
     def loop(self):
+        path = self.root.parent / "registry.sqlite3"
         while not self.stop_event.is_set():
-            for task in list(self.turns):
-                try:
-                    self.poll(task)
-                except Exception as exc:  # noqa: BLE001 — one task never stops the loop
-                    self.set_status(task, "failed", str(exc))
-            self.stop_event.wait(self.poll_s)
+            try:
+                with ExitStack() as stack:
+                    db = stack.enter_context(closing(sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)))
+                    queue = None
+                    if hasattr(select, "kqueue"):
+                        file = stack.enter_context(path.open("rb"))
+                        queue = stack.enter_context(closing(select.kqueue()))
+                        event = select.kevent(file.fileno(), filter=select.KQ_FILTER_VNODE,
+                                              flags=select.KQ_EV_ADD | select.KQ_EV_CLEAR,
+                                              fflags=select.KQ_NOTE_WRITE)
+                        queue.control([event], 0, 0)
+                    while not self.stop_event.is_set():
+                        for task, turn in list(self.turns.items()):
+                            row = db.execute("""
+                                SELECT json_extract(t.body,'$.closed'), u.body,
+                                       coalesce(json_array_length(g.body,'$.events'),0)
+                                FROM objects t
+                                LEFT JOIN objects u ON u.kind='turn' AND u.id=t.id
+                                LEFT JOIN objects g ON g.kind='graph' AND g.id=t.id
+                                WHERE t.kind='task' AND t.id=?
+                            """, (task,)).fetchone()
+                            if row is None:
+                                continue
+                            if row[0] or (turn and (row[1] is None or json.loads(row[1]) != turn)):
+                                if self.retire:
+                                    self.retire(task)
+                                continue
+                            cursor = self.root / task / "cursor"
+                            if self.command and row[2] > (int(cursor.read_text()) if cursor.exists() else 0):
+                                try:
+                                    self.poll(task)
+                                except (OSError, ValueError) as exc:
+                                    self.set_status(task, "failed", str(exc))
+                        if queue:
+                            queue.control(None, 1, min(1, self.poll_s))
+                        else:
+                            self.stop_event.wait(self.poll_s)
+            except (OSError, sqlite3.Error):
+                self.stop_event.wait(self.poll_s)
 
     def an(self, task, action, body):
         env = dict(os.environ)

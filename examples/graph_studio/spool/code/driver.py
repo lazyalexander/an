@@ -8,27 +8,14 @@ def ref(node, port):
     return {"node": node, "port": port}
 
 
-def run(node, spool, program, outputs, **inputs):
-    return {"id": node, "kind": "run", "spool": spool, "argv": ["python3", "-c", program],
+def run(node, spool, operation, outputs, **inputs):
+    return {"id": node, "kind": "run", "spool": spool,
+            "argv": ["python3", "/spool/code/asset.py", operation],
             "outputs": outputs, "inputs": inputs}
 
 
-def generate(node, spool, files):
-    prelude = "from pathlib import Path\n"
-    program = prelude + "\n".join(f"Path('/output', {name!r}).write_text({data!r})"
-                                  for name, data in files.items())
-    return run(node, spool, program, list(files))
-
-
 def bridge(spool):
-    nodes = []
-    for name, color, x in [("A", "#75988b", 40), ("B", "#b78050", 130)]:
-        program = ("from pathlib import Path\nfrom xml.etree import ElementTree as ET\n"
-                   "svg=ET.Element('svg',xmlns='http://www.w3.org/2000/svg',viewBox='0 0 220 110')\n"
-                   f"ET.SubElement(svg,'rect',width='220',height='110',fill={color!r})\n"
-                   f"ET.SubElement(svg,'circle',cx='{x}',cy='49',r='31',fill='#f2dbac')\n"
-                   "Path('/output/candidate.svg').write_bytes(ET.tostring(svg))")
-        nodes.append(run(name, spool, program, ["candidate.svg"]))
+    nodes = [run(name, spool, name, ["candidate.svg"]) for name in ("A", "B")]
     nodes.append({"id": "compare", "title": "比较候选图", "kind": "surface", "spool": spool, "panel": "compare",
                   "save": ref("apply", "painting.ora"), "inputs": {k: ref(k, "candidate.svg") for k in ("A", "B")},
                   "outputs": ["response", "document"]})
@@ -55,7 +42,7 @@ def bridge_result(spool, response, attach=False):
 
 def revise(spool):
     source = {"input":"original"}
-    return [run("preview", spool, "from shutil import copyfile; copyfile('/input/source/selected/selected.svg','/output/selected.svg')",
+    return [run("preview", spool, "preview",
                 ["selected.svg"], source=source),
             {"id":"edit","kind":"surface","spool":spool,"panel":"edit",
              "inputs":{"preview":ref("preview","selected.svg")},
@@ -93,8 +80,7 @@ def cad(spool):
     return [
             {"id": "timing", "kind": "surface", "spool": spool, "panel": "timing",
              "inputs": {}, "outputs": ["response"]},
-            generate("plate", spool, {"plate.json": json.dumps(
-                {"width": 76, "depth": 45, "height": 12, "chamfer": 8})}),
+            run("plate", spool, "plate", ["plate.json"]),
             {"id": "animate", "kind": "run", "spool": spool, "argv": ["python3", "/spool/code/turntable.py"],
              "inputs": {"source": ref("plate", "plate.json"), "choice": ref("timing", "response")},
              "outputs": ["plate.stl", "turntable.svg"]},
@@ -128,12 +114,7 @@ if __name__ == "__main__":
         choice = json.loads(Path("/input/choice/response.json").read_text())
         nodes = bridge_result(spool, choice, attach=answer=="ATTACH")[1:]
         if answer == "ATTACH":
-            write_note = """import json
-from pathlib import Path
-choice = json.loads(Path("/input/choice/response.json").read_text())
-Path("/output/annotation.txt").write_text(choice["note"])
-"""
-            nodes.insert(0, run("annotation-note", spool, write_note, ["annotation.txt"],
+            nodes.insert(0, run("annotation-note", spool, "note", ["annotation.txt"],
                                 choice=ref("compare", "response")))
     else:
         if stage == "sketch":
@@ -145,5 +126,5 @@ Path("/output/annotation.txt").write_text(choice["note"])
             nodes[-1]["argv"][2] = "model-select"
     if stage in ("bridge","bridge-model") and options == ["--verify-overlap"]:
         for candidate in nodes[:2]:
-            candidate["argv"][-1] = "import time; time.sleep(5)\n" + candidate["argv"][-1]
+            candidate["argv"].append("--verify-overlap")
     Path("/output/subgraph.json").write_text(json.dumps({"nodes": nodes}))

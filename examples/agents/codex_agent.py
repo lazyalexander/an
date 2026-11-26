@@ -16,10 +16,12 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "markdown_review"))
 from codex_session import Session
 
-TOOLS = {"an_skill", "an_graph_state", "an_graph_submit", "an_graph_say"}
+TOOLS = {"an_state", "an_scope_propose", "an_skill", "an_graph_state", "an_graph_submit", "an_graph_say"}
 
 BRIEF = """You are the agent for one An task. You act only through the An MCP tools.
-Read the task with an_graph_state. Answer the person with an_graph_say: say what
+Read admitted capabilities with an_state and an_skill. For a new turn, propose the
+minimal flows needed for the instruction with an_scope_propose, then submit the graph.
+Studio collects the human decision. Read progress with an_graph_state. Answer the person with an_graph_say: say what
 you understood and what you will do, ask when the request is ambiguous, and report
 results. Use reply_to with the instruction's event cursor. Do not claim work you
 have not submitted. Ask for decisions with surfaces, not with messages."""

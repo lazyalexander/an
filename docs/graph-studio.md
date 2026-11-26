@@ -182,3 +182,5 @@ or refused delivery with headless Chrome and playwright-core. Set
 `PLAYWRIGHT_CORE` if the module lives outside Node's search path.
 Pause blocks new direct loads and runs, including implicit instance selection,
 while allowing running work to settle. Stop also cancels active direct runs.
+
+Controller task records contain live turn credentials in plaintext under a private same-user directory. Processes with access as that user can read them. Closing the task or ending its turn removes the active record. A credential-free marker permits access to the published task view. On macOS the runner watches registry writes and reconciles durable event cursors; idle tasks do not launch status subprocesses.

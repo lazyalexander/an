@@ -108,10 +108,6 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
             &Value::Null
         } else {
             ensure!(
-                !scoped,
-                "Turn scope requires a named input or producer_port"
-            );
-            ensure!(
                 fields.len() == 2
                     && ["node", "port"]
                         .iter()
@@ -136,15 +132,12 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
                     dest == task_info["workspace"].as_str().unwrap_or(task)
                         || (dest == "graph-metadata"
                             && image(origin)
-                            && source["port"] == "subgraph.json"),
+                            && (source["port"] == "subgraph.json"
+                                || source["producer_port"] == "subgraph.json")),
                 _ => false,
             },
             "Destination or operation outside task"
         );
-        if scoped {
-            ensure!(matches!(op, "input" | "handoff" | "preview" | "publish") && dest != "graph-metadata",
-                "Turn scope supports task inputs, spool handoffs, Studio previews and workspace delivery");
-        }
         if let Some(flows) = permitted {
             let flow_origin = if op == "input" {
                 source["input"].as_str().unwrap_or(origin)
@@ -269,6 +262,9 @@ pub fn authorize(db: &Connection, task: &str, stamp: &Value, actual: &Value) -> 
     let Some(card) = find(db, "intent", task)?.filter(|c| c["stamp"] == *stamp) else {
         return Ok(Match::Standard);
     };
+    if actual["operation"] == "model" && card["model"] != get(db, "task", task)?["model_grant"] {
+        return Ok(Match::Ask);
+    }
     let Some(index) = route_index(&card, actual) else {
         return Ok(if card["turn_scope"] == true {
             Match::Ask
@@ -327,6 +323,34 @@ pub fn public(mut card: Value) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn one_decision_covers_expansion_and_replanned_model_inputs() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE objects(kind,id,body,PRIMARY KEY(kind,id))")
+            .unwrap();
+        let mut task = json!({"work":{"driver":"work"},"model_grant":{"model":"local","alias":"paint","budget":2}});
+        put(&db, "task", "t", &task).unwrap();
+        put(&db, "turn", "t", &json!("active")).unwrap();
+        // Seed the reviewed card so this test does not mutate process-global AN_TURN.
+        let stamp = json!(["turn", "workspace", "host"]);
+        let routes = [
+            ("publish", "subgraph.json", "graph-metadata"),
+            ("model", "drawing", "model:paint"),
+        ];
+        let rules:Vec<_> = routes.iter().map(|(op,port,dest)| json!({"operation":op,"origin":"driver","destination":dest,"source":{"producer_port":port},"producer_argv":["render"]})).collect();
+        put(&db,"intent","t",&json!({"id":"review","stamp":stamp,"model":task["model_grant"],"turn_scope":true,"routes":rules,"status":"decided","decisions":["allow","allow"]})).unwrap();
+        let check = |index: usize, node: &str| {
+            let (op, port, dest) = routes[index];
+            authorize(&db,"t",&stamp,&json!({"operation":op,"origin":"driver","destination":dest,"source":{"node":node,"port":port},"producer_argv":["render"],"revision":node})).unwrap()
+        };
+        for (index, node) in [(0, "expand"), (1, "first"), (1, "replanned")] {
+            assert_eq!(check(index, node), Match::Allow(json!("review")));
+        }
+        task["model_grant"]["model"] = json!({"backend":"openai"});
+        put(&db, "task", "t", &task).unwrap();
+        assert_eq!(check(1, "external"), Match::Ask);
+    }
+
     #[test]
     fn turn_scope_follows_the_command_and_port_across_nodes_and_versions() {
         let db = Connection::open_in_memory().unwrap();
