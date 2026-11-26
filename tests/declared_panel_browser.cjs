@@ -13,7 +13,10 @@ function gate() {
   try {
     const page = await browser.newPage();
     const viewed = gate(), firstWrite = gate();
-    let draft, requests = 0, response;
+    let draft, requests = 0, response, evidenceDecision;
+    const card = {id:"card",status:"pending",routes:[{operation:"preview",source:{input:"source"},origin:"task-input:source",destination:"studio"}]};
+    const covered = {id:"covered",intent:card.id,operation:"preview",scope:["source"],details:[]};
+    const evidence = {id:"evidence",operation:"preview",scope:["evidence"],details:[]};
     const pkg = {files:{source:{
       "notes.unknown":Buffer.from("<em>literal preview</em>").toString("base64"),
       "binary.md":Buffer.from([0xff,0x00]).toString("base64")
@@ -24,7 +27,8 @@ function gate() {
       let json = {};
       switch(name) {
         case "config.json": json={settings:{poll_ms:60000,panel_timeout_ms:5000},strings:{}};break;
-        case "view": json={task:"task",nodes:{ask:{}},activity:{ask:{id:"current",status:"waiting"}},permissions:[],authorized:true};break;
+        case "view": json={task:"task",nodes:{ask:{}},activity:{ask:{id:"current",status:"waiting"}},intent:card,permissions:evidenceDecision ? [covered] : [covered,evidence],authorized:true};break;
+        case "decide": evidenceDecision=route.request().postDataJSON();break;
         case "panel": requests++;json={...pkg,draft};break;
         case "viewed": await viewed.wait;break;
         case "draft": await firstWrite.wait;draft=route.request().postDataJSON().value;break;
@@ -56,5 +60,11 @@ function gate() {
     assert.equal(await field.inputValue(),"reverse");
     await submit.click();
     assert.deepEqual(response,{append:"reverse"});
+    const individual = page.locator("#permissions article");
+    assert.equal(await individual.count(),1);
+    await individual.getByRole("button",{name:"permission.allow_once"}).click();
+    await individual.waitFor({state:"detached"});
+    assert.deepEqual(evidenceDecision,{request:"evidence",decision:"once"});
+    assert(await page.locator("#intent button").isVisible());
   } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1;});

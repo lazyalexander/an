@@ -159,8 +159,13 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
                 *node = json!({"id":node["id"],"kind":node["kind"]});
             }
         }
+        let intent = if authorized {
+            crate::intent::public(crate::intent::show(&tx, task)?)
+        } else {
+            Value::Null
+        };
         return Ok(
-            json!({"task":task,"revision":graph["revision"],"nodes":graph["nodes"],"activity":graph["activity"],"closed":t["closed"]==true,"authorized":authorized,"timeline":timeline(&graph, authority.as_deref()),"control":graph.get("control").cloned().unwrap_or(json!("running"))}),
+            json!({"intent":intent,"task":task,"revision":graph["revision"],"nodes":graph["nodes"],"activity":graph["activity"],"closed":t["closed"]==true,"authorized":authorized,"timeline":timeline(&graph, authority.as_deref()),"control":graph.get("control").cloned().unwrap_or(json!("running"))}),
         );
     }
     if action == "deliveries" {
@@ -176,6 +181,7 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
     }
     if action == "requests" {
         let mut pending = vec![];
+        let card = crate::intent::show(&tx, task)?;
         let stamp = permission::stamp(&tx, task)?;
         for state in graph["activity"]
             .as_object()
@@ -191,7 +197,16 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
             {
                 let r = get(&tx, "request", key.as_str().context("Invalid request ID")?)?;
                 if r["state"] == "pending" && r["revisions"] == stamp {
-                    pending.push(json!({"id":key,"scope":r["scope"],"details":r["details"],"operation":r["operation"]}));
+                    let mut entry = json!({"id":key,"scope":r["scope"],"details":r["details"],"operation":r["operation"]});
+                    if let Some(version) = r["route"].get("revision") {
+                        entry["revision"] = version.clone();
+                    }
+                    if card["status"] == "pending"
+                        && crate::intent::route_index(&card, &r["route"]).is_some()
+                    {
+                        entry["intent"] = card["id"].clone();
+                    }
+                    pending.push(entry);
                 }
             }
         }

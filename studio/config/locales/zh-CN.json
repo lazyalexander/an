@@ -1,5 +1,6 @@
 {
   "graph": {
+    "intent": {"metadata":"任务图元数据","workspace":"当前交付位置","title":"本轮数据授权","input":"读取输入","handoff":"传递产物","preview":"在界面预览","publish":"发布","model":"本地模型调用","allow":"本轮允许","ask":"逐项询问","deny":"本轮拒绝","scope":"查看完整范围","submit":"确认本轮授权"},
     "title": "An · 任务工作区",
     "brand": "An Studio",
     "heading": "任务工作区",

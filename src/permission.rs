@@ -33,6 +33,9 @@ enum Action {
     Decide,
     Policy,
     Effect,
+    IntentPropose,
+    IntentShow,
+    IntentDecide,
 }
 pub fn current(db: &Connection, task: &str) -> Result<String> {
     let turn = env::var("AN_TURN").unwrap_or_default();
@@ -115,6 +118,43 @@ pub fn gate_flows(
     request: Option<&str>,
     required: &[Value],
 ) -> Result<Option<Value>> {
+    gate_inner(db, task, op, scope, details, request, required, None)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn graph_gate(
+    db: &Connection,
+    task: &str,
+    op: &str,
+    scope: Value,
+    details: Value,
+    request: Option<&str>,
+    flow: Value,
+    route: Value,
+) -> Result<Option<Value>> {
+    gate_inner(
+        db,
+        task,
+        op,
+        scope,
+        details,
+        request,
+        std::slice::from_ref(&flow),
+        Some(&route),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn gate_inner(
+    db: &Connection,
+    task: &str,
+    op: &str,
+    scope: Value,
+    details: Value,
+    request: Option<&str>,
+    required: &[Value],
+    route: Option<&Value>,
+) -> Result<Option<Value>> {
     let (turn, flows, host) = context(db, task)?;
     let revisions = json!([turn, flows["revision"], host["revision"]]);
     if let Some(rules) = flows["flows"].as_array() {
@@ -139,26 +179,47 @@ pub fn gate_flows(
         "Host policy: {decision}"
     );
     let key = hash(canonical(&json!([revisions, task, op, scope])).as_bytes());
+    let intent = match route {
+        Some(actual) => crate::intent::authorize(db, task, &revisions, actual)?,
+        None => crate::intent::Match::Standard,
+    };
+    let waiting = intent == crate::intent::Match::Pending;
+    let individual = intent == crate::intent::Match::Ask;
+    let approved = matches!(intent, crate::intent::Match::Allow(_));
     if let Some(id) = request {
         let mut r = get(db, "request", id)?;
         ensure!(
             r["scope_key"] == key && canonical(&r["details"]) == canonical(&details),
             "Request changed"
         );
-        if r["state"] == "pending" {
+        if (r["state"] == "pending" && !approved)
+            || (waiting && matches!(r["state"].as_str(), Some("once" | "turn")))
+        {
             return Ok(Some(
                 json!({"status":"permission_required","request_id":id}),
             ));
         }
         ensure!(
-            matches!(r["state"].as_str(), Some("once" | "turn")),
+            matches!(r["state"].as_str(), Some("once" | "turn"))
+                || (matches!(r["state"].as_str(), Some("pending" | "intent_approved")) && approved),
             "Request denied or already used"
         );
         r["state"] = json!("used");
         put(db, "request", id, &r)?;
+        if !approved {
+            return Ok(None);
+        }
+    }
+    if let crate::intent::Match::Allow(id) = intent {
+        put(
+            db,
+            "effect",
+            &uid(),
+            &json!({"task":task,"operation":op,"scope":scope,"details":details,"revisions":revisions,"authority":"intent","intent":id,"route":route}),
+        )?;
         return Ok(None);
     }
-    if decision == "allow" {
+    if !waiting && !individual && decision == "allow" {
         put(
             db,
             "effect",
@@ -167,7 +228,7 @@ pub fn gate_flows(
         )?;
         return Ok(None);
     }
-    if find(db, "grant", &key)?.is_some() {
+    if !waiting && !individual && find(db, "grant", &key)?.is_some() {
         return Ok(None);
     }
     let id = uid();
@@ -175,7 +236,7 @@ pub fn gate_flows(
         db,
         "request",
         &id,
-        &json!({"id":id,"task":task,"turn":turn,"operation":op,"revisions":revisions,"scope":scope,"scope_key":key,"details":details,"state":"pending"}),
+        &json!({"id":id,"task":task,"turn":turn,"operation":op,"revisions":revisions,"scope":scope,"scope_key":key,"details":details,"state":"pending","route":route}),
     )?;
     Ok(Some(
         json!({"status":"permission_required","request_id":id}),
@@ -198,7 +259,10 @@ pub fn execute() -> Result<Value> {
                 .ok_or_else(|| anyhow!("Expected policy file"))?,
         )?)?)
     };
-    let wake_graph = matches!(action, Action::Decide | Action::Policy | Action::Effect);
+    let wake_graph = matches!(
+        action,
+        Action::Decide | Action::Policy | Action::Effect | Action::IntentDecide
+    );
     let result = if matches!(action, Action::Begin) {
         ensure!(get(&tx, "task", &task)?["closed"] != true, "Task is closed");
         let turn = uid();
@@ -211,6 +275,27 @@ pub fn execute() -> Result<Value> {
         let turn = current(&tx, &task)?;
         match action {
             Action::Begin => unreachable!(),
+            Action::IntentShow => crate::intent::public(crate::intent::show(&tx, &task)?),
+            Action::IntentPropose => {
+                crate::intent::public(crate::intent::propose(&tx, &task, read_policy()?)?)
+            }
+            Action::IntentDecide => {
+                let id = request_id.context("Expected intent ID")?;
+                let decisions = if let Some(value) = decision {
+                    let count = crate::intent::show(&tx, &task)?["routes"]
+                        .as_array()
+                        .context("Stale intent")?
+                        .len();
+                    if matches!(value.as_str(), "allow" | "deny") {
+                        json!(vec![value; count])
+                    } else {
+                        serde_json::from_str(&value)?
+                    }
+                } else {
+                    read_policy()?
+                };
+                crate::intent::public(crate::intent::decide(&tx, &task, &id, decisions)?)
+            }
             Action::End => {
                 put(&tx, "turn", &task, &Value::Null)?;
                 json!({"closed":true})

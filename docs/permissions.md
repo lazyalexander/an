@@ -23,3 +23,19 @@ The dev artifact bridge adds scoped bridge-to-spool and spool-to-bridge flows, a
 ### Local model decisions
 
 Only the trusted host can create a task with `--model ALIAS` and a call quota. A workspace flow for inference has the form `["model", inputOrigin, "model:ALIAS"]`. The turn decision identifies the model, input revision and node attempt. A denied request makes no inference call and consumes no slot. Result handoff to a spool requires a second boundary decision. Model input and output evidence reads require preview authorization for their respective origins. See [Host model calls](graph-studio.md#host-model-calls) for the recovery contract.
+
+## Turn intent for task graphs
+
+The trusted controller can declare a set of directional routes before submitting a graph. Start a turn, then use the following commands with that turn's controller environment:
+
+```sh
+an permission intent-propose --task TASK --file routes.json
+an permission intent-show --task TASK
+an permission intent-decide --task TASK --request-id CARD_ID --decision allow
+```
+
+The decision can also be `deny` or an ordered JSON array such as `["allow","ask","deny"]`. Each entry corresponds to one displayed route. Studio presents the same choices in a single form. The proposal and decision commands are available only to the controller. A decision cannot be changed or applied to another card ID.
+
+Each route requires four fields: `operation`, `source`, `origin`, and `destination`. Use a graph input reference (`{"input":"minutes.json"}`) or a producer output (`{"node":"organize","port":"summary.json"}`). Task inputs have origin `task-input:<name>`; An fills in their immutable version. For a future output supply the producer origin (registered image digest, model alias origin, or `response`). To preapprove a read-only spool output, also declare `producer_argv` with the complete command and arguments. An compares it with the recorded invocation that produced the bound file. A missing or different command, an editable producer, or a change from the first authorized revision requires an individual decision for the actual revision. Destinations are task spool references, `model:<alias>`, `studio`, the task's delivery destination or `graph-metadata`. Proposal publication is a distinct route from publishing a delivery. See the trusted declarations in the Markdown and minutes examples.
+
+The existing workspace and host policy checks run first. A matching intent approval can satisfy an interactive check inside the graph scheduler, including a dynamically proposed child. Unlisted flows follow normal permission handling. An explicit `ask` requires individual confirmation even when a host allowance or turn grant exists. A matching denial fails the flow. Studio keeps unrelated requests, including evidence reads, available while the card is pending. Confirming the card settles covered approvals and denials even when a multi-input node still needs another decision. Model quota checks remain in effect. Replacing a turn or either policy revision invalidates the card. Intent matches record the card ID, route, actual revision and operation details in the effect ledger. The declared output origin identifies the trusted producer; permission matching does not inspect document semantics.

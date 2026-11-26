@@ -1,0 +1,368 @@
+//! Controller-owned, turn-scoped graph flow authorizations.
+use crate::{permission, store::*};
+use anyhow::{ensure, Context, Result};
+use rusqlite::Connection;
+use serde_json::{json, Value};
+use std::collections::HashSet;
+
+fn route(op: &str, origin: &str, source: &Value, destination: &str, revision: &Value) -> Value {
+    let mut row = json!({"operation":op,"origin":origin,"source":source,"destination":destination});
+    if !revision.is_null() {
+        row["revision"] = revision.clone();
+    }
+    row
+}
+
+/// Only the host's run record can attest to the command that produced a binding.
+pub fn graph_route(
+    db: &Connection,
+    op: &str,
+    source: &Value,
+    destination: &str,
+    binding: &Value,
+) -> Result<Value> {
+    let origin = crate::graph::binding_origin(binding);
+    let mut actual = route(op, &origin, source, destination, &binding["revision"]);
+    if let Some(id) = binding["run"].as_str() {
+        let run = get(db, "run", id)?;
+        if run["editable"] == false && run["spool"] == origin {
+            actual["producer_argv"] = run["argv"].clone();
+        }
+    }
+    Ok(actual)
+}
+
+pub fn show(db: &Connection, task: &str) -> Result<Value> {
+    let stamp = permission::stamp(db, task)?;
+    Ok(find(db, "intent", task)?
+        .filter(|c| c["stamp"] == stamp)
+        .unwrap_or(Value::Null))
+}
+
+pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
+    let existing = show(db, task)?;
+    ensure!(
+        existing.is_null(),
+        "An intent already exists for this turn and policy"
+    );
+    let task_info = get(db, "task", task)?;
+    let model = task_info["model_grant"]["alias"]
+        .as_str()
+        .map(|s| format!("model:{s}"));
+    let image = |s: &str| task_info["work"].get(s).is_some();
+    let workspace = task_info["workspace"]
+        .as_str()
+        .map(|id| get(db, "workspace", id))
+        .transpose()?;
+    let permitted = workspace
+        .as_ref()
+        .and_then(|w| w["policy"]["flows"].as_array());
+    let rows = spec.as_array().context("Expected intent route list")?;
+    ensure!(
+        !rows.is_empty() && rows.len() <= 128,
+        "Expected 1 to 128 routes"
+    );
+    let mut routes = Vec::new();
+    let mut seen = HashSet::new();
+    for row in rows {
+        ensure!(
+            row.as_object().is_some_and(|m| m.keys().all(|k| matches!(
+                k.as_str(),
+                "operation" | "origin" | "source" | "destination" | "producer_argv"
+            ))),
+            "Unknown intent route field"
+        );
+        let op = row["operation"].as_str().context("Missing operation")?;
+        let origin = row["origin"].as_str().context("Missing origin")?;
+        let dest = row["destination"].as_str().context("Missing destination")?;
+        let source = &row["source"];
+        let fields = source.as_object().context("Expected a graph source")?;
+        let version = if let Some(name) = source["input"].as_str() {
+            ensure!(
+                fields.len() == 1 && origin == format!("task-input:{name}"),
+                "Wrong input origin"
+            );
+            task_info["inputs"]
+                .get(name)
+                .context("Input outside task")?
+        } else {
+            ensure!(
+                fields.len() == 2
+                    && ["node", "port"]
+                        .iter()
+                        .all(|k| source[k].as_str().is_some_and(|s| !s.is_empty())),
+                "Expected node and output port"
+            );
+            ensure!(
+                image(origin)
+                    || Some(origin) == model.as_deref()
+                    || (origin == "response" && source["port"] == "response"),
+                "Origin outside task"
+            );
+            &Value::Null
+        };
+        ensure!(
+            match op {
+                "input" => image(dest) && (source["input"].is_string() || origin == "response"),
+                "handoff" => image(dest) && (image(origin) || Some(origin) == model.as_deref()),
+                "preview" => dest == "studio",
+                "model" => Some(dest) == model.as_deref(),
+                "publish" =>
+                    dest == task_info["workspace"].as_str().unwrap_or(task)
+                        || (dest == "graph-metadata"
+                            && image(origin)
+                            && source["port"] == "subgraph.json"),
+                _ => false,
+            },
+            "Destination or operation outside task"
+        );
+        if let Some(flows) = permitted {
+            let flow_origin = if op == "input" {
+                source["input"].as_str().unwrap_or(origin)
+            } else {
+                origin
+            };
+            ensure!(
+                flows.contains(&json!([op, flow_origin, dest])),
+                "Intent outside workspace flow policy"
+            );
+        }
+        let mut r = route(op, origin, source, dest, version);
+        ensure!(seen.insert(canonical(&r)), "Duplicate intent route");
+        if let Some(argv) = row.get("producer_argv") {
+            ensure!(
+                source["node"].is_string()
+                    && image(origin)
+                    && argv.as_array().is_some_and(|a| a
+                        .first()
+                        .and_then(Value::as_str)
+                        .is_some_and(|s| !s.is_empty())
+                        && a.iter().all(Value::is_string)),
+                "Expected an image output and a nonempty producer command"
+            );
+            r["producer_argv"] = argv.clone();
+        }
+        routes.push(r);
+    }
+    let card = json!({"id":uid(),"task":task,"stamp":permission::stamp(db,task)?,"model":task_info["model_grant"],"routes":routes,"status":"pending"});
+    put(db, "intent", task, &card)?;
+    Ok(card)
+}
+
+pub fn decide(db: &Connection, task: &str, id: &str, decisions: Value) -> Result<Value> {
+    let mut card = show(db, task)?;
+    ensure!(card["id"] == id, "Stale intent");
+    let values = decisions.as_array().context("Expected decisions list")?;
+    ensure!(
+        Some(values.len()) == card["routes"].as_array().map(Vec::len)
+            && values
+                .iter()
+                .all(|v| matches!(v.as_str(), Some("allow" | "deny" | "ask"))),
+        "Expected one allow, deny or ask per route"
+    );
+    if card["status"] == "decided" {
+        ensure!(card["decisions"] == decisions, "Intent already decided");
+        return Ok(card);
+    }
+    card["decisions"] = decisions;
+    card["status"] = json!("decided");
+    put(db, "intent", task, &card)?;
+    let mut query=db.prepare("SELECT body FROM objects WHERE kind='request' AND json_extract(body,'$.task')=? AND json_extract(body,'$.state')='pending' ORDER BY rowid")?;
+    let pending = query
+        .query_map([task], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for body in pending {
+        let mut request: Value = serde_json::from_str(&body)?;
+        if request["revisions"] != card["stamp"] {
+            continue;
+        }
+        let Some(index) = route_index(&card, &request["route"]) else {
+            continue;
+        };
+        let state = match card["decisions"][index].as_str() {
+            Some("deny") => "deny",
+            Some("allow")
+                if matches!(
+                    approved_output(db, &card, index, &request["route"])?,
+                    Match::Allow(_)
+                ) =>
+            {
+                "intent_approved"
+            }
+            _ => continue,
+        };
+        request["state"] = json!(state);
+        put(
+            db,
+            "request",
+            request["id"].as_str().context("Invalid request ID")?,
+            &request,
+        )?;
+    }
+    put(db, "intent_history", id, &card)?;
+    Ok(card)
+}
+
+pub fn route_index(card: &Value, actual: &Value) -> Option<usize> {
+    let source = &actual["source"];
+    // Resolve references by the same fields as the graph scheduler, including
+    // for graphs and permission requests persisted by older releases.
+    let source = if let Some(input) = source["input"].as_str() {
+        json!({"input":input})
+    } else {
+        json!({"node":source["node"].as_str()?,"port":source["port"].as_str()?})
+    };
+    card["routes"].as_array()?.iter().position(|r| {
+        r["source"] == source
+            && ["operation", "origin", "destination"]
+                .iter()
+                .all(|k| r[k] == actual[k])
+            && (!source["input"].is_string() || actual["revision"] == r["revision"])
+    })
+}
+
+#[derive(Debug, PartialEq)]
+pub enum Match {
+    Standard,
+    Pending,
+    Ask,
+    Allow(Value),
+}
+
+/// Match the current card before consulting discretionary grants.
+pub fn authorize(db: &Connection, task: &str, stamp: &Value, actual: &Value) -> Result<Match> {
+    let Some(card) = find(db, "intent", task)?.filter(|c| c["stamp"] == *stamp) else {
+        return Ok(Match::Standard);
+    };
+    let Some(index) = route_index(&card, actual) else {
+        return Ok(Match::Standard);
+    };
+    if card["status"] == "pending" {
+        return Ok(Match::Pending);
+    }
+    match card["decisions"][index].as_str() {
+        Some("deny") => anyhow::bail!("Denied by turn intent"),
+        Some("allow") => approved_output(db, &card, index, actual),
+        Some("ask") => Ok(Match::Ask),
+        _ => anyhow::bail!("Invalid intent decision"),
+    }
+}
+
+fn approved_output(db: &Connection, card: &Value, index: usize, actual: &Value) -> Result<Match> {
+    let rule = &card["routes"][index];
+    let origin = rule["origin"].as_str().context("Missing producer origin")?;
+    if rule["source"]["node"].is_string()
+        && origin != "response"
+        && card["model"]["alias"]
+            .as_str()
+            .is_none_or(|alias| origin != format!("model:{alias}"))
+        && (!rule["producer_argv"].is_array() || rule["producer_argv"] != actual["producer_argv"])
+    {
+        return Ok(Match::Ask);
+    }
+    let revision = actual["revision"]
+        .as_str()
+        .context("Missing graph artifact version")?;
+    let key = format!(
+        "{}:{index}",
+        card["id"].as_str().context("Invalid intent ID")?
+    );
+    match find(db, "intent_version", &key)? {
+        Some(bound) if bound != revision => return Ok(Match::Ask),
+        None => put(db, "intent_version", &key, &json!(revision))?,
+        _ => (),
+    }
+    Ok(Match::Allow(card["id"].clone()))
+}
+
+pub fn public(mut card: Value) -> Value {
+    if let Some(row) = card.as_object_mut() {
+        row.remove("stamp");
+    }
+    card
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn future_output_is_pinned_and_matches_only_its_declared_route() {
+        let db = Connection::open_in_memory().unwrap();
+        db.execute_batch("CREATE TABLE objects(kind,id,body,PRIMARY KEY(kind,id))")
+            .unwrap();
+        let source = json!({"node":"organize","port":"summary"});
+        let make = |origin: &str, source: &Value, dest: &str, rev: Value| {
+            let mut r = route("handoff", origin, source, dest, &rev);
+            r["producer_argv"] = json!(["organize", "--public"]);
+            r
+        };
+        let scope = make("organizer", &source, "formatter", Value::Null);
+        let card = json!({"task":"t","id":"c","status":"decided","decisions":["allow"],"stamp":["turn","workspace","host"],"routes":[scope]});
+        put(&db, "intent", "t", &card).unwrap();
+        let check = |actual: Value| authorize(&db, "t", &card["stamp"], &actual).unwrap();
+        let observed = |id: &str, argv: Value, editable: bool| {
+            put(
+                &db,
+                "run",
+                id,
+                &json!({"argv":argv,"spool":"organizer","editable":editable}),
+            )
+            .unwrap();
+            graph_route(
+                &db,
+                "handoff",
+                &source,
+                "formatter",
+                &json!({"revision":"first","spool":"organizer","run":id}),
+            )
+            .unwrap()
+        };
+        assert_eq!(
+            check(observed("different", json!(["other"]), false)),
+            Match::Ask
+        );
+        assert_eq!(
+            check(observed("editable", scope["producer_argv"].clone(), true)),
+            Match::Ask
+        );
+        let approved = observed("expected", scope["producer_argv"].clone(), false);
+        assert_eq!(check(approved.clone()), Match::Allow(json!("c")));
+        assert_eq!(check(approved), Match::Allow(json!("c")));
+        assert_eq!(
+            check(make("organizer", &source, "formatter", json!("later"))),
+            Match::Ask
+        );
+        for actual in [
+            make("organizer", &source, "other", json!("first")),
+            make("other", &source, "formatter", json!("first")),
+            make(
+                "organizer",
+                &json!({"node":"organize","port":"internal"}),
+                "formatter",
+                json!("first"),
+            ),
+        ] {
+            assert_eq!(check(actual), Match::Standard);
+        }
+        let mut legacy = card.clone();
+        legacy["routes"][0]
+            .as_object_mut()
+            .unwrap()
+            .remove("producer_argv");
+        put(&db, "intent", "t", &legacy).unwrap();
+        assert_eq!(
+            check(make("organizer", &source, "formatter", json!("first"))),
+            Match::Ask
+        );
+        legacy["decisions"][0] = json!("deny");
+        put(&db, "intent", "t", &legacy).unwrap();
+        let decorated = json!({"node":"organize","port":"summary","title":"display"});
+        let actual = make("organizer", &decorated, "formatter", json!("later"));
+        assert_eq!(
+            authorize(&db, "t", &card["stamp"], &actual)
+                .unwrap_err()
+                .to_string(),
+            "Denied by turn intent"
+        );
+    }
+}

@@ -128,14 +128,21 @@ pub(super) fn schedule(
             tx.commit()?;
             anyhow::bail!("Model call budget exhausted ({used}/{budget})");
         }
-        if let Some(p) = permission::gate(
+        if let Some(p) = permission::graph_gate(
             &tx,
             task,
             "model",
             json!([origin, dest, input, grant["model"], id]),
             json!([id, input, grant["model"]]),
             state["requests"]["model"].as_str(),
-            Some(json!(["model", origin, dest])),
+            json!(["model", origin, dest]),
+            crate::intent::graph_route(
+                &tx,
+                "model",
+                &node["inputs"]["request"],
+                &dest,
+                &bound["request"],
+            )?,
         )? {
             state["requests"]["model"] = p["request_id"].clone();
             state["status"] = json!("permission_required");
