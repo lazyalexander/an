@@ -54,7 +54,7 @@ An curates both directions, without becoming a second agent:
 Two things a mainstream harness does not do carry most of An's weight:
 
 - **Heavy translation.** One sentence from the person becomes inputs for several spools, and their outputs become something the person can read. Every hop can lose meaning, so each translation is a recorded graph step that keeps its original, and a wrong hop can be traced.
-- **The picture is context.** A stroke in Krita or a drag on a panel is information the agent should have, not only typed text. Presentation plugins report *observations*: a versioned snapshot of what the person sees and how it changed since the previous one. An observation enters the graph like any artifact, under the same permissions, and can wake the agent. Not every change should: plugins report settled changes, not every stroke.
+- **The picture is context.** A stroke on the sketch canvas or a drag on a panel is information the agent should have, not only typed text. Presentation plugins report *observations*: a versioned snapshot of what the person sees and how it changed since the previous one. An observation enters the graph like any artifact, under the same permissions, and can wake the agent. Not every change should: plugins report settled changes, not every stroke.
 
 ## Vocabulary
 
@@ -81,7 +81,7 @@ So An targets bounded domains first: tens of curated spools, a person at the dec
 
 ## Presentation plugins
 
-A plugin presents a kind of surface that a panel package cannot: pressure painting in a native application, image or 3D rendering, or other specialised viewers. The Krita native surface is the first plugin: the graph dispatches a document, and the plugin returns a save receipt. Further plugins follow the same contract: An dispatches a frozen input, the plugin presents it outside the agent's reach, and its result enters the graph as a validated response.
+A plugin presents a kind of surface that a basic form cannot, inside the macro UI: the sketch canvas is the first, image comparison and 3D viewers are the next candidates. The contract: An dispatches a frozen input, the plugin presents it without reaching the agent, and its result enters the graph as a validated response. Plugins also report observations (see above).
 
 ## Agent boundary
 
@@ -105,7 +105,7 @@ This needs a manifest schema after `an.spool/v1`, whose reader rejects unknown f
 The macro UI follows a harness layout:
 
 - **Timeline, center.** Only An-level records: the person's instructions, the agent's stage summaries, decisions, failures and deliveries. No prompts, tool calls, agent loop or scrolling logs.
-- **Side panel.** The surfaces waiting for the person and the outputs to check. It widens or switches to a focus view when an image or model needs room. Pressure painting stays in the native application.
+- **Side panel.** The surfaces waiting for the person and the outputs to check. It widens or switches to a focus view when an image or model needs room. Pressure painting uses the sketch canvas.
 - **Instruction box, bottom.** Always present when a person is involved. Without a task it starts one. In a task, free text is relayed with its original kept and its context attached. Text never answers a waiting surface; the agent may supersede that surface in response.
 - **Agent messages** appear in the timeline next to the instructions they answer.
 - **Controls.** Stop, pause, approve and deny are separate buttons executed by An. They are never parsed from text.
@@ -116,9 +116,7 @@ A pipeline without the macro UI still needs somewhere to present surfaces and pe
 
 The An host owns tasks, grants, graph transitions, immutable versions and receipt validation. Task Studio starts with `cd studio && python3 -m orchestrator --task TASK`. Its entry point imports only the graph server and configuration. A task's admitted panel declarations supply the decisions shown in the timeline.
 
-Experiment packages under `examples/` own prompts, document transformations, application plugins, demo entry points and fixtures. Markdown review and graph Studio spools run in containers. The earlier Bridge/CAD instance UI, Blender pipeline and pressure probes live under `examples/legacy_studio/`. Start that experiment from its own directory with `python3 -m orchestrator --instance bridge-studio --fake`. Its run directory resolves to the existing local Studio archives.
-
-The native channel asks an installed adapter for its supported extensions, snapshot filename, published filename and byte validator. An authorizes and binds each receipt to the task and attempt before publishing it. The contract lives in `src/adapters.rs`; the Krita archive checks live in `examples/krita-format`. The default binary includes this trusted adapter for existing native graphs. Build the host without experimental adapters using `cargo build --no-default-features`. Manifests requesting an unavailable adapter fail admission. Adding an adapter requires explicit registration in the binary.
+Experiment packages under `examples/` own prompts, document transformations, application spools, demo entry points and fixtures: graph Studio (Bridge, CAD, sketch), Markdown review, minutes and the Codex agent adapter. Their spools run in containers. Host-side services that need the GPU, such as `services/image_local.py`, run outside containers and are reached only by the host.
 
 ## Status
 
@@ -136,28 +134,24 @@ The native channel asks an installed adapter for its supported extensions, snaps
 | Subagent authority as a strict subset of its parent | Partial: drivers see bound inputs and granted spools; model aliases and call quotas are task-scoped |
 | Model-backed subagents inside drivers | Bridge model mode uses a host-mediated inference result to choose the next subgraph |
 | Presentation without the macro UI (CLI / harness rendering of decision types) | Interactive and JSON CLI implemented; dedicated harness rendering remains open |
-| Native surfaces | Krita native node, saved KRA receipts and Bridge native mode implemented; reference-machine Pencil acceptance gates instance-mode retirement |
-| Sketch surface (An's own pressure canvas, replacing Krita) | Implemented: `sketch` decision type, Studio canvas with Krita-style brush, deterministic SVG finisher spool; pressure gate passed through PadPad in Mac Chrome (85 Hz); iPad Safari direct not yet measured |
+| Sketch surface (An's own pressure canvas) | Implemented: `sketch` decision type, Studio canvas, SVG line-art spool, host image model nodes for the finished painting; Krita path removed; iPad Safari pressure not yet measured |
 | Turn-level policy to avoid approval fatigue | Implemented for declared graph routes. Markdown review and minutes-to-announcement exercise the shared CLI and Studio authorization card. |
 | Reclamation of unreferenced intermediate artifacts | Not started |
 | Agent messages to the person (`an_graph_say`) | Implemented: idempotent, revision- and instruction-linked, shown in the timeline |
 | Starting a task from a sentence in the macro UI | Implemented: workspace Studio creates the task and the runner wakes the agent |
 | Harness-neutral agent runner | Implemented in the Studio controller: wakes on instructions, answers and resume; at most once; pause and stop respected; Codex adapter |
 | Curation layer (original kept, context attached, outbound summaries) | Partial: instructions carry revision and turn; no outbound summaries |
-| Presentation plugin contract beyond Krita | Not started |
+| Presentation plugin contract beyond the sketch canvas (image, 3D viewers) | Not started |
 | Remote model providers with host-held credentials | Implemented for images: OpenAI Images API with the key read from the macOS Keychain at send time; text models remain host-local Ollama |
 | Image model nodes (sketch to finished painting) | Implemented: local SDXL + ControlNet scribble service and OpenAI backend behind the same node; local path verified end to end (33 s per image) |
 | Outbound curation: stage summaries and readable failure reasons | Implemented without a model: agent and driver submissions fold into titled stages with progress; failures carry a reason category shown as locale text |
 | Observations: plugin snapshots of what the person sees, as versioned context | Not started |
 | Spool catalog retrieval and composition evaluation | Not started |
 
-## Native surfaces
+## Sketch surface
 
-Krita is being replaced by An's own sketch surface: the canvas is a framework surface, strokes are versioned data, and traditional application steps become spools written to An's rules. The Krita adapter below stays until the sketch surface covers its uses.
+An draws with its own canvas instead of driving a painting application. Krita was tried first as a native surface and removed: An could not control it well, it is a large collection of features of which An needs a small part, and a model can produce the finished picture from a sketch. Traditional application steps become spools written to An's rules, which An admits and controls.
 
+The canvas is a framework surface (`sketch` decision type). Strokes are versioned data: normalized `[x, y, pressure]` points with colour and size. Downstream spools turn them into line art; host image model nodes turn them into a finished painting.
 
-Pressure painting cannot run in a web panel. Measured on the reference machine: synthetic input reaches the canvas with zero pressure, and macOS delivers the Sidecar Pencil to ordinary applications as a plain mouse. A driver-level injector (Codonic Pad) delivers genuine tablet events to Krita. Pinned versions are in [examples/legacy_studio/VERSIONS.md](../examples/legacy_studio/VERSIONS.md); the probe evidence is under `examples/legacy_studio/spikes/`.
-
-The Bridge native graph sends one versioned layered document to the local Krita adapter. Ordinary saves update the private working copy. **完成并交付** saves the bound canvas, verifies it is clean and submits a separate KRA snapshot. The host checks the attempt, authority, content digest and archive before committing a document output. See [running and verifying the native graph](graph-studio.md#krita-native-painting).
-
-The legacy instance-mode Studio remains available until the new graph passes its physical Pencil and exported-layer gate on the reference machine.
+Pressure measurements on the reference machine: synthetic input reaches a canvas with zero pressure, and macOS delivers the Sidecar Pencil to ordinary applications as a plain mouse. Through the Codonic Pad injector (PadMac/PadPad), Chrome on the Mac receives genuine pen events: pressure 0.04–0.85 with 164 distinct values, tilt, about 85 Hz and 3 ms event latency. iPad Safari with Apple Pencil, which needs no injector, is not measured yet; the probe page is on the `spike/pressure-canvas` branch. Earlier probe evidence and the Krita adapter remain in git history.

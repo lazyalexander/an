@@ -49,8 +49,3 @@ panels:
     kind: delivery
     bindings: [sketch, finished]
     optional: [painting]
-  paint:
-    title: 原生压感绘画
-    kind: native
-    adapter: krita
-    bindings: [document]
