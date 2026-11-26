@@ -42,9 +42,10 @@ def skill(spec):
     )
 
 
-def build(directory, binary, cli):
+def build(directory, binary, cli, names=SPOOLS):
     images = {}
-    for name, spec in SPOOLS.items():
+    for name in names:
+        spec = SPOOLS[name]
         context = directory / name
         context.mkdir(parents=True)
         interface = context / "spool.yaml"

@@ -31,7 +31,14 @@ python3 examples/composition/evaluate.py --out /tmp/an-plan-001
 
 The inexpensive planning pass shows a shuffled snapshot of all five fixture interfaces and their skills, the input filenames, and one sentence at a time. Codex runs in a fresh directory with tools restricted. The evaluator retains the prompt, raw answer, parsed graph and report. Use a new output path for each run; set `--seed`, `--model` or `--case` to reproduce a condition. The fixtures and oracle stay outside the prompt.
 
-For execution on an Apple Container host:
+To check the runtime independently on an Apple Container host, run the fixed sketch → line art → painting graph. The delivery consumes both the line art and the painting. The check verifies revision bindings, file contents and removal of the task's labelled containers. It records the observed graph on successful execution and writes a separate runtime report. This run needs no Codex installation or login and contributes no planner scores.
+
+```sh
+cargo build --locked
+python3 examples/composition/relay.py --out /tmp/an-relay-001
+```
+
+For execution with Codex on an Apple Container host:
 
 ```sh
 cargo build --locked
