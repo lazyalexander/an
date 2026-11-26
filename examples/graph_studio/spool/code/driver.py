@@ -66,16 +66,27 @@ def revise(spool):
              "selected":ref("apply","selected.svg"),"painting":ref("edit","document")},"outputs":[]}]
 
 
-def sketch(spool):
-    return [
+def sketch(spool, model=None):
+    """Sketch, clean line art and, with an image model grant, a finished painting."""
+    nodes = [
         {"id": "draw", "title": "画一张草稿", "kind": "surface", "spool": spool, "panel": "sketch",
          "inputs": {}, "outputs": ["response"]},
         {"id": "finish", "title": "整理线稿", "kind": "run", "spool": spool,
          "argv": ["python3", "/spool/code/finish.py"],
-         "inputs": {"choice": ref("draw", "response")}, "outputs": ["finished.svg"]},
-        {"id": "result", "title": "整理后的线稿", "kind": "delivery", "spool": spool, "panel": "finished",
-         "inputs": {"sketch": ref("draw", "response"), "finished": ref("finish", "finished.svg")},
-         "outputs": []}]
+         "inputs": {"choice": ref("draw", "response")}, "outputs": ["finished.svg"]}]
+    delivery = {"sketch": ref("draw", "response"), "finished": ref("finish", "finished.svg")}
+    if model:
+        nodes += [
+            {"id": "prepare", "title": "准备成品请求", "kind": "run", "spool": spool,
+             "argv": ["python3", "/spool/code/prepare.py"],
+             "inputs": {"choice": ref("draw", "response")}, "outputs": ["control.png", "request.json"]},
+            {"id": "paint", "title": "生成成品", "kind": "model", "model": model,
+             "inputs": {"request": ref("prepare", "request.json"), "image": ref("prepare", "control.png")},
+             "outputs": ["result.png"]}]
+        delivery["painting"] = ref("paint", "result.png")
+    nodes.append({"id": "result", "title": "草稿与成品", "kind": "delivery", "spool": spool,
+                  "panel": "finished", "inputs": delivery, "outputs": []})
+    return nodes
 
 
 def cad(spool):
@@ -131,6 +142,10 @@ Path("/output/annotation.txt").write_text(choice["note"])
             nodes.insert(0, run("annotation-note", spool, write_note, ["annotation.txt"],
                                 choice=ref("compare", "response")))
     else:
+        if stage == "sketch":
+            model = next((o.split("=", 1)[1] for o in options if o.startswith("--model=")), None)
+            Path("/output/subgraph.json").write_text(json.dumps({"nodes": sketch(spool, model)}))
+            sys.exit(0)
         nodes = {"bridge": bridge, "bridge-model":bridge,"bridge-native":bridge, "cad": cad, "revise": revise, "sketch": sketch}[stage](spool)
         if stage == "bridge-native":
             nodes[-1]["argv"][2] = "native-select"

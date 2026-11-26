@@ -145,7 +145,8 @@ The native channel asks an installed adapter for its supported extensions, snaps
 | Harness-neutral agent runner | Implemented in the Studio controller: wakes on instructions, answers and resume; at most once; pause and stop respected; Codex adapter |
 | Curation layer (original kept, context attached, outbound summaries) | Partial: instructions carry revision and turn; no outbound summaries |
 | Presentation plugin contract beyond Krita | Not started |
-| Remote model providers with host-held credentials | Not started: host-local Ollama only |
+| Remote model providers with host-held credentials | Implemented for images: OpenAI Images API with the key read from the macOS Keychain at send time; text models remain host-local Ollama |
+| Image model nodes (sketch to finished painting) | Implemented: local SDXL + ControlNet scribble service and OpenAI backend behind the same node; local path verified end to end (33 s per image) |
 | Outbound curation: stage summaries and readable failure reasons | Implemented without a model: agent and driver submissions fold into titled stages with progress; failures carry a reason category shown as locale text |
 | Observations: plugin snapshots of what the person sees, as versioned context | Not started |
 | Spool catalog retrieval and composition evaluation | Not started |

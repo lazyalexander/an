@@ -48,6 +48,7 @@ panels:
     title: 整理后的线稿
     kind: delivery
     bindings: [sketch, finished]
+    optional: [painting]
   paint:
     title: 原生压感绘画
     kind: native

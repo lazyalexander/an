@@ -45,6 +45,7 @@ def main():
     parser.add_argument("--image", default="an-graph-studio:headless")
     parser.add_argument("--browser", action="store_true")
     parser.add_argument("--directory", type=Path)
+    parser.add_argument("--model", help="image model alias, e.g. sketch-local or sketch-remote")
     args = parser.parse_args()
     directory = args.directory or Path(tempfile.mkdtemp(prefix="an-sketch-"))
     directory.mkdir(parents=True, exist_ok=True)
@@ -59,7 +60,8 @@ def main():
     workspace = json.loads(cli("workspace", "create", "--spool", spool))["workspace"]
     selector = ["--harness", "validation", "--session", "sketch"]
     cli("workspace", "bind", workspace, *selector)
-    task = json.loads(cli("task", "new", *selector))["task"]
+    grant = ["--model", args.model, "--model-calls", "2"] if args.model else []
+    task = json.loads(cli("task", "new", *selector, *grant))["task"]
     env["AN_TURN"] = json.loads(cli("permission", "begin", "--task", task))["turn"]
 
     def host(action, **body):
@@ -71,7 +73,11 @@ def main():
             for request in host("requests"):
                 cli("permission", "decide", "--task", task, "--request-id", request["id"],
                     "--decision", "once")
-            state = host("view")["activity"].get(node, {})
+            activity = host("view")["activity"]
+            broken = {k: v for k, v in activity.items() if v.get("status") in ("failed", "unknown")}
+            if broken:
+                raise AssertionError(json.dumps(broken)[:600])
+            state = activity.get(node, {})
             if state.get("status") == desired:
                 return state
             if state.get("status") in ("failed", "unknown"):
@@ -81,7 +87,9 @@ def main():
 
     agent = Agent(binary, task, env)
     agent.graph("submit", base_revision=0, idempotency_key="sketch",
-                nodes=[initial_driver("sketch", spool)])
+                nodes=[{**initial_driver("sketch", spool),
+                        "argv": initial_driver("sketch", spool)["argv"]
+                        + ([f"--model={args.model}"] if args.model else [])}])
     state = wait("draw", "waiting")
     if args.browser:
         studio = subprocess.Popen([sys.executable, "-m", "orchestrator", "--an", binary, "--task",
@@ -100,7 +108,7 @@ def main():
         host("respond", **request, value={"note": "roof line", "strokes": [
             {"color": "#1d3557", "size": 12,
              "points": [[0.2 + i * 0.015, 0.6, min(1, 0.05 + i * 0.024)] for i in range(41)]}]})
-    wait("result", "done")
+    wait("result", "done", deadline=900)
     delivery = host("deliveries")[0]
     files = host("open", delivery=delivery["id"])["files"]
     svg = base64.b64decode(files["finished"]["finished.svg"]).decode()
@@ -108,6 +116,13 @@ def main():
     pressures = [p[2] for s in sketch["strokes"] for p in s["points"]]
     assert "<path" in svg and max(pressures) - min(pressures) > 0.5, (svg[:200], pressures[:5])
     (directory / "finished.svg").write_text(svg)
+    if args.model:
+        painting = base64.b64decode(files["painting"]["result.png"])
+        assert painting.startswith(b"\x89PNG"), "no painting"
+        (directory / "painting.png").write_bytes(painting)
+        calls = agent.graph("state", after=0)["model_calls"]
+        print("model call:", json.dumps({k: calls[-1].get(k) for k in
+              ("state", "kind", "usage", "sent_at", "settled_at")}))
     agent.close()
     print(f"sketch passed: {len(pressures)} points, pressure {min(pressures)}–{max(pressures)}, "
           f"svg {len(svg)} bytes in {directory}")
