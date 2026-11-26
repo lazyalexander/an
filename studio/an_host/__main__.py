@@ -3,7 +3,7 @@ import argparse
 import json
 from pathlib import Path
 
-from orchestrator.config import load
+from .settings import load
 from .client import connect
 
 

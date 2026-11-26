@@ -45,4 +45,4 @@ poll_ms = 500
 timeout_s = 900
 ```
 
-The repository-owned `studio/an_host/controller.toml` declares the graph operations the presentation can forward and the import boundary checked by the Studio tests.
+The repository-owned `studio/an_host/controller.toml` declares the graph operations the presentation can forward and `studio/architecture.toml` defines the import boundary checked by the Studio tests.

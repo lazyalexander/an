@@ -1,0 +1,5 @@
+# The HTTP layer may depend on the client only. Checked by the Studio test suite.
+[architecture]
+presentation = "orchestrator/graph_server.py"
+host_imports = ["an_host.client"]
+forbidden_imports = ["subprocess", "sqlite3", "orchestrator.runner"]
