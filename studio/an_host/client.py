@@ -39,12 +39,16 @@ def connect(binary, task, workspace, harness, agent):
         call(hello)
     except (FileNotFoundError, ConnectionRefusedError):
         with (directory / "controller.log").open("ab") as log:
-            process = subprocess.Popen([sys.executable, "-m", "an_host.controller", str(directory)],
+            process = subprocess.Popen([sys.executable, "-m", "an_host.server", str(directory)],
                                        cwd=Path(__file__).resolve().parents[1], stdin=subprocess.PIPE,
                                        stdout=log, stderr=log, start_new_session=True,
                                        env={**os.environ, "AN_HOME": str(home)})
-            process.stdin.write(json.dumps(options).encode())
-            process.stdin.close()
+            # A competing launcher may win the lock and close stdin first.
+            try:
+                with process.stdin:
+                    process.stdin.write(json.dumps(options).encode())
+            except BrokenPipeError:
+                pass
         for _ in range(100):
             try:
                 call(hello)

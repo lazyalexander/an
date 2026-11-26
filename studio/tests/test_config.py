@@ -157,3 +157,13 @@ def test_workspace_studio_exposes_start_without_leaking_the_turn():
         proc.terminate()
         proc.wait(timeout=5)
     assert "AN_TURN" not in json.dumps(served)
+
+
+def test_headless_settings_do_not_require_locale_assets(tmp_path):
+    from an_host.settings import load
+
+    override = tmp_path / "headless.toml"
+    override.write_text('locale = "uninstalled"\n[agent]\npoll_ms = 750\n')
+    assert load(override)["agent"]["poll_ms"] == 750
+    with pytest.raises(ValueError, match="unknown locale"):
+        config.load(override)

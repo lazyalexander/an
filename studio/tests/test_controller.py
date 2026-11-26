@@ -98,13 +98,21 @@ def test_presentation_import_boundary():
     import ast
     import tomllib
 
-    rules = tomllib.loads((STUDIO / "an_host/controller.toml").read_text())["architecture"]
+    rules = tomllib.loads((STUDIO / "architecture.toml").read_text())["architecture"]
     module = ast.parse((STUDIO / rules["presentation"]).read_text())
     imports = set()
     for node in ast.walk(module):
         if isinstance(node, ast.Import):
             imports.update(alias.name for alias in node.names)
         elif isinstance(node, ast.ImportFrom):
-            imports.add(node.module or "")
-    assert not imports.intersection(rules["forbidden_imports"])
-    assert {name for name in imports if name.startswith("an_host")} <= set(rules["host_imports"])
+            if node.module:
+                imports.add(node.module)
+                imports.update(f"{node.module}.{alias.name}" for alias in node.names)
+            elif node.level:
+                imports.update(f"orchestrator.{alias.name}" for alias in node.names)
+    for name in imports:
+        assert not any(name == root or name.startswith(root + ".")
+                       for root in rules["forbidden_imports"]), name
+        if name == "an_host" or name.startswith("an_host."):
+            assert any(name == root or name.startswith(root + ".")
+                       for root in rules["host_imports"]), name

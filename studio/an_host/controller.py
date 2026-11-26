@@ -2,9 +2,7 @@
 from contextlib import contextmanager
 import json
 import os
-import socketserver
 import subprocess
-import sys
 import tomllib
 import uuid
 from pathlib import Path
@@ -12,6 +10,22 @@ from pathlib import Path
 from .runner import Runner
 
 ACTIONS = set(tomllib.loads(Path(__file__).with_name("controller.toml").read_text())["studio"]["graph_actions"])
+
+
+def task_view(graph, agent_status):
+    result = graph("view", {})
+    if result["authorized"] and result["revision"]:
+        graph("state", {"after": 2**53})
+        result = graph("view", {})
+    # Keep execution evidence behind the explicit sources/evidence actions.
+    for collection, fields in (("nodes", ("id", "kind", "title")),
+                        ("activity", ("id", "status"))):
+        result[collection] = {node: {field: row[field] for field in fields if field in row}
+                       for node, row in result[collection].items()}
+    result["permissions"] = graph("requests", {}) if result["authorized"] else []
+    result["deliveries"] = graph("deliveries", {})
+    result["agent"] = agent_status
+    return result
 
 
 @contextmanager
@@ -77,18 +91,7 @@ def controller(directory, options):
             return an(["graph", "--task", current, name], args, turn)
 
         if action == "view":
-            result = graph("view", {})
-            if result["authorized"] and result["revision"]:
-                graph("state", {"after": 2**53})
-                result = graph("view", {})
-            # Keep execution evidence behind the explicit sources/evidence actions.
-            for collection, fields in (("nodes", ("id", "kind", "title")),
-                                ("activity", ("id", "status"))):
-                result[collection] = {node: {field: row[field] for field in fields if field in row}
-                               for node, row in result[collection].items()}
-            result["permissions"] = graph("requests", {}) if result["authorized"] else []
-            result["deliveries"] = graph("deliveries", {})
-            result["agent"] = runner.status(current)
+            return task_view(graph, runner.status(current))
         elif action == "intent-decide":
             result = an(["permission","intent-decide","--task",current,"--request-id",body["id"],
                          "--decision",json.dumps(body["decisions"])], {}, turn)
@@ -111,45 +114,3 @@ def controller(directory, options):
         yield dispatch, mcp
     finally:
         runner.close()
-
-
-def serve(directory, options):
-    class Handler(socketserver.StreamRequestHandler):
-        def handle(self):
-            try:
-                request = json.loads(self.rfile.readline())
-                if request["action"] == "connect":
-                    if request["options"] != options:
-                        raise ValueError("Controller configuration changed; restart the host controller")
-                    result = {}
-                elif request["action"] == "host-stop":
-                    import threading
-                    threading.Thread(target=self.server.shutdown, daemon=True).start()
-                    result = {}
-                elif request["action"] == "host-agent":
-                    result = mcp[request["task"]]
-                else:
-                    result = dispatch(request["action"], request.get("task"), request["body"])
-                response = {"result": result}
-            except (ValueError, KeyError, TypeError, OSError) as exc:
-                response = {"error": str(exc)}
-            self.wfile.write(json.dumps(response).encode() + b"\n")
-
-    socket = directory / "socket"
-    socket.unlink(missing_ok=True)
-    with socketserver.UnixStreamServer(str(socket), Handler) as server:
-        with controller(directory, options) as (dispatch, mcp):
-            server.serve_forever()
-
-
-if __name__ == "__main__":
-    import fcntl
-
-    directory = Path(sys.argv[1])
-    os.umask(0o077)
-    with (directory / "lock").open("a") as lock:
-        try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            sys.exit(0)
-        serve(directory, json.load(sys.stdin))
