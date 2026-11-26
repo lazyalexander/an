@@ -137,6 +137,7 @@ The native channel asks an installed adapter for its supported extensions, snaps
 | Model-backed subagents inside drivers | Bridge model mode uses a host-mediated inference result to choose the next subgraph |
 | Presentation without the macro UI (CLI / harness rendering of decision types) | Interactive and JSON CLI implemented; dedicated harness rendering remains open |
 | Native surfaces | Krita native node, saved KRA receipts and Bridge native mode implemented; reference-machine Pencil acceptance gates instance-mode retirement |
+| Sketch surface (An's own pressure canvas, replacing Krita) | Implemented: `sketch` decision type, Studio canvas with Krita-style brush, deterministic SVG finisher spool; pressure gate passed through PadPad in Mac Chrome (85 Hz); iPad Safari direct not yet measured |
 | Turn-level policy to avoid approval fatigue | Implemented for declared graph routes. Markdown review and minutes-to-announcement exercise the shared CLI and Studio authorization card. |
 | Reclamation of unreferenced intermediate artifacts | Not started |
 | Agent messages to the person (`an_graph_say`) | Implemented: idempotent, revision- and instruction-linked, shown in the timeline |
@@ -150,6 +151,9 @@ The native channel asks an installed adapter for its supported extensions, snaps
 | Spool catalog retrieval and composition evaluation | Not started |
 
 ## Native surfaces
+
+Krita is being replaced by An's own sketch surface: the canvas is a framework surface, strokes are versioned data, and traditional application steps become spools written to An's rules. The Krita adapter below stays until the sketch surface covers its uses.
+
 
 Pressure painting cannot run in a web panel. Measured on the reference machine: synthetic input reaches the canvas with zero pressure, and macOS delivers the Sidecar Pencil to ordinary applications as a plain mouse. A driver-level injector (Codonic Pad) delivers genuine tablet events to Krita. Pinned versions are in [examples/legacy_studio/VERSIONS.md](../examples/legacy_studio/VERSIONS.md); the probe evidence is under `examples/legacy_studio/spikes/`.
 

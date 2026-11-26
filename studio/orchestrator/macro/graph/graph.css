@@ -32,3 +32,5 @@ header nav { display:flex;gap:8px;margin-left:auto } header nav button { padding
 #timeline li[data-actor="agent"] > div { color:#183d34;background:#eef5f0;border-left:3px solid #649882;padding:6px 10px;border-radius:4px }
 #agent-state { font:13px system-ui;color:#bfe3cf }
 #timeline li[data-stage] > div { color:#3d5a50 } #timeline li[data-stage="failed"] > div { color:#9c1c1c }
+.sketch { margin:12px 0 } .sketch > div { display:flex;gap:8px;align-items:center;margin-bottom:8px } .sketch canvas { display:block;width:100%;aspect-ratio:4/3;border:1px solid #c6d2c7;border-radius:8px;background:#fff center/contain no-repeat;touch-action:none }
+.sketch { flex:1 1 100%;width:100%;max-width:900px }

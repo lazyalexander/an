@@ -66,6 +66,18 @@ def revise(spool):
              "selected":ref("apply","selected.svg"),"painting":ref("edit","document")},"outputs":[]}]
 
 
+def sketch(spool):
+    return [
+        {"id": "draw", "title": "画一张草稿", "kind": "surface", "spool": spool, "panel": "sketch",
+         "inputs": {}, "outputs": ["response"]},
+        {"id": "finish", "title": "整理线稿", "kind": "run", "spool": spool,
+         "argv": ["python3", "/spool/code/finish.py"],
+         "inputs": {"choice": ref("draw", "response")}, "outputs": ["finished.svg"]},
+        {"id": "result", "title": "整理后的线稿", "kind": "delivery", "spool": spool, "panel": "finished",
+         "inputs": {"sketch": ref("draw", "response"), "finished": ref("finish", "finished.svg")},
+         "outputs": []}]
+
+
 def cad(spool):
     return [
             {"id": "timing", "kind": "surface", "spool": spool, "panel": "timing",
@@ -119,7 +131,7 @@ Path("/output/annotation.txt").write_text(choice["note"])
             nodes.insert(0, run("annotation-note", spool, write_note, ["annotation.txt"],
                                 choice=ref("compare", "response")))
     else:
-        nodes = {"bridge": bridge, "bridge-model":bridge,"bridge-native":bridge, "cad": cad, "revise": revise}[stage](spool)
+        nodes = {"bridge": bridge, "bridge-model":bridge,"bridge-native":bridge, "cad": cad, "revise": revise, "sketch": sketch}[stage](spool)
         if stage == "bridge-native":
             nodes[-1]["argv"][2] = "native-select"
         if stage == "bridge-model":

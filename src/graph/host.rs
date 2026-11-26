@@ -293,6 +293,19 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
                 );
             }
         }
+        if node["package"]
+            .get("declaration")
+            .is_some_and(|p| p["decision"]["type"] == "sketch")
+        {
+            for stroke in response["strokes"].as_array().into_iter().flatten() {
+                for point in stroke["points"].as_array().into_iter().flatten() {
+                    ensure!(
+                        point.as_array().is_some_and(|p| p.len() == 3),
+                        "Sketch points are [x, y, pressure]"
+                    );
+                }
+            }
+        }
         state["response"] = response.clone();
         let rev = revision(
             &tx,
