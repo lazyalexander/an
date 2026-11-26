@@ -77,6 +77,9 @@ def test_every_text_key_used_by_the_pages_and_docker_exists():
                                            "permission_required", "cancelled")}
     graph_keys |= {f"evidence.{k}" for k in ("code", "work", "input", "log")}
     graph_keys |= {"instruction.stale", "instruction.sent"}
+    graph_keys |= {f"stage.{k}" for k in ("agent", "driver", "running", "done", "failed", "stopped")}
+    graph_keys |= {f"failure.{k}" for k in ("denied", "authority", "exit", "output", "budget",
+                                            "declaration", "unknown", "other")}
     for key in graph_keys:
         _lookup(strings["graph"], key)
 

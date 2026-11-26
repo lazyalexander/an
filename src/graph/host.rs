@@ -505,10 +505,36 @@ fn timeline(graph: &Value, authority: Option<&str>) -> Vec<Value> {
                 }
                 continue;
             }
+            "submitted" | "expanded" => {
+                // Fold the agent's work into one readable stage with progress;
+                // commands, inputs and tool calls stay behind the sources view.
+                let added = if kind == "submitted" {
+                    &event["nodes"]
+                } else {
+                    &data["nodes"]
+                };
+                let Some(stage) = stage(graph, added) else {
+                    continue;
+                };
+                row["kind"] = json!("stage");
+                row["origin"] = json!(if kind == "submitted" {
+                    "agent"
+                } else {
+                    "driver"
+                });
+                for (key, value) in stage {
+                    row[key] = value;
+                }
+            }
             "failed" | "unknown" => {
                 row["kind"] = json!("failure");
                 row["node"] = id.clone();
                 row["request"] = data["id"].clone();
+                row["reason"] = json!(if kind == "unknown" {
+                    "unknown"
+                } else {
+                    failure_reason(data["error"].as_str().unwrap_or(""))
+                });
             }
             "paused" | "resumed" | "stopped" | "closed" => {
                 row["kind"] = json!("control");
@@ -519,6 +545,77 @@ fn timeline(graph: &Value, authority: Option<&str>) -> Vec<Value> {
         rows.push(row);
     }
     rows
+}
+
+/// Work nodes added together, as titled steps with their current status.
+fn stage(graph: &Value, added: &Value) -> Option<serde_json::Map<String, Value>> {
+    let mut steps = vec![];
+    for id in added
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+    {
+        let node = &graph["nodes"][id];
+        if !matches!(node["kind"].as_str(), Some("run" | "expand" | "model")) {
+            continue; // decisions and deliveries have their own rows
+        }
+        let status = graph["activity"][id]["status"].as_str().unwrap_or("queued");
+        steps.push(json!({"node":id,"title":node.get("title").cloned().unwrap_or(json!(id)),"status":status}));
+    }
+    if steps.is_empty() {
+        return None;
+    }
+    let done = steps.iter().filter(|s| s["status"] == "done").count();
+    let any = |states: &[&str]| {
+        steps
+            .iter()
+            .any(|s| states.contains(&s["status"].as_str().unwrap_or("")))
+    };
+    let state = if any(&["failed", "unknown"]) {
+        "failed"
+    } else if done == steps.len() {
+        "done"
+    } else if any(&[
+        "queued",
+        "running",
+        "permission_required",
+        "cleanup_pending",
+    ]) {
+        "running"
+    } else {
+        "stopped"
+    };
+    let mut row = serde_json::Map::new();
+    row.insert("total".into(), json!(steps.len()));
+    row.insert("done".into(), json!(done));
+    row.insert("state".into(), json!(state));
+    row.insert("steps".into(), json!(steps));
+    Some(row)
+}
+
+/// A readable category for a failure. The person sees the locale text for the
+/// category; the raw error stays available through the node's sources.
+fn failure_reason(error: &str) -> &'static str {
+    let lower = error.to_lowercase();
+    if lower.contains("denied") || lower.contains("host policy") {
+        "denied"
+    } else if lower.contains("authority") || lower.contains("turn") {
+        "authority"
+    } else if lower.contains("exited") || lower.contains("exit status") {
+        "exit"
+    } else if lower.contains("output") {
+        "output"
+    } else if lower.contains("budget") || lower.contains("quota") || lower.contains("exceeds") {
+        "budget"
+    } else if lower.contains("declaration")
+        || lower.contains("manifest")
+        || lower.contains("admission")
+    {
+        "declaration"
+    } else {
+        "other"
+    }
 }
 
 /// Relay a person's instruction to the agent, unchanged.
@@ -564,6 +661,65 @@ fn instruct(
 #[cfg(test)]
 mod timeline_tests {
     use super::*;
+
+    #[test]
+    fn agent_work_folds_into_stages_with_readable_failures() {
+        let mut graph = json!({"nodes":{
+            "render":{"kind":"run","title":"渲染草图","argv":["secret-cmd"]},
+            "judge":{"kind":"model","title":"挑选方案"},
+            "pick":{"kind":"surface"},
+            "fix":{"kind":"run"}},
+            "activity":{"render":{"status":"done"},"judge":{"status":"running"},
+                        "pick":{"status":"waiting"},"fix":{"status":"failed"}},
+            "events":[]});
+        let events = graph["events"].as_array_mut().unwrap();
+        events.push(json!({"cursor":1,"actor":"agent","kind":"submitted",
+            "nodes":["render","judge","pick"]}));
+        events.push(json!({"cursor":2,"actor":"agent","kind":"submitted","nodes":["pick"]}));
+        event(
+            &mut graph,
+            "host",
+            "expanded",
+            "driver",
+            json!({"nodes":["fix"]}),
+        );
+        event(
+            &mut graph,
+            "host",
+            "failed",
+            "fix",
+            json!({"id":"a","error":"Guest command exited exit status: 7"}),
+        );
+        event(
+            &mut graph,
+            "host",
+            "failed",
+            "fix",
+            json!({"id":"b","error":"Denied by workspace flow policy"}),
+        );
+        let rows = timeline(&graph, Some("current"));
+        let stages: Vec<_> = rows.iter().filter(|r| r["kind"] == "stage").collect();
+        assert_eq!(
+            stages.len(),
+            2,
+            "a submission of only decisions is not a stage"
+        );
+        assert_eq!(stages[0]["total"], 2);
+        assert_eq!(stages[0]["done"], 1);
+        assert_eq!(stages[0]["state"], "running");
+        assert_eq!(stages[0]["steps"][0]["title"], "渲染草图");
+        assert_eq!(stages[1]["origin"], "driver");
+        assert_eq!(stages[1]["steps"][0]["title"], "fix");
+        assert_eq!(stages[1]["state"], "failed");
+        assert!(!serde_json::to_string(&rows).unwrap().contains("secret-cmd"));
+        let reasons: Vec<_> = rows
+            .iter()
+            .filter(|r| r["kind"] == "failure")
+            .map(|r| r["reason"].clone())
+            .collect();
+        assert_eq!(reasons, [json!("exit"), json!("denied")]);
+        assert!(timeline(&graph, None).iter().all(|r| r["kind"] != "stage"));
+    }
 
     #[test]
     fn projection_preserves_attempts_and_filters_private_history() {

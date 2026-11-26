@@ -31,3 +31,4 @@ header nav { display:flex;gap:8px;margin-left:auto } header nav button { padding
 #intent section { padding:0 }
 #timeline li[data-actor="agent"] > div { color:#183d34;background:#eef5f0;border-left:3px solid #649882;padding:6px 10px;border-radius:4px }
 #agent-state { font:13px system-ui;color:#bfe3cf }
+#timeline li[data-stage] > div { color:#3d5a50 } #timeline li[data-stage="failed"] > div { color:#9c1c1c }

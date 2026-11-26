@@ -49,6 +49,30 @@ An curates both directions, without becoming a second agent:
 - **Agent to person:** An turns agent output into timeline entries: messages, stage summaries, decisions and deliveries. Prompts, tool calls and the agent loop stay hidden. This direction matters most, because it is what makes the macro UI readable.
 - **Curation by a model is a graph step.** If a model rewrites or summarises, it runs as a recorded node with its own inputs and outputs, so every change can be traced. Nothing on the relay path is rewritten silently.
 
+## What sets An apart from a chat harness
+
+Two things a mainstream harness does not do carry most of An's weight:
+
+- **Heavy translation.** One sentence from the person becomes inputs for several spools, and their outputs become something the person can read. Every hop can lose meaning, so each translation is a recorded graph step that keeps its original, and a wrong hop can be traced.
+- **The picture is context.** A stroke in Krita or a drag on a panel is information the agent should have, not only typed text. Presentation plugins report *observations*: a versioned snapshot of what the person sees and how it changed since the previous one. An observation enters the graph like any artifact, under the same permissions, and can wake the agent. Not every change should: plugins report settled changes, not every stroke.
+
+## Vocabulary
+
+- **Spool** stays the name of a packaged, admitted capability. It is already the manifest, admission and CLI term, and the image fits: each spool holds one kind of skill.
+- **Graph** is the term in APIs and documentation for what agents assemble at run time, because the work branches, merges and grows while it runs; "pipeline" suggests a fixed line. Interfaces for people call it **流程** (flow) and do not show the word graph.
+
+## Scope and realism
+
+The mechanics are proven: activating spools in containers, exchanging artifacts under authorization and publishing deliveries run end to end in the Bridge, CAD and Markdown review experiments. What is hard is not the plumbing:
+
+1. **Choosing and composing spools.** With a dozen well-described spools a capable model composes them; with hundreds it needs retrieval and evaluation, not a longer prompt. Small local models plan poorly.
+2. **Format compatibility** between spools is the most common failure point and needs converter spools and strict media types.
+3. **Translation costs** a model call, latency and a failure point per hop, so hops stay few and inspectable.
+4. **Visual context is expensive**, and deciding which changes matter is itself a problem.
+5. **Output quality is bounded by the spools**, not by orchestration.
+
+So An targets bounded domains first: tens of curated spools, a person at the decisions that matter, tolerance for tens of seconds per step. Painting assistance, CAD drawings and document work fit. "Any sentence into any pipeline" is not a near-term goal; one domain is made reliable before the spool catalog grows.
+
 ## Starting work and agent replies
 
 - **Start from a sentence.** The person opens the macro UI for a workspace and types what they want. An creates a task, begins a turn and records the sentence as the task's first instruction. The agent attached to that task picks it up.
@@ -121,6 +145,9 @@ The native channel asks an installed adapter for its supported extensions, snaps
 | Curation layer (original kept, context attached, outbound summaries) | Partial: instructions carry revision and turn; no outbound summaries |
 | Presentation plugin contract beyond Krita | Not started |
 | Remote model providers with host-held credentials | Not started: host-local Ollama only |
+| Outbound curation: stage summaries and readable failure reasons | Implemented without a model: agent and driver submissions fold into titled stages with progress; failures carry a reason category shown as locale text |
+| Observations: plugin snapshots of what the person sees, as versioned context | Not started |
+| Spool catalog retrieval and composition evaluation | Not started |
 
 ## Native surfaces
 
