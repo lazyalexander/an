@@ -241,6 +241,11 @@ function renderTimeline(title, deliveries) {
     let label = t("timeline." + (row.action || row.kind));
     let action;
     if (row.kind === "instruction") label += " · " + row.text;
+    if (row.kind === "stage") {
+      label = t("stage." + row.origin) + " · " + row.steps.map(step => step.title).join("、")
+        + " · " + t("stage." + row.state, {done: row.done, total: row.total});
+      item.dataset.stage = row.state;
+    }
     if (row.kind === "message") {
       label = t("timeline." + (row.purpose === "question" ? "question" : "message")) + " · " + row.text;
       item.dataset.actor = "agent";
@@ -249,8 +254,9 @@ function renderTimeline(title, deliveries) {
       label += " · " + title(row.node);
       if (row.response !== undefined) label += " · " + JSON.stringify(row.response);
       const state = view.activity[row.node];
+      if (row.kind === "failure" && row.reason) label += " · " + t("failure." + row.reason);
       if (state?.id === row.request) {
-        label += " · " + statusLabel(state.status);
+        if (row.kind !== "failure") label += " · " + statusLabel(state.status);
         action = () => select("node", row.node);
         if (selection?.kind === "node" && selection.id === row.node) target = item;
       }

@@ -142,7 +142,7 @@ Build the example with `container build -t an-markdown-review:headless examples/
 Run `python3 examples/graph_studio/demo.py markdown --review-case conflict` and open the Studio URL.
 The fixture supplies the original Markdown and two paragraph replacement suggestions. The local model classifies the pair. Conflicting replacements open a declared choice with both edits and reasons. The compatible fixture proceeds directly to delivery. Both paths publish the revised Markdown and a unified diff.
 
-The central timeline shows instructions, decisions, deliveries, failures and controls in host event order. Select a waiting decision to answer inline. Inspect execution details through the graph and sources controls. After the task closes its published delivery remains accessible.
+The central timeline shows instructions, agent messages, stages, decisions, deliveries, failures and controls in host event order. A stage folds the work nodes one submission or driver expansion added into titled steps with progress; commands, inputs and tool calls stay behind the sources view. A failure carries a reason category (`denied`, `authority`, `exit`, `output`, `budget`, `declaration`, `unknown`, `other`) that the page shows as readable text; the raw error remains in the node's sources. Select a waiting decision to answer inline. Inspect execution details through the graph and sources controls. After the task closes its published delivery remains accessible.
 
 Run `python3 tests/markdown_review_smoke.py --browser` for the controlled backend and desktop/mobile Chrome checks. Add `--real` to use the configured local Ollama model. Both modes exercise the compatible case and both conflict answers, and apply each diff to verify the delivered bytes.
 

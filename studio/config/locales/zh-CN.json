@@ -113,6 +113,24 @@
     "agent": {
       "running": "Agent 工作中…",
       "failed": "Agent 出错：{detail}"
+    },
+    "stage": {
+      "agent": "Agent 着手",
+      "driver": "后续步骤",
+      "running": "进行中 {done}/{total}",
+      "done": "已完成 {total} 步",
+      "failed": "有步骤失败（{done}/{total} 完成）",
+      "stopped": "已停止（{done}/{total} 完成）"
+    },
+    "failure": {
+      "denied": "授权被拒绝或流向不被允许",
+      "authority": "授权已过期，需要重新开始这一轮",
+      "exit": "容器里的程序异常退出",
+      "output": "程序没有产出约定的文件",
+      "budget": "超出了任务的额度或大小限制",
+      "declaration": "镜像的声明不符合要求，需要重新准入",
+      "unknown": "结果未知，An 不会自动重试",
+      "other": "执行失败，可在来源中查看详情"
     }
   }
 }
