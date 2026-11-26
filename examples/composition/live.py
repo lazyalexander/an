@@ -30,14 +30,14 @@ def expected_outputs(case):
 
 
 class Runtime:
-    def __init__(self, directory, binary):
+    def __init__(self, directory, binary, spools=SPOOLS):
         self.binary = binary
         self.directory = directory
         self.env = {**os.environ, "AN_HOME": str(directory / "registry")}
         self.env.pop("AN_TURN", None)
         self.env.pop("AN_AGENT_TOKEN", None)
         self.task = None
-        self.images = build(directory / "images", binary, self.cli)
+        self.images = build(directory / "images", binary, self.cli, spools)
         grants = [arg for image in self.images.values() for arg in ("--spool", image)]
         self.workspace = self.cli("workspace", "create", *grants)["workspace"]
 

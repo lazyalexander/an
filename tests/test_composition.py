@@ -13,7 +13,8 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "examples/composition"))
-from catalog import COMMAND, SPOOLS, manifest
+from relay import reference
+from catalog import SPOOLS, manifest
 from evaluate import CASES
 from live import expected_outputs
 
@@ -25,45 +26,12 @@ IMAGES = {name: f"fixture-{n}@sha256:{n:064x}" for n, name in enumerate(SPOOLS)}
 BINARY = ROOT / "target/debug/an"
 
 
-def reference(case):
-    def output(name):
-        return {"node": "n-" + name, "port": SPOOLS[name]["output"]}
-
-    nodes = []
-    for name, parent in case["parents"].items():
-        spec = SPOOLS[name]
-        source = {"input": parent} if parent in case["inputs"] else output(parent)
-        nodes.append(
-            dict(
-                id="n-" + name,
-                kind="run",
-                spool=IMAGES[name],
-                argv=COMMAND.copy(),
-                inputs={spec["input"]: source},
-                outputs=[spec["output"]],
-            )
-        )
-    if case["deliver"]:
-        nodes.append(
-            dict(
-                id="results",
-                kind="delivery",
-                outputs=[],
-                inputs={str(i): output(name) for i, name in enumerate(case["deliver"])},
-            )
-        )
-    return {
-        "decision": "plan" if nodes else "unsupported",
-        "nodes": list(reversed(nodes)),
-    }
-
-
 class CompositionTests(unittest.TestCase):
     def test_cases_and_oracles(self):
         for case in CASES:
             with self.subTest(case=case["name"]):
                 self.assertTrue(
-                    all(assess_safely(reference(case), case, IMAGES).values())
+                    all(assess_safely(reference(case, IMAGES), case, IMAGES).values())
                 )
                 self.assertEqual(
                     set(expected_outputs(case)),
@@ -76,7 +44,7 @@ class CompositionTests(unittest.TestCase):
 
     def test_right_names_can_still_be_wired_wrong(self):
         case = next(c for c in CASES if c["name"] == "flat-colour")
-        plan = reference(case)
+        plan = reference(case, IMAGES)
         bad = copy.deepcopy(plan)
         paint = next(n for n in bad["nodes"] if n["id"] == "n-painting")
         paint["inputs"]["lines"] = {"node": "n-sketch", "port": "sketch.svg"}
@@ -149,7 +117,7 @@ class CompositionTests(unittest.TestCase):
                 graph = mcp.tool("an_graph_state", {})
                 args = {
                     "base_revision": graph["revision"],
-                    "nodes": reference(case)["nodes"],
+                    "nodes": reference(case, IMAGES)["nodes"],
                     "idempotency_key": "once",
                 }
                 receipt = mcp.tool("an_graph_submit", args)
