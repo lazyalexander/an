@@ -38,6 +38,8 @@ cargo build --locked
 python3 examples/composition/relay.py --out /tmp/an-relay-001
 ```
 
+To replay the flat-colour answer from a planning trial, add `--plan /tmp/an-plan-001/flat-colour/plan.json` to the relay command and use a fresh output directory. The host receives the recorded nodes with catalog names resolved to registered image digests.
+
 For execution with Codex on an Apple Container host:
 
 ```sh
