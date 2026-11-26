@@ -62,7 +62,7 @@ The person controls a task through the host, never through the agent. Pass `{"ac
 
 ## Starting from a sentence
 
-Run Studio for a workspace instead of a task: `(cd studio && python3 -m orchestrator --workspace WORKSPACE_ID --an ../target/debug/an)`. The page opens on a text box. Typing a sentence binds a fresh session, creates the task, begins its turn and records the sentence as the task's first instruction. Studio prints one `agent:` line to its own stdout with the task ID and the MCP server configuration, including that turn, for the operator's agent harness. The browser never receives the turn. Use **新任务** to return to the text box.
+Run Studio for a workspace instead of a task: `(cd studio && python3 -m orchestrator --workspace WORKSPACE_ID --an ../target/debug/an)`. The page opens on a text box. Typing a sentence binds a fresh session, creates the task, begins its turn and records the sentence as the task's first instruction. A detached local controller owns the turn, MCP configuration and runner. Restarting Studio reconnects to the controller for the same registry, workspace and harness. From the `studio` directory, the operator can also use `python3 -m an_host --workspace WORKSPACE_ID --an ../target/debug/an serve` to launch it headless, `start "instruction"` to create a task, `agent TASK_ID` to print its private MCP configuration, and `stop` to shut down that controller. Use the same binary and agent configuration across clients. Workspace task credentials are stored under `$AN_HOME/controllers/` and the browser receives only the task ID. Use **新任务** to return to the text box.
 
 ## Image model nodes
 
@@ -77,11 +77,11 @@ The sketch experiment uses this path: `driver.py sketch SPOOL --model=ALIAS` add
 
 ## Agent runner
 
-Studio wakes the task's agent itself when `agent.command` is set in its configuration (see [Configuration](configuration.md)). The runner watches each served task and wakes the agent on an instruction, an answered surface, or resuming the task. Events that arrive while the agent is still working are collected into the next wake.
+The local controller wakes the task's agent when `agent.command` is set in its configuration (see [Configuration](configuration.md)). The runner watches each served task and wakes the agent on an instruction, an answered surface, or resuming the task. Events that arrive while the agent is still working are collected into the next wake.
 
 The command is harness-neutral. It starts in the task's private state directory under `$AN_HOME/agents/TASK`, which persists across wakes so the agent can resume its session. Its stdin is one JSON object with `task`, `cursor`, the triggering `events`, `mcp_servers` (An MCP for this task, including its turn) and `state_dir`. Its environment holds only `HOME`, `PATH`, `TMPDIR`, the names in `agent.env`, and `AN_HOME`, `AN_TURN`, `AN_TASK`, `AN_BINARY`. Exit 0 means the wake was handled.
 
-A wake is delivered at most once: the runner records the cursor before starting the agent, so a restarted Studio never repeats a wake. A failed wake is shown in the page header and is not retried; the person's next action wakes the agent again. While the task is paused the runner holds the events and wakes once on resume. Stop also ends the agent's current wake.
+A wake is delivered at most once: the runner records the cursor before starting the agent, so a restarted controller never repeats a wake. A failed wake is shown in the page header and is not retried; the person's next action wakes the agent again. While the task is paused the runner holds the events and wakes once on resume. Stop also ends the agent's current wake.
 
 `examples/agents/codex_agent.py` adapts the Codex CLI: Codex runs with shell, web and file tools disabled, sees only `an_skill`, `an_graph_state`, `an_graph_submit` and `an_graph_say`, and resumes one thread per task.
 
