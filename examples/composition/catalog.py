@@ -9,6 +9,7 @@ import hashlib
 
 HERE = Path(__file__).resolve().parent
 SPOOLS = tomllib.loads((HERE / "catalog.toml").read_text())
+CONTAINER = "/usr/local/bin/container"
 COMMAND = ["python3", "/spool/code/process.py"]
 
 
@@ -61,6 +62,6 @@ def build(directory, binary, cli, names=SPOOLS):
         for path in sorted(context.iterdir()):
             digest.update(hashlib.sha256(path.read_bytes()).digest())
         tag = f"an-composition-{name}:{digest.hexdigest()[:12]}"
-        subprocess.run(["container", "build", "--tag", tag, str(context)], check=True)
+        subprocess.run([CONTAINER, "build", "--tag", tag, str(context)], check=True)
         images[name] = cli("register", tag)
     return images
