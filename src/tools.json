@@ -352,6 +352,10 @@
             "type": "string"
           }
         },
+        "instruction_cursor": {
+          "type": "integer",
+          "description": "Cursor of the current user instruction that prompted this submission."
+        },
         "supersede": {
           "type": "array",
           "items": {

@@ -30,7 +30,7 @@ fn bindings(db: &Connection, task: &str, graph: &Value, node: &Value) -> Result<
     Ok(Some(result))
 }
 
-pub(super) fn paused(graph: &Value) -> bool {
+pub(crate) fn paused(graph: &Value) -> bool {
     graph["control"] == "paused"
 }
 
@@ -98,7 +98,19 @@ pub(super) fn advance(
             {
                 state = json!({"id":uid(),"attempt":state["attempt"].as_u64().unwrap()+1,"status":"queued"});
             }
-            if state["status"] == "cleanup_pending" {
+            if state["status"] == "cancel_pending" {
+                let run = instances::dispatch_locked(
+                    db,
+                    task,
+                    "status",
+                    &json!({"run":state["id"]}),
+                    lock,
+                )?;
+                if run["status"] != "cancelled" {
+                    continue;
+                }
+                state["status"] = json!("cancelled");
+            } else if state["status"] == "cleanup_pending" {
                 state["status"] = state["after_cleanup"].take();
             } else {
                 if !matches!(
