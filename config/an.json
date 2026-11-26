@@ -6,6 +6,7 @@
   "transfer_limit_bytes": 33554432,
   "graph_expansion_budget": 256,
   "instruction_max_bytes": 4096,
+  "agent_message_max_bytes": 4096,
   "model_aliases": {
     "local": "qwen3:8b"
   },

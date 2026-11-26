@@ -51,6 +51,7 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
     match action {
         "submit" => return dispatch(task, "graph_submit", args),
         "state" => return dispatch(task, "graph_state", args),
+        "say" => return dispatch(task, "graph_say", args),
         _ => {}
     }
     let mut db = connect()?;
@@ -475,6 +476,12 @@ fn timeline(graph: &Value, authority: Option<&str>) -> Vec<Value> {
             "instruction" if data["authority"].as_str() == authority => {
                 row["kind"] = json!("instruction");
                 row["text"] = data["text"].clone();
+            }
+            "message" if event["actor"] == "agent" => {
+                row["kind"] = json!("message");
+                row["text"] = data["text"].clone();
+                row["purpose"] = data["purpose"].clone();
+                row["reply_to"] = data["reply_to"].clone();
             }
             "waiting"
                 if (node["kind"] == "surface" || node["kind"] == "native")

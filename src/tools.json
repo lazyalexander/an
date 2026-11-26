@@ -384,5 +384,20 @@
       "required": [],
       "additionalProperties": false
     }
+  },
+  {
+    "name": "an_graph_say",
+    "description": "Post a message to the person in the task timeline. Use for progress, a question or a result; ask for decisions with surfaces instead. Pass reply_to with an instruction's event cursor when answering it.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "text": {"type": "string"},
+        "purpose": {"type": "string", "enum": ["progress", "question", "result"]},
+        "reply_to": {"type": "integer"},
+        "idempotency_key": {"type": "string"}
+      },
+      "required": ["text", "idempotency_key"],
+      "additionalProperties": false
+    }
   }
 ]

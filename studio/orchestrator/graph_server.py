@@ -1,5 +1,13 @@
-"""Loopback projection of one Rust-owned task and its published workspace deliveries."""
+"""Loopback projection of Rust-owned tasks and their published workspace deliveries.
+
+With a workspace, Studio is also the controller that starts tasks from a
+sentence: it creates the task, begins its turn and records the sentence as the
+first instruction. The turn stays in this process and is printed only to the
+operator's stdout for the agent harness; the browser never receives it.
+"""
 import json
+import os
+import uuid
 import secrets
 import subprocess
 import webbrowser
@@ -14,24 +22,41 @@ ACTIONS = {"view", "panel", "viewed", "draft", "respond", "open", "deliveries", 
            "control", "instruct"}
 
 
-def serve(task, binary, port, launch=False, config=None):
+def serve(task, binary, port, launch=False, config=None, workspace=None, harness="studio"):
     config = config or studio_config.load()
     settings = config["graph"]
     # Public, like the page assets: text and timing only, never the session key.
     page_config = json.dumps({"locale": config["locale"],
                               "strings": studio_config.strings(config["locale"])["graph"],
-                              "settings": {k: settings[k] for k in ("poll_ms", "panel_timeout_ms")}}).encode()
+                              "settings": {k: settings[k] for k in ("poll_ms", "panel_timeout_ms")},
+                              "task": task, "workspace": workspace is not None}).encode()
+    # task -> turn credential held by this controller (None: inherit AN_TURN).
+    turns = {task: None} if task else {}
     key = secrets.token_urlsafe(32)
 
-    def an(command, body):
+    def an(command, body, turn=None):
+        env = {**os.environ, "AN_TURN": turn} if turn else None
         proc = subprocess.run([binary, *command], input=json.dumps(body), text=True,
-                              capture_output=True, check=False)
+                              capture_output=True, check=False, env=env)
         if proc.returncode:
             raise ValueError(proc.stderr.strip() or "An command failed")
         return json.loads(proc.stdout)
 
-    def graph(action, body):
-        return an(["graph", "--task", task, action], body)
+    def start(text):
+        """Create a workspace task whose first instruction is the person's sentence."""
+        session = uuid.uuid4().hex
+        selector = ["--harness", harness, "--session", session]
+        bound = an(["workspace", "bind", workspace, *selector], {})
+        created = an(["task", "new", *selector], {})["task"]
+        turn = an(["permission", "begin", "--task", created], {})["turn"]
+        an(["graph", "--task", created, "instruct"], {"text": text, "revision": 0}, turn)
+        turns[created] = turn
+        mcp = bound["mcp_servers"]
+        for server in mcp.values():
+            server.setdefault("env", {})["AN_TURN"] = turn
+        # Operator channel for the agent harness; never sent to the browser.
+        print("agent: " + json.dumps({"task": created, "mcp_servers": mcp}), flush=True)
+        return {"task": created}
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *_):
@@ -65,6 +90,7 @@ def serve(task, binary, port, launch=False, config=None):
             if not secrets.compare_digest(self.headers.get("Authorization", ""), "Bearer " + key):
                 return self.send(403, b'{"error":"Invalid Studio session"}')
             action = self.path.removeprefix("/api/")
+            current = self.headers.get("X-An-Task") or task
             try:
                 size = int(self.headers.get("Content-Length", 0))
                 if not 0 < size <= settings["max_body_bytes"]:
@@ -72,6 +98,20 @@ def serve(task, binary, port, launch=False, config=None):
                 body = json.loads(self.rfile.read(size))
                 if not isinstance(body, dict):
                     raise ValueError("Expected object")
+                if action == "start":
+                    if workspace is None:
+                        raise ValueError("Studio was not started for a workspace")
+                    text = body.get("text")
+                    if not isinstance(text, str) or not text.strip():
+                        raise ValueError("Empty instruction")
+                    return self.send(200, json.dumps(start(text)).encode())
+                if current not in turns:
+                    raise ValueError("Unknown task")
+                turn = turns[current]
+
+                def graph(name, args):
+                    return an(["graph", "--task", current, name], args, turn)
+
                 if action == "view":
                     result = graph("view", {})
                     if result["authorized"] and result["revision"]:
@@ -85,14 +125,14 @@ def serve(task, binary, port, launch=False, config=None):
                     result["permissions"] = graph("requests", {}) if result["authorized"] else []
                     result["deliveries"] = graph("deliveries", {})
                 elif action == "intent-decide":
-                    result = an(["permission","intent-decide","--task",task,"--request-id",body["id"],
-                                 "--decision",json.dumps(body["decisions"])], {})
+                    result = an(["permission","intent-decide","--task",current,"--request-id",body["id"],
+                                 "--decision",json.dumps(body["decisions"])], {}, turn)
                 elif action == "decide":
                     if body["decision"] not in ("deny", "once") or body["request"] not in {
                             item["id"] for item in graph("requests", {})}:
                         raise ValueError("Unknown permission decision")
-                    result = an(["permission", "decide", "--task", task, "--request-id",
-                                 body["request"], "--decision", body["decision"]], {})
+                    result = an(["permission", "decide", "--task", current, "--request-id",
+                                 body["request"], "--decision", body["decision"]], {}, turn)
                 elif action in ACTIONS:
                     result = graph(action, body)
                 elif action == "evidence":

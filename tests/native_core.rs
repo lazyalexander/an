@@ -1376,3 +1376,47 @@ fn stop_reconciles_idle_instance_for_an_indeterminate_attempt() {
         "cancelled"
     );
 }
+
+#[test]
+fn agent_messages_reach_the_person_once_and_never_answer_surfaces() {
+    let mut f = Fixture::graph_task();
+    let asked = f
+        .graph("instruct", json!({"text":"做一张海报","revision":0}))
+        .unwrap();
+    let cursor = asked["cursor"].clone();
+    let say = json!({"text":"收到，先出两张草图","purpose":"progress","reply_to":cursor,"idempotency_key":"m1"});
+    let first = f.graph("say", say.clone()).unwrap();
+    assert_eq!(first, f.graph("say", say.clone()).unwrap(), "idempotent");
+    let mut changed = say.clone();
+    changed["text"] = json!("different");
+    assert!(f.graph("say", changed).unwrap_err().contains("Idempotency"));
+
+    let view = f.graph("view", json!({})).unwrap();
+    let messages: Vec<_> = view["timeline"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|r| r["kind"] == "message")
+        .collect();
+    assert_eq!(messages.len(), 1);
+    assert_eq!(messages[0]["text"], "收到，先出两张草图");
+    assert_eq!(messages[0]["reply_to"], cursor);
+
+    for bad in [
+        json!({"text":"  ","idempotency_key":"e"}),
+        json!({"text":"x","purpose":"decide","idempotency_key":"p"}),
+        json!({"text":"x","reply_to":999,"idempotency_key":"r"}),
+    ] {
+        assert!(f.graph("say", bad).is_err());
+    }
+    // Without the turn the agent cannot speak, and the timeline hides messages.
+    f.turn = None;
+    assert!(f
+        .graph("say", json!({"text":"x","idempotency_key":"n"}))
+        .is_err());
+    assert!(!f
+        .graph("view", json!({}))
+        .unwrap()
+        .to_string()
+        .contains("先出两张草图"));
+}

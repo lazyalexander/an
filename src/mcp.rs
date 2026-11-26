@@ -118,7 +118,7 @@ impl Gateway {
         if let Some(tool) = self.builtins.get(name) {
             validate_builtin(&tool.input_schema, &args)?;
             let op = &name[3..];
-            let mut value = if matches!(op, "graph_submit" | "graph_state") {
+            let mut value = if matches!(op, "graph_submit" | "graph_state" | "graph_say") {
                 crate::graph::dispatch(&self.task, op, &args)?
             } else if op == "deliveries" {
                 deliveries(&connect()?, &self.task, args["after"].as_i64().unwrap_or(0))?

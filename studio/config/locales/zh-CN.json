@@ -1,33 +1,99 @@
 {
   "graph": {
-    "intent": {"metadata":"任务图元数据","workspace":"当前交付位置","title":"本轮数据授权","input":"读取输入","handoff":"传递产物","preview":"在界面预览","publish":"发布","model":"本地模型调用","allow":"本轮允许","ask":"逐项询问","deny":"本轮拒绝","scope":"查看完整范围","submit":"确认本轮授权"},
+    "intent": {
+      "metadata": "任务图元数据",
+      "workspace": "当前交付位置",
+      "title": "本轮数据授权",
+      "input": "读取输入",
+      "handoff": "传递产物",
+      "preview": "在界面预览",
+      "publish": "发布",
+      "model": "本地模型调用",
+      "allow": "本轮允许",
+      "ask": "逐项询问",
+      "deny": "本轮拒绝",
+      "scope": "查看完整范围",
+      "submit": "确认本轮授权"
+    },
     "title": "An · 任务工作区",
     "brand": "An Studio",
     "heading": "任务工作区",
-    "timeline": {"instruction":"指令","decision":"决定","delivery":"交付","failure":"失败","paused":"任务已暂停","resumed":"任务已恢复","stopped":"任务已停止","closed":"任务已结束"},
-    "nav": {"timeline":"任务时间线","activity": "任务活动", "deliveries": "工作区交付", "graph": "完整流程", "controls": "任务控制"},
+    "timeline": {
+      "instruction": "指令",
+      "decision": "决定",
+      "delivery": "交付",
+      "failure": "失败",
+      "paused": "任务已暂停",
+      "resumed": "任务已恢复",
+      "stopped": "任务已停止",
+      "closed": "任务已结束",
+      "message": "Agent",
+      "question": "Agent 提问"
+    },
+    "nav": {
+      "timeline": "任务时间线",
+      "activity": "任务活动",
+      "deliveries": "工作区交付",
+      "graph": "完整流程",
+      "controls": "任务控制"
+    },
     "sources": "查看来源",
     "status": {
-      "queued": "等待执行", "running": "执行中", "waiting": "等待回应", "saving": "等待文档保存",
-      "done": "已完成", "failed": "失败", "unknown": "结果未知", "superseded": "已替换",
-      "permission_required": "等待授权", "cancelled": "已取消"
+      "queued": "等待执行",
+      "running": "执行中",
+      "waiting": "等待回应",
+      "saving": "等待文档保存",
+      "done": "已完成",
+      "failed": "失败",
+      "unknown": "结果未知",
+      "superseded": "已替换",
+      "permission_required": "等待授权",
+      "cancelled": "已取消"
     },
-    "native": {"awaiting_adapter":"等待原生编辑器领取文档", "editing":"等待在原生编辑器中完成并交付", "save_failed":"请在原生编辑器中重新保存"},
+    "native": {
+      "awaiting_adapter": "等待原生编辑器领取文档",
+      "editing": "等待在原生编辑器中完成并交付",
+      "save_failed": "请在原生编辑器中重新保存"
+    },
     "panel": {
-      "submit": "提交决定", "basic": "基础表单", "custom": "专用面板",
-      "left": "面板已离开绑定的文档", "responded": "回应已提交", "timeout": "面板加载超时", "reload": "重新加载"},
-    "permission": {"request": "授权 {operation} · {scope} ", "details": "请求详情", "allow_once": "允许一次", "deny": "拒绝"},
+      "submit": "提交决定",
+      "basic": "基础表单",
+      "custom": "专用面板",
+      "left": "面板已离开绑定的文档",
+      "responded": "回应已提交",
+      "timeout": "面板加载超时",
+      "reload": "重新加载"
+    },
+    "permission": {
+      "request": "授权 {operation} · {scope} ",
+      "details": "请求详情",
+      "allow_once": "允许一次",
+      "deny": "拒绝"
+    },
     "task": {
-      "awaiting_submission": "等待任务提交", "awaiting_authority": "等待有效的宿主授权",
-      "delivered": "已交付", "delivery_files": "交付文件",
-      "resume_from": "从此版本新建任务", "new_task": "新任务 {task}"
+      "awaiting_submission": "等待任务提交",
+      "awaiting_authority": "等待有效的宿主授权",
+      "delivered": "已交付",
+      "delivery_files": "交付文件",
+      "resume_from": "从此版本新建任务",
+      "new_task": "新任务 {task}"
     },
     "evidence": {
-      "code": "镜像代码", "work": "工作目录", "input": "输入快照", "output": "模型结果", "log": "执行日志",
-      "waiting": "等候宿主授权，请在授权后再次打开。", "empty": "空目录", "binary": "{name} · {bytes} bytes"
+      "code": "镜像代码",
+      "work": "工作目录",
+      "input": "输入快照",
+      "output": "模型结果",
+      "log": "执行日志",
+      "waiting": "等候宿主授权，请在授权后再次打开。",
+      "empty": "空目录",
+      "binary": "{name} · {bytes} bytes"
     },
     "control": {
-      "closed": "已关闭", "paused": "已暂停", "pause": "暂停", "resume": "继续", "stop": "停止",
+      "closed": "已关闭",
+      "paused": "已暂停",
+      "pause": "暂停",
+      "resume": "继续",
+      "stop": "停止",
       "stop_confirm": "取消所有未完成的工作并暂停任务？"
     },
     "instruction": {
@@ -35,6 +101,14 @@
       "send": "发送",
       "sent": "已转述给 agent",
       "stale": "已转述；任务在你看到之后已更新，agent 会知道这条指令基于旧版本"
+    },
+    "start": {
+      "heading": "新任务",
+      "prompt": "说说你想做什么，An 会创建任务并交给 agent。",
+      "send": "开始",
+      "started": "任务已创建，等待 agent 接手",
+      "new": "新任务",
+      "placeholder": "例如：做一张秋天主题的海报，暖色调"
     }
   }
 }
