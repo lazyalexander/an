@@ -82,7 +82,7 @@ impl Transfer {
         artifacts::stage(&self.path.join("input"), &files, false)?;
         Ok(json!({"input":self.path.join("input"),"output":self.path.join("result")}))
     }
-    pub fn finish(&self, db: &Connection, mut provenance: Value) -> Result<Value> {
+    pub fn finish(&self, db: &rusqlite::Transaction, mut provenance: Value) -> Result<Value> {
         // Read only the inode created by An. Never resolve a bridge-supplied path.
         let limit = crate::config::load()?.limit("transfer_limit_bytes");
         let mut bytes = Vec::new();

@@ -218,7 +218,7 @@ fn layout(reader: impl Read) -> Result<Value> {
     result["code_omissions"] = json!(omissions);
     Ok(result)
 }
-pub fn register(db: &Connection, reference: &str) -> Result<String> {
+pub fn register(db: &mut Connection, reference: &str) -> Result<String> {
     ensure!(
         !reference.is_empty() && !reference.starts_with('-'),
         "Invalid image reference"
@@ -355,13 +355,15 @@ pub fn register(db: &Connection, reference: &str) -> Result<String> {
         .unwrap()
         .remove("code_files")
         .context("Missing code snapshot")?;
-    record["code_revision"] = json!(revision(db, &code)?);
+    let tx = db.transaction()?;
+    record["code_revision"] = json!(revision(&tx, &code)?);
     record["spec"] = json!("spool/v2");
     record["image"] = json!(image);
     record["platform"] = info["platform"].clone();
     record["variant"] = info["variant"].clone();
-    put(db, "admission", d, &record)?;
-    put(db, "image", &image, &json!(image))?;
+    put(&tx, "admission", d, &record)?;
+    put(&tx, "image", &image, &json!(image))?;
+    tx.commit()?;
     Ok(image)
 }
 

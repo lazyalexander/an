@@ -1638,3 +1638,97 @@ fn agent_messages_reach_the_person_once_and_never_answer_surfaces() {
         .to_string()
         .contains("先出两张草图"));
 }
+
+#[test]
+fn closing_collects_private_revisions_and_preserves_delivery_lineage() {
+    let f = Fixture::graph_task();
+    let live = [
+        "shared",
+        "published",
+        "bound",
+        "driver-input",
+        "model-output",
+        "save-input",
+        "old-code",
+        "direct-input",
+        "direct-output",
+        "direct-work",
+        "active-port",
+        "pending-work",
+    ];
+    let dead = ["scratch", "discarded-output"];
+    for id in live.iter().chain(&dead) {
+        f.insert("revision", id, json!({"data":"cGF5bG9hZA=="}));
+    }
+    f.insert(
+        "task",
+        "task",
+        json!({"inputs":{"draft":"scratch","source":"shared"},"work":{}}),
+    );
+    f.insert("task", "other", json!({"inputs":{"same":"shared"}}));
+    f.insert(
+        "graph",
+        "other",
+        json!({"activity":{"worker":{"outputs":{"port":{"revision":"active-port"}}}}}),
+    );
+    f.insert(
+        "task",
+        "pending",
+        json!({"closed":true,"work":{"spool":"pending-work"}}),
+    );
+    f.insert(
+        "instance",
+        "pending-i",
+        json!({"task":"pending","status":"cleanup_pending"}),
+    );
+    let graph = json!({
+        "nodes":{"driver":{},"save":{},"model":{},"choice":{"save":{"node":"save"}},
+                 "delivery":{"inputs":{"a":{"node":"choice","port":"document"}},"after":["model"]},
+                 "discarded":{}},
+        "drivers":{"choice":"driver"},
+        "activity":{"driver":{"status":"done","evidence":{"input":"driver-input","code":"old-code"}},
+                    "save":{"status":"done","evidence":{"input":"save-input"}},
+                    "model":{"status":"done","evidence":{"output":"model-output"}},
+                    "choice":{"status":"done"},"delivery":{"status":"done"},
+                    "discarded":{"status":"failed","evidence":{"output":"discarded-output"}}},
+        "events":[]
+    });
+    f.insert("graph", "task", graph);
+    f.insert(
+        "graph_delivery",
+        "group",
+        json!({"task":"task","node":"delivery","revision":"published",
+        "bindings":{"a":{"revision":"bound"}}}),
+    );
+    f.insert(
+        "run",
+        "direct",
+        json!({"task":"task","status":"delivered","input":"direct-input",
+        "output":"direct-output","result_work":"direct-work"}),
+    );
+    f.graph("finish", json!({})).unwrap();
+    let report = || -> Value {
+        let value: String =
+            f.db.query_row(
+                "SELECT body FROM objects WHERE kind='revision_gc' AND id='task'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        serde_json::from_str(&value).unwrap()
+    };
+    let first = report();
+    assert_eq!(first["revisions_removed"], 2);
+    for id in live.iter().chain(&dead) {
+        let exists: bool =
+            f.db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM objects WHERE kind='revision' AND id=?)",
+                [id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(exists, live.contains(id), "{id}");
+    }
+    f.graph("finish", json!({})).unwrap();
+    assert_eq!(report(), first);
+}

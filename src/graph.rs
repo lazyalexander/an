@@ -2,6 +2,7 @@ mod host;
 pub mod model;
 mod scheduler;
 mod sources;
+pub(crate) use sources::lineage;
 mod validation;
 
 pub use host::host;

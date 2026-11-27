@@ -180,7 +180,7 @@ fn run() -> Result<()> {
                     None,
                 )?;
             }
-            println!("{}", runtime::register(&store::connect()?, &image)?);
+            println!("{}", runtime::register(&mut store::connect()?, &image)?);
             Ok(())
         }
         Core::Export {

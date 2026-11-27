@@ -759,7 +759,8 @@ mod image_tests {
     fn image_requests_need_a_prompt_a_known_size_and_a_png() {
         let dir = std::env::temp_dir().join(uid());
         std::env::set_var("AN_HOME", &dir);
-        let db = connect().unwrap();
+        let mut registry = connect().unwrap();
+        let db = registry.transaction().unwrap();
         let file =
             |name: &str, data: &[u8]| revision(&db, &json!({name: STANDARD.encode(data)})).unwrap();
         let request = |v: Value| file("request.json", v.to_string().as_bytes());

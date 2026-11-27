@@ -42,6 +42,11 @@ pub fn wake(task: &str) -> Result<()> {
         return Ok(());
     }
     let lock = instances::lock(&db, task)?;
+    if get(&db, "task", task)?["closed"] == true {
+        // A cancelled model send can settle after finish has released its turn.
+        super::model::reconcile_sends(&db, task)?;
+        return crate::store::gc::after_finish(&mut db, task);
+    }
     if permission::current(&db, task).is_err() {
         return super::model::reconcile_sends(&db, task);
     }
@@ -209,6 +214,33 @@ pub(super) fn advance(
     Ok(())
 }
 
+/// Publish port revisions and their owner together. Another task may finish
+/// and collect revisions before the scheduler persists its graph activity.
+fn project_run_outputs(
+    db: &mut Connection,
+    run: &Value,
+    attempt: &str,
+    revision_id: &str,
+) -> Result<Value> {
+    if let Some(outputs) = run.get("port_revisions") {
+        return Ok(outputs.clone());
+    }
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let files = get(&tx, "revision", revision_id)?;
+    let mut outputs = json!({});
+    for name in run["outputs"].as_array().context("Missing outputs")? {
+        let name = name.as_str().context("Invalid output")?;
+        let entry = files.get(name).context("Missing output")?;
+        let id = revision(&tx, &json!({name:entry}))?;
+        outputs[name] = json!({"revision":id, "spool":run["spool"], "run":attempt});
+    }
+    // Keep the run rowid used by the delivery listing cursor.
+    tx.execute("UPDATE objects SET body=json_set(body,'$.port_revisions',json(?)) WHERE kind='run' AND id=?",
+        rusqlite::params![outputs.to_string(), attempt])?;
+    tx.commit()?;
+    Ok(outputs)
+}
+
 fn accept_expansion(
     db: &mut Connection,
     task: &str,
@@ -335,16 +367,7 @@ fn step(
                 "running" | "cancel_pending" => state["status"] = json!("running"),
                 "completed" | "awaiting_publication" | "delivered" => {
                     if let Some(rev) = run["candidate"].as_str().or(run["output"].as_str()) {
-                        let files = get(db, "revision", rev)?;
-                        for name in run["outputs"].as_array().into_iter().flatten() {
-                            let name = name.as_str().context("Invalid output")?;
-                            let rev = revision(
-                                db,
-                                &json!({name:files.get(name).context("Missing output")?}),
-                            )?;
-                            state["outputs"][name] =
-                                json!({"revision":rev,"spool":run["spool"],"run":attempt});
-                        }
+                        state["outputs"] = project_run_outputs(db, &run, &attempt, rev)?;
                     }
                     state["status"] = json!("done");
                 }
