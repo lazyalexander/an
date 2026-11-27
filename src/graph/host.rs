@@ -439,6 +439,10 @@ fn control(
                     state["after_cleanup"] = json!("cancelled");
                     continue;
                 }
+                state
+                    .as_object_mut()
+                    .context("Invalid activity")?
+                    .remove("waiting_reason");
                 state["status"] = json!("cancelled");
                 cancelled.push(id.clone());
             }

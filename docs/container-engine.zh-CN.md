@@ -50,4 +50,12 @@ CLI / MCP / Studio
 
 通过 `an status --task <task> <run>` 或 MCP 的 `an_status` 查询自己的运行。为兼容现有轮询客户端，排队仍显示 `status: running`，同时带有 `waiting: {"reason":"execution_capacity","position":1}`；1 表示排在首位。查询仅提供队列位置。使用 `python3 tests/apple_capacity_smoke.py <本地镜像>` 验证三个任务争用一个槽、前项取消后接续和最终清理。
 
-后续资源预算包括 CPU、内存、磁盘和输出体积，以及已加载实例的容量。中间版本回收需要先实现活跃任务及已发布交付的引用追踪。资源耗尽、长时间压力和宿主断电需要单独验证。
+## 已加载实例容量
+
+`max_loaded_instances` 默认 8，按 `AN_HOME` 统计任务实例。普通实例、空闲实例、图的专用驱动实例均占用一个名额。新实例在启动容器前，通过同一 SQLite 写事务检查上限并写入 loading 记录。复用已有实例不再占用名额。已停止、状态未知和清理中的实例继续占用名额，直到成功卸载。降低上限后，已有任务可以继续执行，新增实例等待容量释放。独立的镜像准入探测容器和 An 以外启动的容器不计入此值。
+
+直接调用 `load` 满额时返回可重试错误。图节点保持 `queued`，在 `graph state` 的 activity 中返回 `waiting_reason.reason = instance_capacity` 和当前上限。持有方卸载实例或结束任务后，下一次图调度会重试同一次尝试。宿主保留空闲实例供复用；如一个任务已占满容量，又需要加载另一种 spool，可通过 CLI 或 MCP 卸载已用完的实例。实例名额按可用时申请，不提供跨任务 FIFO 保证。
+
+参考机验收命令为 `python3 tests/apple_instance_capacity_smoke.py <composition painting 镜像>`。该测试让两个任务并发申请同一个名额，验证原实例复用、图节点等待原因和卸载后继续执行。
+
+后续资源预算包括 CPU、内存、磁盘和输出体积。中间版本回收需要先实现活跃任务及已发布交付的引用追踪。资源耗尽、长时间压力和宿主断电需要单独验证。

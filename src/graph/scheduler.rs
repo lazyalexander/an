@@ -133,12 +133,24 @@ pub(super) fn advance(
                     continue;
                 };
                 permission::current(db, task)?;
+                state
+                    .as_object_mut()
+                    .context("Invalid activity")?
+                    .remove("waiting_reason");
                 if let Err(error) = step(db, task, graph, node, &bound, &mut state, lock) {
                     if permission::current(db, task).is_err() {
                         return Ok(());
                     }
-                    state["status"] = json!("failed");
-                    state["error"] = json!(error.to_string());
+                    if let Some(limit) =
+                        error.downcast_ref::<crate::engine::capacity::InstanceLimit>()
+                    {
+                        state["status"] = json!("queued");
+                        state["waiting_reason"] =
+                            json!({"reason":"instance_capacity","limit":limit.0});
+                    } else {
+                        state["status"] = json!("failed");
+                        state["error"] = json!(error.to_string());
+                    }
                 }
             }
             if node["kind"] == "expand"
@@ -346,9 +358,11 @@ fn step(
         let instance = if node["kind"] == "expand"
             && (state["instance"].is_null() || state["instance"] == format!("driver-{attempt}"))
         {
-            state["instance"] = json!(format!("driver-{attempt}"));
-            graph["activity"][field(node, "id")?] = state.clone();
-            put(db, "graph", task, graph)?;
+            if state["instance"].is_null() {
+                state["instance"] = json!(format!("driver-{attempt}"));
+                graph["activity"][field(node, "id")?] = state.clone();
+                put(db, "graph", task, graph)?;
+            }
             instances::dispatch_locked(
                 db,
                 task,

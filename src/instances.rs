@@ -204,7 +204,7 @@ fn load(
         return Ok(prior);
     }
     let mut i = json!({"id":id,"name":format!("an-{id}"),"task":task,"spool":image,"platform":platform,"status":"loading","dedicated":dedicated,"owner":owner,"intent":"load","active":null});
-    save(db, "instance", &i)?;
+    capacity::reserve_instance(db, &i, crate::config::load()?.limit("max_loaded_instances"))?;
     let setup = (|| -> Result<()> {
         let p = path(&i)?;
         fs::create_dir_all(&p)?;
