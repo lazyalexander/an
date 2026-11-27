@@ -221,7 +221,8 @@ fn load(
                 .is_some_and(|v| v.contains(&json!(image))),
             &platform,
             f,
-        )
+        )?;
+        Ok(())
     })();
     if let Err(e) = setup {
         i["intent"] = json!("unload");
