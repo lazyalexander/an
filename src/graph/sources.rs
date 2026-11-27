@@ -1,5 +1,41 @@
 use super::*;
 
+/// Nodes whose evidence can be reopened from these deliveries.
+pub(crate) fn lineage(graph: &Value, roots: Vec<String>) -> BTreeSet<String> {
+    let mut pending = roots;
+    let mut seen = BTreeSet::new();
+    while let Some(key) = pending.pop() {
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let node = &graph["nodes"][&key];
+        if let Some(driver) = graph["drivers"][&key].as_str() {
+            pending.push(driver.to_owned());
+        }
+        if let Some(save) = node["save"]["node"]
+            .as_str()
+            .filter(|id| graph["nodes"].get(id).is_some())
+        {
+            pending.push(save.to_owned());
+        }
+        pending.extend(
+            node["inputs"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .filter_map(|(_, r)| r["node"].as_str().map(str::to_owned)),
+        );
+        pending.extend(
+            node["after"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|v| v.as_str().map(str::to_owned)),
+        );
+    }
+    seen
+}
+
 pub(super) fn read(
     tx: rusqlite::Transaction,
     task: &str,
@@ -31,36 +67,9 @@ pub(super) fn read(
             json!({id:{"node":{"id":id,"kind":graph["nodes"][id]["kind"]},"execution":{"status":graph["activity"][id]["status"]}}}),
         );
     }
-    let mut pending = vec![id.to_owned()];
     let mut trace = json!({});
-    while let Some(key) = pending.pop() {
-        if trace.get(&key).is_some() {
-            continue;
-        }
+    for key in lineage(&graph, vec![id.to_owned()]) {
         let node = &graph["nodes"][&key];
-        if let Some(driver) = graph["drivers"][&key].as_str() {
-            pending.push(driver.to_owned());
-        }
-        if let Some(save) = node["save"]["node"]
-            .as_str()
-            .filter(|id| graph["nodes"].get(id).is_some())
-        {
-            pending.push(save.to_owned());
-        }
-        pending.extend(
-            node["inputs"]
-                .as_object()
-                .into_iter()
-                .flatten()
-                .filter_map(|(_, r)| r["node"].as_str().map(str::to_owned)),
-        );
-        pending.extend(
-            node["after"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .filter_map(|v| v.as_str().map(str::to_owned)),
-        );
         trace[&key] = json!({"node":node,"execution":graph["activity"][&key],"events":graph["events"].as_array().unwrap().iter().filter(|e|e["node"]==key || e["nodes"].as_array().is_some_and(|ids|ids.contains(&json!(key)))).collect::<Vec<_>>()});
     }
     if action == "evidence" {

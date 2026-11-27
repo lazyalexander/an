@@ -1,7 +1,7 @@
 use crate::store::*;
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use rusqlite::{Connection, TransactionBehavior};
+use rusqlite::{Connection, Transaction, TransactionBehavior};
 use serde_json::{json, Value};
 use std::{fs, path::PathBuf};
 
@@ -148,7 +148,7 @@ fn resolve_grants(db: &Connection, g: &Grants) -> Result<(Vec<String>, Value)> {
     Ok((images, tools))
 }
 fn new_task(
-    db: &Connection,
+    db: &Transaction,
     images: &[String],
     editable: &[String],
     inputs: Value,
@@ -181,7 +181,7 @@ pub fn guard(identity: &str, rotate: bool) -> Result<fs::File> {
     }
     Ok(file)
 }
-pub fn resolve(db: &Connection, identity: &str, fresh: bool) -> Result<String> {
+pub fn resolve(db: &Transaction, identity: &str, fresh: bool) -> Result<String> {
     let mut b = get(db, "binding", identity)?;
     if let Some(old) = b["task"].as_str() {
         if !fresh {
@@ -413,7 +413,7 @@ fn graph_origin(images: &[Value], source: &Value) -> bool {
 }
 
 pub(crate) fn resume_graph(
-    db: &Connection,
+    db: &Transaction,
     task: &str,
     t: &Value,
     delivery: &Value,

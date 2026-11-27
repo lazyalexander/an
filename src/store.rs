@@ -1,6 +1,7 @@
+pub(crate) mod gc;
 use anyhow::{anyhow, ensure, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, Connection, OptionalExtension, Transaction};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{env, fs, os::unix::fs::DirBuilderExt, path::PathBuf};
@@ -92,12 +93,13 @@ pub fn canonical(v: &Value) -> String {
 pub fn hash(bytes: &[u8]) -> String {
     format!("{:x}", Sha256::digest(bytes))
 }
-pub fn revision(db: &Connection, files: &Value) -> Result<String> {
+/// Commit the owning reference in this transaction before a collector can run.
+pub fn revision(db: &Transaction, files: &Value) -> Result<String> {
     let id = hash(canonical(files).as_bytes());
     put(db, "revision", &id, files)?;
     Ok(id)
 }
-pub fn inputs(db: &Connection, paths: &[PathBuf]) -> Result<Value> {
+pub fn inputs(db: &Transaction, paths: &[PathBuf]) -> Result<Value> {
     let mut result = json!({});
     for path in paths {
         let name = path

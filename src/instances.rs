@@ -71,6 +71,9 @@ pub(crate) fn finish_unloads(db: &mut Connection, task: &str, lock: &File) -> Re
             }
         }
     }
+    if pending.is_empty() {
+        crate::store::gc::after_finish(db, task)?;
+    }
     Ok(json!({"closed":true,"cleanup_pending":pending}))
 }
 
@@ -1173,13 +1176,15 @@ esac
             return Ok(());
         }
         let mut db = connect()?;
-        let rev = revision(&db, &json!({"data": "YQ=="}))?;
+        let tx = db.transaction()?;
+        let rev = revision(&tx, &json!({"data": "YQ=="}))?;
         let t = json!({"work":{"dest":rev},"inputs":{"second":rev,"third":rev}});
         let mut i = json!({"id":"i","task":"t","spool":"dest","status":"running","intent":"load"});
         let manifest = json!({"inputs":[{"name":"a","required":true},{"name":"b","required":true},{"name":"c","required":true}]});
         let mut args =
             json!({"argv":["run"],"inputs":{"a":"handoff-one","b":"second","c":"third"}});
-        put(&db, "task", "t", &t)?;
+        put(&tx, "task", "t", &t)?;
+        tx.commit()?;
         put(&db, "turn", "t", &json!("turn"))?;
         let ticket = json!({"task":"t","recipient":"dest","revision":rev,"stamp":permission::stamp(&db,"t")?});
         put(&db, "handoff", "handoff-one", &ticket)?;
