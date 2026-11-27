@@ -24,6 +24,7 @@ for selected commands and filenames. Link each consumer input to its producer no
 work, read an_graph_state and extend the existing graph using its published or completed node outputs. Reuse the
 completed work. Pass the user event's instruction_cursor to an_graph_submit and an_scope_propose. Propose only the
 additional routes the instruction needs. Check turn_scopes in an_graph_state. If prior decisions cover every step, submit directly.
+On every spool output route, include producer_argv even for an existing node and port. Copy argv from that node or its skill.
 For missing routes, obtain a pending card receipt before graph submission. If the proposal fails, correct it using the route schema.
 Studio collects the human decision. Read progress with an_graph_state. Answer the person with an_graph_say: say what
 you understood and what you will do, ask when the request is ambiguous, and report

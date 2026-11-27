@@ -409,7 +409,7 @@
                 "oneOf": [{"required":["input"],"maxProperties":1},{"required":["node","port"],"maxProperties":2},{"required":["producer_port"],"maxProperties":1}],
                 "additionalProperties": false
               },
-              "producer_argv": {"type":"array","minItems":1,"items":{"type":"string"},"description":"For a spool output, copy the producer's complete argv from its skill, paired with its output filename as source.producer_port. Omit for task inputs."}
+              "producer_argv": {"type":"array","minItems":1,"items":{"type":"string"},"description":"Include the full command on EVERY spool output route, including source.node + source.port. Copy argv from the existing producer node or its skill. Without argv an exact node rule still requires an individual decision. Omit for task inputs."}
             },
             "required": ["operation","origin","destination","source"],
             "additionalProperties": false
