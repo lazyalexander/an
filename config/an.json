@@ -1,4 +1,5 @@
 {
+  "max_concurrent_runs": 4,
   "sqlite_busy_s": 20,
   "mcp_deadline_s": 30,
   "mcp_ping_s": 3,
