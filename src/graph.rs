@@ -110,6 +110,10 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
             state["status"] == "waiting" || state["status"] == "queued",
             "Expected unconsumed node"
         );
+        state
+            .as_object_mut()
+            .context("Invalid activity")?
+            .remove("waiting_reason");
         state["status"] = json!("superseded");
     }
     append_nodes(&tx, &record, &mut graph, additions, None)?;

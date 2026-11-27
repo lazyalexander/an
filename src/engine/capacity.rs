@@ -1,8 +1,46 @@
 //! Queue tickets live in the same SQLite transaction as run and instance records.
-use crate::store::root;
+use crate::store::{put, root};
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OptionalExtension, Transaction};
 use std::fs::File;
+
+#[derive(Debug)]
+pub struct InstanceLimit(pub u64);
+
+impl std::fmt::Display for InstanceLimit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Loaded instance capacity reached (limit {}); unload an instance and retry",
+            self.0
+        )
+    }
+}
+
+impl std::error::Error for InstanceLimit {}
+
+// The loading record is the reservation, including across process restarts.
+pub fn reserve_instance(
+    db: &mut Connection,
+    instance: &serde_json::Value,
+    limit: u64,
+) -> Result<()> {
+    let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let used: u64 = tx.query_row(
+        "SELECT count(*) FROM objects WHERE kind='instance' AND json_extract(body,'$.status') IS NOT 'unloaded'",
+        [], |row| row.get(0))?;
+    if used >= limit {
+        return Err(InstanceLimit(limit).into());
+    }
+    put(
+        &tx,
+        "instance",
+        instance["id"].as_str().context("Missing instance ID")?,
+        instance,
+    )?;
+    tx.commit()?;
+    Ok(())
+}
 
 pub fn enqueue(tx: &Transaction, run: &str) -> Result<()> {
     tx.execute_batch(
@@ -122,6 +160,38 @@ pub fn wait(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_confirmed_unload_releases_instance_capacity() -> Result<()> {
+        use serde_json::json;
+        let mut db = Connection::open_in_memory()?;
+        db.execute_batch("CREATE TABLE objects(kind,id,body,PRIMARY KEY(kind,id))")?;
+        let old = json!({"id":"old", "task":"a", "status":"loading"});
+        let new = json!({"id":"new", "task":"b", "status":"loading"});
+        reserve_instance(&mut db, &old, 1)?;
+        for status in [
+            "loading",
+            "running",
+            "stopped",
+            "unknown",
+            "cleanup_pending",
+        ] {
+            let mut record = old.clone();
+            record["status"] = json!(status);
+            put(&db, "instance", "old", &record)?;
+            let error = reserve_instance(&mut db, &new, 1).unwrap_err();
+            assert!(error.is::<InstanceLimit>(), "{status}");
+            assert!(crate::store::find(&db, "instance", "new")?.is_none());
+        }
+        put(
+            &db,
+            "instance",
+            "old",
+            &json!({"id":"old","status":"unloaded"}),
+        )?;
+        reserve_instance(&mut db, &new, 1)?;
+        Ok(())
+    }
 
     #[test]
     fn pending_workers_can_be_skipped_only_before_admission() -> Result<()> {
