@@ -1,3 +1,4 @@
+use crate::engine::apple::{export, inspect, invoke, list, start};
 use crate::{manifest, store::*};
 use anyhow::{ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -7,105 +8,8 @@ use std::{
     collections::HashMap,
     fs::{self, File},
     io::Read,
-    os::{fd::AsRawFd, unix::process::CommandExt},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
-pub const CONTAINER: &str = "/usr/local/bin/container";
-pub fn inherited(command: &mut Command, file: &File) {
-    let fd = file.as_raw_fd();
-    // Only the child needs the lock across exec; keep CLOEXEC in the parent.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::fcntl(fd, libc::F_SETFD, 0) < 0 {
-                Err(std::io::Error::last_os_error())
-            } else {
-                Ok(())
-            }
-        });
-    }
-}
-pub fn apple(args: &[&str], lock: Option<&File>) -> Result<Vec<u8>> {
-    #[cfg(not(test))]
-    let executable = CONTAINER;
-    #[cfg(test)]
-    let executable = std::env::var_os("AN_TEST_CONTAINER").unwrap_or_else(|| CONTAINER.into());
-    let mut cmd = Command::new(executable);
-    cmd.args(args);
-    if let Some(f) = lock {
-        inherited(&mut cmd, f);
-    }
-    let out = cmd.output()?;
-    ensure!(
-        out.status.success(),
-        "container {}: {}",
-        args[0],
-        String::from_utf8_lossy(&out.stderr).trim()
-    );
-    Ok(out.stdout)
-}
-pub fn inspect(args: &[&str], lock: Option<&File>) -> Result<Value> {
-    let rows: Vec<Value> = serde_json::from_slice(&apple(args, lock)?)?;
-    rows.into_iter()
-        .next()
-        .context("Missing container inspection")
-}
-pub fn list(lock: &File) -> Result<Vec<Value>> {
-    Ok(serde_json::from_slice(&apple(
-        &["list", "--all", "--format", "json"],
-        Some(lock),
-    )?)?)
-}
-pub fn start(
-    image: &str,
-    id: &str,
-    label: &str,
-    path: &Path,
-    editable: bool,
-    platform: &Value,
-    lock: &File,
-) -> Result<()> {
-    let p = path.to_str().context("Invalid mount path")?;
-    ensure!(!p.contains(','), "Unsupported comma in mount path");
-    let plat = ["os", "architecture", "variant"]
-        .iter()
-        .filter_map(|k| platform[*k].as_str())
-        .collect::<Vec<_>>()
-        .join("/");
-    let mut args = vec![
-        "run",
-        "--detach",
-        "--platform",
-        &plat,
-        "--name",
-        id,
-        "--label",
-        label,
-        "--network",
-        "none",
-        "--read-only",
-        "-w",
-        "/work",
-        "--entrypoint",
-        "/bin/sleep",
-    ];
-    let mounts = ["input", "output", "work"].map(|d| {
-        format!(
-            "type=bind,source={p}/{d},target=/{d}{}",
-            if d == "input" || (d == "work" && !editable) {
-                ",readonly"
-            } else {
-                ""
-            }
-        )
-    });
-    for m in &mounts {
-        args.extend(["--mount", m]);
-    }
-    args.extend([image, "infinity"]);
-    apple(&args, Some(lock))?;
-    Ok(())
-}
 fn digest(image: &str) -> Result<&str> {
     let (_, d) = image.rsplit_once('@').context("Expected pinned image")?;
     ensure!(
@@ -342,7 +246,7 @@ pub fn register(db: &Connection, reference: &str) -> Result<String> {
         ensure!(digest(reference)? == d, "Requested digest mismatch");
     }
     if cfg["name"] != image {
-        apple(&["image", "tag", reference, &image], None)?;
+        invoke(&["image", "tag", reference, &image], None)?;
     }
     let info = variant(&image)?;
     let key = &d[7..];
@@ -359,7 +263,7 @@ pub fn register(db: &Connection, reference: &str) -> Result<String> {
                 hit["configuration"]["labels"]["an.probe"] == id,
                 "Probe identity mismatch"
             );
-            apple(&["delete", "--force", id], Some(&lock))?;
+            invoke(&["delete", "--force", id], Some(&lock))?;
             ensure!(
                 !list(&lock)?.iter().any(|v| v["id"] == id),
                 "Probe still present"
@@ -428,11 +332,8 @@ pub fn register(db: &Connection, reference: &str) -> Result<String> {
             );
         }
         phase("layout")?;
-        apple(&["stop", &id], Some(&lock))?;
-        let mut cmd = Command::new(CONTAINER);
-        cmd.args(["export", &id]).stdout(Stdio::piped());
-        inherited(&mut cmd, &lock);
-        let mut child = cmd.spawn()?;
+        invoke(&["stop", &id], Some(&lock))?;
+        let mut child = export(&id, &lock)?;
         let result = layout(child.stdout.take().unwrap());
         let exited = child.wait()?;
         let value = result?;

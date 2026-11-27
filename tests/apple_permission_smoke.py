@@ -22,6 +22,23 @@ with tempfile.TemporaryDirectory(dir="/private/tmp") as tmp:
         return op(name,"--request-id",req,*args,*tail)
     i=op("load","--spool",image)["id"]
     try:
+        # Exercise the guest boundary through the same public run path as the jobs below.
+        os.environ["AN_SMOKE_HOST_ONLY"] = "host-only-marker"
+        probe = op("run", "--instance", i, "--", "/bin/sh", "-ec", """
+            test -z "${AN_SMOKE_HOST_ONLY+x}"
+            test -z "${AN_TURN+x}"
+            test -z "${AN_HOME+x}"
+            for iface in /sys/class/net/*; do test "$iface" = /sys/class/net/lo; done
+            if touch /input/forbidden 2>/dev/null; then exit 1; fi
+            if touch /forbidden 2>/dev/null; then exit 1; fi
+            touch /output/probe
+        """)
+        for _ in range(120):
+            status = op("status", probe)["status"]
+            if status != "running":
+                break
+            time.sleep(.2)
+        assert status == "completed", status
         for source,dest in [("seed","result"),("result","final")]:
             run=approved("run",["--instance",i,"--input",source if source=="seed" else run,"--output",dest],["--","/bin/cp","/input/"+source,"/output/"+dest])
             for n in range(120):

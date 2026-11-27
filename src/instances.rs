@@ -1,3 +1,4 @@
+use crate::engine::{apple, observe};
 use crate::{artifacts, permission, runtime, store::*};
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -74,35 +75,11 @@ pub(crate) fn finish_unloads(db: &mut Connection, task: &str, lock: &File) -> Re
     Ok(json!({"closed":true,"cleanup_pending":pending}))
 }
 
-fn observe(i: &mut Value, f: &File) -> String {
-    match runtime::list(f) {
-        Err(e) => {
-            i["error"] = json!(e.to_string());
-            "unknown".into()
-        }
-        Ok(list) => match list.iter().find(|v| v["id"] == i["name"]) {
-            None => "absent".into(),
-            Some(hit) => {
-                let cfg = &hit["configuration"];
-                if cfg["labels"]["an.instance"] != i["id"]
-                    || cfg["image"]["descriptor"]["digest"].as_str()
-                        != i["spool"]
-                            .as_str()
-                            .and_then(|s| s.rsplit_once('@').map(|v| v.1))
-                {
-                    "identity_mismatch".into()
-                } else {
-                    hit["status"]["state"].as_str().unwrap_or("unknown").into()
-                }
-            }
-        },
-    }
-}
 fn reconcile(db: &mut Connection, i: &mut Value, f: &File) -> Result<()> {
     if i["status"] == "unloaded" {
         return Ok(());
     }
-    let mut actual = observe(i, f);
+    let actual = observe(i, f);
     let active = i["active"].as_str().map(str::to_owned);
     i["checked_at"] = json!(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64());
     if let Some(id) = &active {
@@ -116,35 +93,9 @@ fn reconcile(db: &mut Connection, i: &mut Value, f: &File) -> Result<()> {
             save(db, "run", &run)?;
         }
     }
-    let unloading = i["intent"] == "unload";
+    let actual = crate::engine::settle(i, f, actual)?;
     let stopping = i["intent"] == "stop";
-    if unloading || stopping {
-        if actual == "running" {
-            if let Err(e) = runtime::apple(&["stop", string(i, "name")?], Some(f)) {
-                i["error"] = json!(e.to_string());
-            }
-            actual = observe(i, f);
-        }
-        if unloading && matches!(actual.as_str(), "stopped" | "created" | "exited") {
-            if let Err(e) = runtime::apple(&["delete", string(i, "name")?], Some(f)) {
-                i["error"] = json!(e.to_string());
-            }
-            actual = observe(i, f);
-        }
-        i["status"] = json!(if actual == "absent" {
-            "unloaded"
-        } else if stopping && matches!(actual.as_str(), "stopped" | "created" | "exited") {
-            "stopped"
-        } else {
-            "cleanup_pending"
-        });
-    } else {
-        i["status"] = json!(match actual.as_str() {
-            "running" => "running",
-            "absent" | "stopped" | "created" | "exited" => "stopped",
-            _ => "unknown",
-        });
-    }
+    let unloading = i["intent"] == "unload";
     let tx = db.transaction()?;
     if (stopping || unloading) && i["status"] != "cleanup_pending" {
         if let Some(id) = active {
@@ -253,7 +204,7 @@ fn load(
         artifacts::stage(&p.join("work"), &get(db, "revision", work)?, false)?;
         fs::create_dir(p.join("input"))?;
         fs::create_dir(p.join("output"))?;
-        runtime::start(
+        apple::start(
             image,
             string(&i, "name")?,
             &format!("an.instance={id}"),
@@ -561,7 +512,7 @@ fn spawn_worker(id: &str, lease: &File) -> std::io::Result<std::process::Child> 
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
-    runtime::inherited(&mut cmd, lease);
+    apple::inherited(&mut cmd, lease);
     unsafe {
         cmd.pre_exec(|| {
             if libc::setsid() < 0 {
@@ -918,12 +869,8 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             )?;
             let log = File::create(root()?.join("runs").join(id).join("log"))?;
             quiet = false;
-            let child = Command::new(runtime::CONTAINER)
-                .args(["exec", string(&i, "name")?])
-                .args(serde_json::from_value::<Vec<String>>(r["argv"].clone())?)
-                .stdout(log.try_clone()?)
-                .stderr(log)
-                .spawn()?;
+            let argv: Vec<String> = serde_json::from_value(r["argv"].clone())?;
+            let child = apple::exec(string(&i, "name")?, &argv, log)?;
             r["started_at"] = json!(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64());
             save(&db, "run", &r)?;
             child
@@ -940,13 +887,13 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             observe(&mut i, &f) == "running",
             "Cannot verify instance at settlement"
         );
-        runtime::apple(&["stop", string(&i, "name")?], Some(&f))?;
+        apple::stop(string(&i, "name")?, &f)?;
         ensure!(
             observe(&mut i, &f) == "stopped",
             "Cannot confirm guest termination"
         );
         quiet = true;
-        runtime::apple(&["start", string(&i, "name")?], Some(&f))?;
+        apple::restart(string(&i, "name")?, &f)?;
         ensure!(
             observe(&mut i, &f) == "running",
             "Instance restart not confirmed"

@@ -282,7 +282,7 @@ pub(super) fn schedule(
                     .stdin(Stdio::null())
                     .stdout(Stdio::null())
                     .stderr(Stdio::null());
-                crate::runtime::inherited(&mut cmd, &lease);
+                crate::engine::apple::inherited(&mut cmd, &lease);
                 let mut child = match cmd.spawn() {
                     Ok(child) => child,
                     Err(e) => {

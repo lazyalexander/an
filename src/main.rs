@@ -1,6 +1,7 @@
 mod artifacts;
 mod config;
 mod decision;
+mod engine;
 mod graph;
 mod instances;
 mod intent;
@@ -169,7 +170,7 @@ fn run() -> Result<()> {
         }
         Core::Register { image, archive } => {
             if let Some(p) = archive {
-                runtime::apple(
+                engine::apple::invoke(
                     &[
                         "image",
                         "load",
