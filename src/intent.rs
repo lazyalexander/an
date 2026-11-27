@@ -1,9 +1,10 @@
 //! Controller-owned, turn-scoped graph flow authorizations.
+mod followup;
+
 use crate::{permission, store::*};
 use anyhow::{ensure, Context, Result};
 use rusqlite::Connection;
 use serde_json::{json, Value};
-use std::collections::HashSet;
 
 fn route(op: &str, origin: &str, source: &Value, destination: &str, revision: &Value) -> Value {
     let mut row = json!({"operation":op,"origin":origin,"source":source,"destination":destination});
@@ -41,10 +42,7 @@ pub fn show(db: &Connection, task: &str) -> Result<Value> {
 
 pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
     let existing = show(db, task)?;
-    ensure!(
-        existing.is_null(),
-        "An intent already exists for this turn and policy"
-    );
+    let stamp = permission::stamp(db, task)?;
     let task_info = get(db, "task", task)?;
     let model = task_info["model_grant"]["alias"]
         .as_str()
@@ -60,7 +58,13 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
     // An object opts into a closed scope. Legacy lists retain their fallback policy.
     let scoped = spec.is_object();
     let rows = if scoped {
-        ensure!(spec.as_object().unwrap().len() == 1, "Unknown scope field");
+        ensure!(
+            spec.as_object()
+                .unwrap()
+                .keys()
+                .all(|k| matches!(k.as_str(), "turn_scope" | "instruction_cursor")),
+            "Unknown scope field"
+        );
         spec["turn_scope"]
             .as_array()
             .context("Expected turn_scope list")?
@@ -72,7 +76,6 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
         "Expected 1 to 128 routes"
     );
     let mut routes = Vec::new();
-    let mut seen = HashSet::new();
     for row in rows {
         ensure!(
             row.as_object().is_some_and(|m| m.keys().all(|k| matches!(
@@ -150,7 +153,6 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
             );
         }
         let mut r = route(op, origin, source, dest, version);
-        ensure!(seen.insert(canonical(&r)), "Duplicate intent route");
         if let Some(argv) = row.get("producer_argv") {
             ensure!(
                 (dynamic || source["node"].is_string())
@@ -164,9 +166,17 @@ pub fn propose(db: &Connection, task: &str, spec: Value) -> Result<Value> {
             );
             r["producer_argv"] = argv.clone();
         }
+        ensure!(
+            !routes.iter().any(|earlier| followup::overlaps(earlier, &r)),
+            "Duplicate or overlapping intent route"
+        );
         routes.push(r);
     }
-    let card = json!({"id":uid(),"task":task,"stamp":permission::stamp(db,task)?,"model":task_info["model_grant"],"routes":routes,"status":"pending","turn_scope":scoped});
+    let (cursor, previous) = followup::prepare(db, task, &stamp, &existing, &spec, &routes)?;
+    let mut card = json!({"id":uid(),"task":task,"stamp":stamp,"model":task_info["model_grant"],"routes":routes,"status":"pending","turn_scope":scoped,"instruction_cursor":cursor});
+    if !previous.is_empty() {
+        card["previous"] = Value::Array(previous);
+    }
     put(db, "intent", task, &card)?;
     Ok(card)
 }
@@ -221,7 +231,12 @@ pub fn decide(db: &Connection, task: &str, id: &str, decisions: Value) -> Result
             &request,
         )?;
     }
-    put(db, "intent_history", id, &card)?;
+    let mut record = card.clone();
+    record.as_object_mut().unwrap().remove("previous");
+    put(db, "intent_history", id, &record)?;
+    if card["turn_scope"] == true {
+        crate::graph::intent_decided(db, task, &card)?;
+    }
     Ok(card)
 }
 
@@ -262,24 +277,33 @@ pub fn authorize(db: &Connection, task: &str, stamp: &Value, actual: &Value) -> 
     let Some(card) = find(db, "intent", task)?.filter(|c| c["stamp"] == *stamp) else {
         return Ok(Match::Standard);
     };
-    if actual["operation"] == "model" && card["model"] != get(db, "task", task)?["model_grant"] {
-        return Ok(Match::Ask);
+    let cards = std::iter::once(&card).chain(card["previous"].as_array().into_iter().flatten());
+    for reviewed in cards {
+        let Some(index) = route_index(reviewed, actual) else {
+            continue;
+        };
+        if actual["operation"] == "model"
+            && reviewed["model"] != get(db, "task", task)?["model_grant"]
+        {
+            return Ok(Match::Ask);
+        }
+        if reviewed["status"] == "pending" {
+            return Ok(Match::Pending);
+        }
+        return match reviewed["decisions"][index].as_str() {
+            Some("deny") => anyhow::bail!("Denied by turn intent"),
+            Some("allow") => approved_output(db, reviewed, index, actual),
+            Some("ask") => Ok(Match::Ask),
+            _ => anyhow::bail!("Invalid intent decision"),
+        };
     }
-    let Some(index) = route_index(&card, actual) else {
-        return Ok(if card["turn_scope"] == true {
-            Match::Ask
-        } else {
-            Match::Standard
-        });
-    };
-    if card["status"] == "pending" {
-        return Ok(Match::Pending);
-    }
-    match card["decisions"][index].as_str() {
-        Some("deny") => anyhow::bail!("Denied by turn intent"),
-        Some("allow") => approved_output(db, &card, index, actual),
-        Some("ask") => Ok(Match::Ask),
-        _ => anyhow::bail!("Invalid intent decision"),
+    if card["turn_scope"] == true
+        || (actual["operation"] == "model"
+            && card["model"] != get(db, "task", task)?["model_grant"])
+    {
+        Ok(Match::Ask)
+    } else {
+        Ok(Match::Standard)
     }
 }
 
@@ -313,9 +337,28 @@ fn approved_output(db: &Connection, card: &Value, index: usize, actual: &Value) 
     Ok(Match::Allow(card["id"].clone()))
 }
 
+/// A resumed agent needs the reviewed routes to propose just the missing flows.
+pub fn scope_summary(db: &Connection, task: &str) -> Result<Vec<Value>> {
+    let active = show(db, task)?;
+    if active["turn_scope"] != true {
+        return Ok(Vec::new());
+    }
+    Ok(active["previous"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(std::iter::once(&active))
+        .map(|c| {
+            json!({"id":c["id"],"instruction_cursor":c["instruction_cursor"],
+            "status":c["status"],"routes":c["routes"],"decisions":c["decisions"]})
+        })
+        .collect())
+}
+
 pub fn public(mut card: Value) -> Value {
     if let Some(row) = card.as_object_mut() {
         row.remove("stamp");
+        row.remove("previous");
     }
     card
 }

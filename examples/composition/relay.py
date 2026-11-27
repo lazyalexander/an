@@ -65,7 +65,12 @@ def check_access(report):
 
 def verify_cleanup(runtime, report):
     report["cleanup"] = False
-    report["host_cleanup"] = runtime.close()
+    try:
+        if report.get("instances") and "instance_names" not in report:
+            instances = runtime.cli("state", "--task", runtime.task)["instances"]
+            report["instance_names"] = {i["name"]: i["id"] for i in instances}
+    finally:
+        report["host_cleanup"] = runtime.close()
     if not report["host_cleanup"] or not report.get("instances"):
         return
     listed = json.loads(
@@ -75,10 +80,23 @@ def verify_cleanup(runtime, report):
     )
     if not isinstance(listed, list):
         raise ValueError("Expected a container list")
-    labels = {
-        item["configuration"].get("labels", {}).get("an.instance") for item in listed
-    }
-    report["remaining_instances"] = sorted(labels.intersection(report["instances"]))
+    # A changed/missing label cannot establish that a same-name container
+    # disappeared. A matching label under another name is residual work too.
+    names = report["instance_names"]
+    owned = set(report["instances"])
+    if set(names.values()) != owned or len(names) != len(owned):
+        raise ValueError("Missing host container names")
+    remaining = set()
+    for item in listed:
+        name = item["id"]
+        if not isinstance(name, str) or not name:
+            raise ValueError("Invalid container inventory ID")
+        if name in names:
+            remaining.add(names[name])
+        label = item["configuration"].get("labels", {}).get("an.instance")
+        if label in owned:
+            remaining.add(label)
+    report["remaining_instances"] = sorted(remaining)
     report["cleanup"] = not report["remaining_instances"]
 
 
@@ -127,6 +145,7 @@ def main():
         if {i["spool"] for i in instances} != expected:
             raise ValueError("Expected a task instance for every selected spool")
         report["instances"] = [i["id"] for i in instances]
+        report["instance_names"] = {i["name"]: i["id"] for i in instances}
         report["stage"] = "cleanup"
     except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
         report["error"] = str(exc)

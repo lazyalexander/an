@@ -297,6 +297,11 @@ pub fn execute() -> Result<Value> {
         decision,
     } = Cli::parse().command;
     let mut db = connect()?;
+    // The decision can append a graph event. Serialize with scheduler writers,
+    // which hold this lock even between their SQLite transactions.
+    let graph_lock = matches!(action, Action::IntentDecide)
+        .then(|| crate::instances::lock(&db, &task))
+        .transpose()?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     get(&tx, "task", &task)?;
     let read_policy = || -> Result<Value> {
@@ -466,6 +471,7 @@ pub fn execute() -> Result<Value> {
         }
     };
     tx.commit()?;
+    drop(graph_lock);
     if wake_graph {
         crate::graph::wake(&task)?;
     }

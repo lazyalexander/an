@@ -31,7 +31,7 @@ class CompositionTests(unittest.TestCase):
     def test_cleanup_requires_positive_container_evidence(self):
         runtime = Mock()
         runtime.close.return_value = True
-        report = {"instances": ["owned"]}
+        report = {"instances": ["owned"], "instance_names": {"an-owned": "owned"}}
         with patch("relay.subprocess.check_output", side_effect=PermissionError):
             with self.assertRaises(PermissionError):
                 verify_cleanup(runtime, report)
@@ -40,6 +40,41 @@ class CompositionTests(unittest.TestCase):
         with patch("relay.subprocess.check_output", return_value=b"[]"):
             verify_cleanup(runtime, report)
         self.assertTrue(report["cleanup"])
+
+    def test_legacy_report_observes_names_before_close(self):
+        runtime = Mock(task="task")
+        runtime.cli.return_value = {"instances": [{"name": "an-owned", "id": "owned"}]}
+        report = {"instances": ["owned"]}
+        with patch("relay.subprocess.check_output", return_value=b"[]"):
+            verify_cleanup(runtime, report)
+        self.assertTrue(report["cleanup"])
+        self.assertEqual(report["instance_names"], {"an-owned": "owned"})
+        runtime.cli.assert_called_once_with("state", "--task", "task")
+        runtime.close.assert_called_once()
+
+        for observed in (OSError("inventory unavailable"), {"instances": []}):
+            runtime = Mock(task="task")
+            if isinstance(observed, OSError):
+                runtime.cli.side_effect = observed
+            else:
+                runtime.cli.return_value = observed
+            report = {"instances": ["owned"]}
+            with self.subTest(observed=observed), patch("relay.subprocess.check_output", return_value=b"[]"):
+                with self.assertRaises((ValueError, OSError)):
+                    verify_cleanup(runtime, report)
+            self.assertFalse(report["cleanup"])
+            runtime.close.assert_called_once()
+
+    def test_cleanup_detects_names_and_labels_independently(self):
+        runtime = Mock()
+        runtime.close.return_value = True
+        report = {"instances": ["owned"], "instance_names": {"an-owned": "owned"}}
+        for name, labels in (("an-owned", {}), ("other", {"an.instance": "owned"})):
+            inventory = [{"id": name, "configuration": {"labels": labels}}]
+            with self.subTest(name=name), patch("relay.subprocess.check_output", return_value=json.dumps(inventory)):
+                verify_cleanup(runtime, report)
+                self.assertFalse(report["cleanup"])
+                self.assertEqual(report["remaining_instances"], ["owned"])
 
     def test_cases_and_oracles(self):
         for case in CASES:

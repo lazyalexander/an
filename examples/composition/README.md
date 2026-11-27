@@ -56,3 +56,37 @@ python3 tests/test_composition.py
 ```
 
 These regressions use known graphs and synthetic admission records to exercise the scorer and paused Rust/MCP path. They do not measure Codex selection or guest execution.
+
+## Change the goal while delivery is waiting
+
+Build An and run the Studio acceptance on a Mac with Apple Container running and a signed-in Codex CLI:
+
+```sh
+cargo build --locked
+python3.13 examples/composition/studio_turns.py --out "$(mktemp -d)/result"
+```
+
+The fixture attaches pen strokes to a fresh task. It sends both instructions through the Studio HTTP API. Codex selects the spools, proposes the routes and submits each graph revision through delegated MCP. The test acts as the operator and reviews each route against the fixture. It holds the first line-art publication until Codex has received the second instruction and extended the same graph. The second instruction asks for a flat-colour painting of that exact line art and a separate copy of each result.
+
+A passing report records the pending publication and producer attempt at the point the user changed the goal, both submission cursors, the Codex thread and traces, both delivered hashes, and cleanup of the task's containers. Files under the run directory may contain active harness credentials. Use the summary `report.json` to share results.
+
+A separate [paused planning run](baselines/paused-codex-replan.json) used the Rust CLI to send the two instructions and a real Codex session over stdio MCP. It supplied the public spool skills from a previous admission. The host accepted revisions 1 and 2. The second added only painting and its delivery, and its input referenced the original line-art node. The graph stayed paused throughout this run.
+
+## Large binary artifacts on the Rust host
+
+A single input revision feeds two delivery nodes. Each publishes the binary under a different path, as happens when two results share a file. The benchmark starts a fresh registry per trial, approves the publish route, authorizes each export individually, and checks both exported files against the original SHA-256. It uses the production Rust CLI. Python 3.9+ and macOS or Linux are sufficient.
+
+```sh
+cargo build --release --locked
+python3 examples/composition/artifact_baseline.py > /tmp/an-artifacts.json
+```
+
+Release build on macOS 27.2.1 arm64, three trials per size. Each timing includes CLI startup. RSS is the maximum resident memory of that CLI process. Import and publish columns show the median of three samples and export shows the median of six. Registry size is the logical file size after each operation. No OS cache flush was performed. The script accepts `--sizes-mib`, `--trials` and `--an`. The [raw samples](baselines/artifacts-macos-arm64.json) include the binary checksum.
+
+| Input (MiB) | Import ms / RSS MiB | Two deliveries ms / RSS MiB | One approved export ms / RSS MiB | Registry after import / publish (MiB) |
+| ---: | ---: | ---: | ---: | ---: |
+| 1 | 11.8 / 14.9 | 18.4 / 15.0 | 5.6 / 9.7 | 1.34 / 4.03 |
+| 16 | 103.5 / 111.1 | 195.6 / 117.1 | 18.5 / 50.4 | 21.36 / 64.09 |
+| 64 | 383.2 / 415.1 | 717.9 / 437.1 | 55.5 / 178.5 | 85.43 / 256.27 |
+
+All 18 authorized exports matched their input. At 64 MiB, the registry retained about four times the input size. The host stores base64 in revision JSON. Prefixing two distinct delivery paths produces two more revision bodies containing the same bytes. Publishing used about 6.8 times the input size in peak RSS. The measurements cover task import, graph publication and local export. Guest staging, output capture and bridge transfer have separate paths. Apple Container returned `Operation not permitted` when queried from this benchmark environment, so guest costs remain unmeasured.

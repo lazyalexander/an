@@ -128,8 +128,11 @@ impl Gateway {
             } else if op == "scope_propose" {
                 let mut db = connect()?;
                 let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-                let card =
-                    crate::intent::propose(&tx, &self.task, json!({"turn_scope": args["routes"]}))?;
+                let mut scope = json!({"turn_scope": args["routes"]});
+                if let Some(cursor) = args.get("instruction_cursor") {
+                    scope["instruction_cursor"] = cursor.clone();
+                }
+                let card = crate::intent::propose(&tx, &self.task, scope)?;
                 tx.commit()?;
                 crate::intent::public(card)
             } else if op == "deliveries" {

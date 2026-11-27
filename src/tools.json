@@ -377,7 +377,7 @@
   },
   {
     "name": "an_graph_state",
-    "description": "Read the current graph and events following a cursor.",
+    "description": "Read current nodes, attempts, turn_scopes with reviewed route decisions, and events following a cursor.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -391,10 +391,32 @@
   },
   {
     "name": "an_scope_propose",
-    "description": "Before submitting a graph for a new instruction, propose the minimal turn routes for the person to review in Studio. Each route has operation, origin, source, destination. Use source.input for a named task input, source.node and source.port for an exact output, or source.producer_port and producer_argv for recurring immutable spool outputs. Name graph-metadata for subgraph publication and model:<granted alias> for model inputs. Only the person can approve.",
+    "description": "Before submitting a graph for a new instruction, propose the minimal turn routes for the person to review in Studio. Each route has operation, origin, source, destination. Use source.input for a named task input, source.node and source.port for an exact output, or source.producer_port and producer_argv for recurring immutable spool outputs. Name graph-metadata for subgraph publication and model:<granted alias> for model inputs. For a follow-up on the same turn, give the latest user instruction_cursor and propose only additional routes. Only the person can approve.",
     "inputSchema": {
       "type": "object",
-      "properties": {"routes": {"type": "array", "minItems": 1, "items": {"type": "object"}}},
+      "properties": {
+        "routes": {
+          "type": "array", "minItems": 1, "maxItems": 128,
+          "items": {
+            "type": "object",
+            "properties": {
+              "operation": {"type": "string", "enum": ["input", "handoff", "publish", "preview", "model"], "description": "input sends a task input to a spool. handoff sends a produced artifact to another spool. publish sends an artifact to the catalog delivery_destination or graph-metadata. preview sends to studio. model sends to model:<alias>."},
+              "origin": {"type": "string", "description": "For a task input use task-input:<exact input filename>. For a spool output copy the full producer spool key from an_catalog. Model outputs use model:<alias>, surface responses use response."},
+              "destination": {"type": "string", "description": "For input and handoff copy the exact recipient spool key, without any prefix or port suffix. For delivery copy delivery_destination from an_catalog."},
+              "source": {
+                "type": "object",
+                "properties": {"input": {"type": "string"}, "node": {"type": "string"}, "port": {"type": "string"}, "producer_port": {"type": "string"}},
+                "oneOf": [{"required":["input"],"maxProperties":1},{"required":["node","port"],"maxProperties":2},{"required":["producer_port"],"maxProperties":1}],
+                "additionalProperties": false
+              },
+              "producer_argv": {"type":"array","minItems":1,"items":{"type":"string"},"description":"Include the full command on EVERY spool output route, including source.node + source.port. Copy argv from the existing producer node or its skill. Without argv an exact node rule still requires an individual decision. Omit for task inputs."}
+            },
+            "required": ["operation","origin","destination","source"],
+            "additionalProperties": false
+          }
+        },
+        "instruction_cursor": {"type": "integer", "minimum": 1}
+      },
       "required": ["routes"],
       "additionalProperties": false
     }

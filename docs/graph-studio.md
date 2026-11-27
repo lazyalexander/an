@@ -77,13 +77,13 @@ The sketch experiment uses this path: `driver.py sketch SPOOL --model=ALIAS` add
 
 ## Agent runner
 
-The local controller wakes the task's agent when `agent.command` is set in its configuration (see [Configuration](configuration.md)). The runner watches each served task and wakes the agent on an instruction, an answered surface, or resuming the task. Events that arrive while the agent is still working are collected into the next wake.
+The local controller wakes the task's agent when `agent.command` is set in its configuration (see [Configuration](configuration.md)). Instructions, surface answers and task resumes can wake the agent. If the agent proposed a scope and returned before submitting the graph, deciding the scope also wakes it. The `intent_decided` event carries the original `instruction_cursor`, intent ID and decisions. A submission for that instruction or a newer instruction makes that continuation unnecessary. The runner collects new events while the current wake is running.
 
 The command is harness-neutral. It starts in the task's private state directory under `$AN_HOME/agents/TASK`, which persists across wakes so the agent can resume its session. Its stdin is one JSON object with `task`, `cursor`, the triggering `events`, `mcp_servers` (An MCP for this task, including its scoped agent credential) and `state_dir`. Its environment holds only `HOME`, `PATH`, `TMPDIR`, the names in `agent.env`, and `AN_HOME`, `AN_AGENT_TOKEN`, `AN_TASK`, `AN_BINARY`. Exit 0 means the wake was handled.
 
-A wake is delivered at most once: the runner records the cursor before starting the agent, so a restarted controller never repeats a wake. A failed wake is shown in the page header and is not retried; the person's next action wakes the agent again. While the task is paused the runner holds the events and wakes once on resume. Stop also ends the agent's current wake.
+A failed process start leaves the instruction queued. The controller retries after 1 second and doubles the delay up to 60 seconds. The checkpoint survives restart. Once the command has started it may already have acted. A command failure or a lost exit status appears in Studio, and the next instruction can continue the task. A surviving harness holds a lease until exit so a restarted controller waits before launching another wake. While paused, the runner holds events until resume. Stop also ends the current wake.
 
-`examples/agents/codex_agent.py` adapts the Codex CLI: Codex runs with shell, web and file tools disabled, sees only `an_skill`, `an_graph_state`, `an_graph_submit` and `an_graph_say`, and resumes one thread per task.
+`examples/agents/codex_agent.py` resumes one Codex thread per task. Its An tools cover catalog discovery, state and skill lookup, scope proposals, graph submissions and messages.
 
 ```json
 {"agent": {"command": ["python3", "/path/to/An/examples/agents/codex_agent.py"], "env": ["CODEX_HOME"]}}

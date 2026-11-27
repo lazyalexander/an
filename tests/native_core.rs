@@ -243,17 +243,26 @@ impl Fixture {
     fn surface(id: &str) -> Value {
         json!({"id":id,"kind":"surface","panel":"choice","spool":"test@demo","inputs":{"ui":{"input":"package"}},"outputs":["response"]})
     }
-    fn propose(&self, routes: Value) -> String {
+    fn propose_output(&self, routes: Value) -> Output {
         let path = self.root.join("routes.json");
         fs::write(&path, routes.to_string()).unwrap();
-        self.call(&[
+        self.run(&[
             "permission",
             "intent-propose",
             "--task",
             "task",
             "--file",
             path.to_str().unwrap(),
-        ])["id"]
+        ])
+    }
+    fn propose(&self, routes: Value) -> String {
+        let output = self.propose_output(routes);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["id"]
             .as_str()
             .unwrap()
             .to_owned()
@@ -1009,6 +1018,215 @@ fn intent_denial_resolves_an_existing_preview_request() {
         f.graph("state", json!({})).unwrap()["activity"]["preview"]["status"],
         "failed"
     );
+}
+
+#[test]
+fn later_instructions_can_add_routes_without_reopening_earlier_decisions() {
+    let mut f = Fixture::graph_task();
+    // Resume a graph whose surface already produced a response before this turn.
+    f.insert(
+        "graph",
+        "task",
+        json!({"revision":1, "events":[],
+        "nodes":{"source":Fixture::surface("source")},
+        "activity":{"source":{"id":"source-v1","attempt":1,"status":"done",
+                              "outputs":{"response":{"revision":"panel"}}}}}),
+    );
+    f.insert(
+        "task",
+        "task",
+        json!({"work":{"test@demo":"work"},
+        "inputs":{"package":"panel","addition":"panel"}}),
+    );
+    let preview = |origin: &str, source: Value| json!({"operation":"preview","origin":origin,"source":source,"destination":"studio"});
+    let response = json!({"node":"source","port":"response"});
+    let first_route = preview("response", response.clone());
+    let denied_route = preview("task-input:package", json!({"input":"package"}));
+    let new_route = preview("task-input:addition", json!({"input":"addition"}));
+
+    let instruct = |text: &str| {
+        f.graph("instruct", json!({"revision":1,"text":text}))
+            .unwrap()["cursor"]
+            .clone()
+    };
+    let initial_cursor = instruct("Review the first response");
+    let initial = f.propose(json!({"turn_scope":[first_route, denied_route]}));
+    f.decide_intent(&initial, json!(["allow", "deny"]));
+    let preview_from = |id: &str, source: &Value| {
+        let mut node = Fixture::surface(id);
+        node["inputs"]["ui"] = source.clone();
+        let revision = f.graph("view", json!({})).unwrap()["revision"].clone();
+        f.graph(
+            "submit",
+            json!({"base_revision":revision,"nodes":[node],"idempotency_key":id}),
+        )
+        .unwrap();
+        f.graph("state", json!({})).unwrap()["activity"][id].clone()
+    };
+    assert_eq!(preview_from("first", &response)["status"], "waiting");
+
+    let state = f.graph("state", json!({})).unwrap();
+    let agent_or_host_event = state["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] != "instruction")
+        .unwrap()["cursor"]
+        .clone();
+    let proposal =
+        |cursor: &Value, route: &Value| json!({"turn_scope":[route],"instruction_cursor":cursor});
+    assert!(!f
+        .propose_output(json!({"turn_scope":[new_route]}))
+        .status
+        .success());
+    for cursor in [
+        initial_cursor,
+        agent_or_host_event,
+        json!(0),
+        json!(9999),
+        json!("2"),
+    ] {
+        assert!(!f
+            .propose_output(proposal(&cursor, &new_route))
+            .status
+            .success());
+    }
+    let superseded = instruct("Review the additional input");
+    let next = instruct("Preview the additional input in Studio");
+    assert!(!f
+        .propose_output(proposal(&superseded, &new_route))
+        .status
+        .success());
+    // A later instruction cannot turn an existing denial into a fresh allow vote.
+    assert!(!f
+        .propose_output(proposal(&next, &denied_route))
+        .status
+        .success());
+    let card = f.propose(proposal(&next, &new_route));
+    assert_ne!(card, initial);
+    let pending = f.call(&["permission", "intent-show", "--task", "task"]);
+    assert_eq!(pending["id"], card.as_str());
+    assert_eq!(pending["routes"].as_array().unwrap().len(), 1);
+    assert_eq!(pending["status"], "pending");
+    let scopes = f.graph("state", json!({})).unwrap()["turn_scopes"].clone();
+    assert_eq!(scopes[0]["id"], initial.as_str());
+    assert_eq!(scopes[0]["decisions"], json!(["allow", "deny"]));
+    assert_eq!(scopes[1]["id"], card.as_str());
+    assert!(scopes
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|c| c.get("stamp").is_none()));
+    assert_eq!(preview_from("retained", &response)["status"], "waiting");
+    let denied = preview_from("denied", &json!({"input":"package"}));
+    assert_eq!(denied["status"], "failed");
+    assert!(denied["error"].as_str().unwrap().contains("Denied"));
+    assert_eq!(
+        preview_from("addition", &json!({"input":"addition"}))["status"],
+        "permission_required"
+    );
+
+    f.decide_intent(&card, json!(["allow"]));
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["addition"]["status"],
+        "waiting"
+    );
+    // A recovered source now has a different immutable output. Approval for
+    // its original bytes must still be pinned to the first card's identity.
+    f.insert("revision", "v2", json!({"changed":"Yg=="}));
+    f.db.execute("UPDATE objects SET body=json_set(body,'$.activity.source.outputs.response.revision','v2') WHERE kind='graph' AND id='task'", []).unwrap();
+    assert_eq!(
+        preview_from("changed", &response)["status"],
+        "permission_required"
+    );
+    assert_eq!(
+        preview_from("still-denied", &json!({"input":"package"}))["status"],
+        "failed"
+    );
+
+    let replacement = f.call(&["permission", "begin", "--task", "task"]);
+    f.turn = Some(replacement["turn"].as_str().unwrap().to_owned());
+    assert!(f
+        .call(&["permission", "intent-show", "--task", "task"])
+        .is_null());
+    assert!(!f
+        .run(&[
+            "permission",
+            "intent-decide",
+            "--task",
+            "task",
+            "--request-id",
+            &card,
+            "--decision",
+            "allow"
+        ])
+        .status
+        .success());
+    let fresh = f.propose(json!({"turn_scope":[first_route]}));
+    f.decide_intent(&fresh, json!(["allow"]));
+    assert!(!f
+        .propose_output(proposal(&next, &new_route))
+        .status
+        .success());
+}
+
+#[test]
+fn delegated_mcp_can_propose_an_amendment_only_for_a_current_instruction() -> anyhow::Result<()> {
+    use rmcp::{model::CallToolRequestParams, transport::TokioChildProcess, ServiceExt};
+
+    let mut f = Fixture::graph_task();
+    let owner = f.call(&["permission", "begin", "--task", "task"]);
+    f.turn = Some(owner["turn"].as_str().unwrap().to_owned());
+    let initial = f.propose(json!({"turn_scope":[{
+        "operation":"preview","origin":"task-input:package",
+        "source":{"input":"package"},"destination":"studio"
+    }]}));
+    f.decide_intent(&initial, json!(["allow"]));
+    let added = json!({"operation":"publish","origin":"task-input:package",
+                       "source":{"input":"package"},"destination":"task"});
+    let cursor = f
+        .graph(
+            "instruct",
+            json!({"revision":0,"text":"Deliver the source as well"}),
+        )
+        .unwrap()["cursor"]
+        .clone();
+    let token = f.call(&["permission", "delegate", "--task", "task"])["agent_token"].clone();
+
+    tokio::runtime::Runtime::new()?.block_on(async {
+        let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_an"));
+        command
+            .args(["mcp", "--task", "task"])
+            .env("AN_HOME", &f.root)
+            .env_remove("AN_TURN")
+            .env("AN_AGENT_TOKEN", token.as_str().unwrap());
+        let peer = ().serve(TokioChildProcess::new(command)?).await?;
+        let request = |cursor: Value| {
+            let args = json!({"routes":[added],"instruction_cursor":cursor});
+            CallToolRequestParams::new("an_scope_propose")
+                .with_arguments(args.as_object().unwrap().clone())
+        };
+        let bad = peer.call_tool(request(json!(9999))).await?;
+        assert_eq!(bad.is_error, Some(true));
+        let response = peer.call_tool(request(cursor.clone())).await?;
+        let text = &response.content[0].as_text().unwrap().text;
+        assert_ne!(response.is_error, Some(true), "{text}");
+        let card: Value = serde_json::from_str(text)?;
+        assert!(card.get("stamp").is_none());
+        assert_eq!(card["status"], "pending");
+        assert_eq!(
+            f.call(&["permission", "intent-show", "--task", "task"])["id"],
+            card["id"]
+        );
+        let tools = peer.list_all_tools().await?;
+        assert!(!tools.iter().any(|tool| tool.name.contains("decide")));
+        f.decide_intent(card["id"].as_str().unwrap(), json!(["allow"]));
+        f.call(&["permission", "begin", "--task", "task"]);
+        let stale = peer.call_tool(request(cursor)).await?;
+        assert_eq!(stale.is_error, Some(true));
+        peer.cancel().await?;
+        Ok(())
+    })
 }
 
 #[test]
