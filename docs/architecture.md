@@ -2,6 +2,8 @@
 
 An lets an agent run industrial work for one person. An is the only hub: the person, the agents and any presentation layer are its clients. It is the layer between the person and the agent: it curates what passes in each direction, and it chains isolated container programs and agents into a recorded pipeline. The person has one input, instructions and controls sent to An, and one output, the deliveries An publishes. Everything between them is planned by agents, executed in Apple Container and recorded by An. Painting, CAD and animation are instances of this shape, not separate products.
 
+The [container engine design (中文)](container-engine.zh-CN.md) describes the execution boundary, recovery rules and headless acceptance checks.
+
 ## Final form
 
 1. **An agent and its subagents drive the work.** The main agent runs in the harness and talks to An through task-scoped MCP. Subagents run as drivers inside containers. A subagent never holds more authority than the agent that started it: it sees only its bound inputs, its granted spools and its task namespace.
