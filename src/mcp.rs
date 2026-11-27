@@ -118,7 +118,10 @@ impl Gateway {
         if let Some(tool) = self.builtins.get(name) {
             validate_builtin(&tool.input_schema, &args)?;
             let op = &name[3..];
-            let mut value = if matches!(op, "graph_submit" | "graph_state" | "graph_say") {
+            let mut value = if matches!(
+                op,
+                "graph_candidate" | "graph_submit" | "graph_state" | "graph_say"
+            ) {
                 crate::graph::dispatch(&self.task, op, &args)?
             } else if op == "catalog" {
                 let mut db = connect()?;
@@ -468,6 +471,21 @@ pub async fn execute() -> Result<()> {
                 if (tool.name != "an_deliveries" || record["workspace"].is_string())
                     && (!bootstrap || tool.name == "an_state")
                 {
+                    if tool.name == "an_graph_submit" {
+                        let mut candidate = tool.clone();
+                        candidate.name = "an_graph_candidate".into();
+                        candidate.description=Some("Submit additional graph nodes for the latest user instruction. Supply instruction_cursor, base_revision, nodes and idempotency_key. The host derives the required routes and waits for human review before scheduling the candidate.".into());
+                        let schema = std::sync::Arc::make_mut(&mut candidate.input_schema);
+                        if let Some(properties) = schema["properties"].as_object_mut() {
+                            properties.remove("retry");
+                            properties.remove("supersede");
+                        }
+                        schema["required"]
+                            .as_array_mut()
+                            .unwrap()
+                            .push(json!("instruction_cursor"));
+                        builtins.insert(candidate.name.to_string(), candidate);
+                    }
                     builtins.insert(tool.name.to_string(), tool);
                 }
             }

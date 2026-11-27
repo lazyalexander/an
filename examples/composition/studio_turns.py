@@ -7,7 +7,7 @@ import time
 import tomllib
 from pathlib import Path
 
-from catalog import COMMAND, HERE, SPOOLS
+from catalog import CONTAINER, COMMAND, HERE, SPOOLS
 from live import Runtime
 from relay import check_access, verify_cleanup
 from studio_client import studio
@@ -194,7 +194,18 @@ def exercise(runtime, report, timeout):
                 held_request,
             )
             if name == "ink":
-                held_request = record["held_publication"]["request"]
+                held = record["held_publication"]
+                held_request = held["request"]
+                instances = runtime.cli("state", "--task", runtime.task)["instances"]
+                producer = next(a for a in previous["activity"].values() if a["id"] == held["producer_attempt"])
+                instance = next(i for i in instances if i["id"] == producer["instance"] and i["spool"] == runtime.images["line-art"])
+                result = runtime.cli("unload", "--task", runtime.task, "--instance", instance["id"])
+                if result["status"] != "unloaded":
+                    raise ValueError("Line-art instance could not be reclaimed")
+                inventory = json.loads(subprocess.check_output([CONTAINER, "list", "--all", "--format", "json"], timeout=30))
+                if not isinstance(inventory,list) or any(item["id"] == instance["name"] or item["configuration"].get("labels", {}).get("an.instance") == instance["id"] for item in inventory):
+                    raise ValueError("Line-art instance still present before redirect")
+                record["reclaimed_before_redirect"] = instance["id"]
         report["codex_thread"] = verify_wakes(
             runtime.directory, runtime.task, report["instructions"]
         )

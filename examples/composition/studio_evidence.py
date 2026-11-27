@@ -132,9 +132,9 @@ def verify_wakes(directory, task, records):
                     and not item.get("error")
                 ):
                     tools.add(item["tool"])
-        if not {"an_scope_propose", "an_graph_submit"} <= tools:
+        if "an_graph_candidate" not in tools:
             raise ValueError(
-                f"Missing completed Codex scope/graph tool calls for instruction {low}"
+                f"Missing completed Codex candidate submission for instruction {low}"
             )
         record["codex_traces"] = paths
         record["codex_tools"] = sorted(tools)

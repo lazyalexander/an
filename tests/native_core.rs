@@ -1638,3 +1638,83 @@ fn agent_messages_reach_the_person_once_and_never_answer_surfaces() {
         .to_string()
         .contains("先出两张草图"));
 }
+
+#[test]
+fn candidate_derives_review_and_waits_before_allocating_a_guest() {
+    let f = Fixture::graph_task();
+    f.insert("admission","demo",json!({"spec":"spool/v2","manifest_digest":"test","manifest":{"inputs":[{"name":"file","required":true}]}}));
+    let cursor = f
+        .graph("instruct", json!({"revision":0,"text":"Process package"}))
+        .unwrap()["cursor"]
+        .clone();
+    let run = json!({"id":"process","kind":"run","spool":"test@demo","argv":["convert"],"inputs":{"file":{"input":"package"}},"outputs":["out"]});
+    let delivery = json!({"id":"send","kind":"delivery","inputs":{"result":{"node":"process","port":"out"}},"outputs":[]});
+    let args = json!({"nodes":[delivery,run],"base_revision":0,"instruction_cursor":cursor,"idempotency_key":"one"});
+    let receipt = f.graph("candidate", args.clone()).unwrap();
+    assert_eq!(receipt, f.graph("candidate", args).unwrap());
+    let card = f.call(&["permission", "intent-show", "--task", "task"]);
+    assert_eq!(card["id"], receipt["review_card"]);
+    let routes = card["routes"].as_array().unwrap();
+    let publish = routes.iter().find(|r| r["operation"] == "publish").unwrap();
+    assert_eq!(publish["producer_argv"], json!(["convert"]));
+    assert_eq!(publish["source"], json!({"node":"process","port":"out"}));
+    assert_eq!(routes.len(), 2);
+    assert_eq!(
+        f.graph("state", json!({})).unwrap()["activity"]["process"]["status"],
+        "queued"
+    );
+    let decisions = routes
+        .iter()
+        .map(|r| {
+            if r["operation"] == "input" {
+                "ask"
+            } else {
+                "allow"
+            }
+        })
+        .collect::<Vec<_>>();
+    f.decide_intent(card["id"].as_str().unwrap(), json!(decisions));
+    let state = f.graph("state", json!({})).unwrap();
+    assert_eq!(
+        state["activity"]["process"]["status"],
+        "permission_required"
+    );
+    assert!(state["activity"]["process"]["instance"].is_null());
+    let requests = f.graph("requests", json!({})).unwrap();
+    assert_eq!(requests.as_array().unwrap().len(), 1);
+    assert_eq!(requests[0]["operation"], "input");
+    assert_eq!(f.call(&["state", "--task", "task"])["instances"], json!([]));
+}
+
+#[test]
+fn reviewed_delivery_survives_producer_reclamation_and_host_restart() {
+    let f = Fixture::graph_task();
+    let producer = json!({"id":"ink","kind":"run","spool":"test@demo","argv":["ink"],"inputs":{},"outputs":["lines.svg"]});
+    let artifact = json!({"revision":"ink-version","spool":"test@demo","run":"ink-attempt"});
+    let settled = json!({"id":"ink-attempt","attempt":1,"status":"done","instance":"retired","outputs":{"lines.svg":artifact}});
+    f.insert("revision", "ink-version", json!({"lines.svg":"YWJj"}));
+    f.insert("run","ink-attempt",json!({"id":"ink-attempt","task":"task","argv":["ink"],"spool":"test@demo","editable":false,"status":"completed"}));
+    f.insert(
+        "graph",
+        "task",
+        json!({"revision":1,"nodes":{"ink":producer},"activity":{"ink":settled},"events":[]}),
+    );
+    let cursor = f
+        .graph(
+            "instruct",
+            json!({"revision":1,"text":"Deliver the existing line art"}),
+        )
+        .unwrap()["cursor"]
+        .clone();
+    let receipt=f.graph("candidate",json!({"base_revision":1,"instruction_cursor":cursor,"idempotency_key":"deliver","nodes":[{"id":"result","kind":"delivery","inputs":{"art":{"node":"ink","port":"lines.svg"}},"outputs":[]}]})).unwrap();
+    f.decide_intent(receipt["review_card"].as_str().unwrap(), json!(["allow"]));
+    let state = f.graph("state", json!({})).unwrap();
+    assert_eq!(state["activity"]["ink"], settled);
+    let delivery = &state["activity"]["result"];
+    assert_eq!(delivery["status"], "done");
+    assert_eq!(delivery["bindings"]["art"]["revision"], "ink-version");
+    let opened = f
+        .graph("open", json!({"delivery":delivery["delivery"]}))
+        .unwrap();
+    assert_eq!(opened["files"]["art"]["lines.svg"], "YWJj");
+}

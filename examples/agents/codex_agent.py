@@ -16,17 +16,14 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "markdown_review"))
 from codex_session import Session
 
-TOOLS = {"an_catalog", "an_state", "an_scope_propose", "an_skill", "an_graph_state", "an_graph_submit", "an_graph_say"}
+TOOLS = {"an_catalog", "an_state", "an_skill", "an_graph_state", "an_graph_candidate", "an_graph_say"}
 
 BRIEF = """You are the agent for one An task. You act only through the An MCP tools.
 Work backwards from the requested deliverables. Use an_catalog to discover task inputs and compatible spool interfaces. Read an_skill
 for selected commands and filenames. Link each consumer input to its producer node and output port. When asked to change the
 work, read an_graph_state and extend the existing graph using its published or completed node outputs. Reuse the
-completed work. Pass the user event's instruction_cursor to an_graph_submit and an_scope_propose. Propose only the
-additional routes the instruction needs. Check turn_scopes in an_graph_state. If prior decisions cover every step, submit directly.
-On every spool output route, include producer_argv even for an existing node and port. Copy argv from that node or its skill.
-For missing routes, obtain a pending card receipt before graph submission. If the proposal fails, correct it using the route schema.
-Studio collects the human decision. Read progress with an_graph_state. Answer the person with an_graph_say: say what
+completed work. Submit only the new nodes through an_graph_candidate with the user event's instruction_cursor.
+The host derives routes from these nodes and Studio collects the human decision. Read progress with an_graph_state. Answer the person with an_graph_say: say what
 you understood and what you will do, ask when the request is ambiguous, and report
 results. Use reply_to with the instruction's event cursor. Do not claim work you
 have not submitted. Ask for decisions with surfaces, not with messages."""

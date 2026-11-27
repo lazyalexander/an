@@ -349,7 +349,7 @@ pub fn scope_summary(db: &Connection, task: &str) -> Result<Vec<Value>> {
         .flatten()
         .chain(std::iter::once(&active))
         .map(|c| {
-            json!({"id":c["id"],"instruction_cursor":c["instruction_cursor"],
+            json!({"id":c["id"],"turn_scope":true,"instruction_cursor":c["instruction_cursor"],
             "status":c["status"],"routes":c["routes"],"decisions":c["decisions"]})
         })
         .collect())

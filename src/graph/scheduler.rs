@@ -129,6 +129,25 @@ pub(super) fn advance(
                 {
                     continue;
                 }
+                if matches!(
+                    state["status"].as_str(),
+                    Some("queued" | "permission_required")
+                ) {
+                    if let Some(review) = find(db, "candidate_review", field(&state, "id")?)? {
+                        if permission::stamp(db, task)? != review["stamp"] {
+                            state["status"] = json!("failed");
+                            state["error"] = json!("Candidate authorization expired");
+                            graph["activity"][id] = state;
+                            put(db, "graph", task, graph)?;
+                            continue;
+                        }
+                        if let Some(card) = review["card"].as_str() {
+                            if find(db, "intent_history", card)?.is_none() {
+                                continue;
+                            }
+                        }
+                    }
+                }
                 let Some(bound) = bindings(db, task, graph, node)? else {
                     continue;
                 };
@@ -268,7 +287,12 @@ fn accept_expansion(
         additions,
         Some(id),
     )?;
+    let review = find(&tx, "candidate_review", field(state, "id")?)?;
     for addition in additions {
+        if let Some(review) = &review {
+            let child = &next["activity"][field(addition, "id")?];
+            put(&tx, "candidate_review", field(child, "id")?, review)?;
+        }
         next["drivers"][field(addition, "id")?] = json!(id);
     }
     next["activity"][id] = state.clone();
@@ -343,6 +367,24 @@ fn step(
             }
             return Ok(());
         }
+        let mut inputs = json!({});
+        let mut private = json!({});
+        for (port, item) in bound.as_object().unwrap() {
+            if item["source"].is_string() {
+                inputs[port] = item["source"].clone()
+            } else {
+                let token = format!("graph-{attempt}-{port}");
+                inputs[port] = json!(token);
+                private[token] = item.clone();
+            }
+        }
+        let mut args = json!({"argv":node["argv"],"outputs":node["outputs"],"inputs":inputs,"input_requests":state["requests"],"_graph_bindings":private,"_graph_sources":node["inputs"],"_graph_run":attempt});
+        if find(db, "candidate_review", &attempt)?.is_some() {
+            args["_reviewed_inputs"] = json!(true);
+            if !super::candidate::inputs_ready(db, task, node, &args, bound, state)? {
+                return Ok(());
+            }
+        }
         let instance = if node["kind"] == "expand"
             && (state["instance"].is_null() || state["instance"] == format!("driver-{attempt}"))
         {
@@ -372,24 +414,8 @@ fn step(
             state["status"] = json!("queued");
             return Ok(());
         }
-        let mut inputs = json!({});
-        let mut private = json!({});
-        for (port, item) in bound.as_object().unwrap() {
-            if item["source"].is_string() {
-                inputs[port] = item["source"].clone()
-            } else {
-                let token = format!("graph-{attempt}-{port}");
-                inputs[port] = json!(token);
-                private[token] = item.clone();
-            }
-        }
-        let result = instances::dispatch_locked(
-            db,
-            task,
-            "run",
-            &json!({"instance":instance["id"],"argv":node["argv"],"outputs":node["outputs"],"inputs":inputs,"input_requests":state["requests"],"_graph_bindings":private,"_graph_sources":node["inputs"],"_graph_run":attempt}),
-            lock,
-        )?;
+        args["instance"] = instance["id"].clone();
+        let result = instances::dispatch_locked(db, task, "run", &args, lock)?;
         if let Some(request) = result["request_id"].as_str() {
             state["requests"][field(&result, "port")?] = json!(request);
             state["status"] = json!("permission_required");

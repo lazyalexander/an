@@ -360,6 +360,13 @@ fn submit(
 ) -> Result<Value> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let spool = string(i, "spool")?;
+    if args["_reviewed_inputs"] == true {
+        let review = get(&tx, "candidate_review", string(args, "_graph_run")?)?;
+        ensure!(
+            review["stamp"] == permission::stamp(&tx, task)?,
+            "Candidate authorization expired"
+        );
+    }
     if args["_graph_run"].is_string() {
         permission::current(&tx, task)?;
     }
@@ -467,9 +474,18 @@ fn submit(
             if let Some(id) = request {
                 decisions.push((id, get(&tx, "request", id)?));
             }
-            let pending = if let Some(reference) =
-                port.and_then(|name| args["_graph_sources"].get(name))
-            {
+            let pending = if args["_reviewed_inputs"] == true {
+                let fallback = json!({"source":source,"revision":rev});
+                let binding = args["_graph_bindings"].get(source).unwrap_or(&fallback);
+                crate::graph::candidate::input_gate(
+                    &tx,
+                    task,
+                    spool,
+                    args,
+                    port.context("Missing candidate port")?,
+                    binding,
+                )?
+            } else if let Some(reference) = port.and_then(|name| args["_graph_sources"].get(name)) {
                 let input = json!({"source":source,"revision":rev});
                 let binding = args["_graph_bindings"].get(source).unwrap_or(&input);
                 let route = crate::intent::graph_route(&tx, operation, reference, spool, binding)?;

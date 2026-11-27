@@ -49,6 +49,7 @@ pub(super) fn package(
 
 pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
     match action {
+        "candidate" => return dispatch(task, "graph_candidate", args),
         "submit" => return dispatch(task, "graph_submit", args),
         "state" => return dispatch(task, "graph_state", args),
         "say" => return dispatch(task, "graph_say", args),

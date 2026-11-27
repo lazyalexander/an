@@ -66,7 +66,7 @@ cargo build --locked
 python3.13 examples/composition/studio_turns.py --out "$(mktemp -d)/result"
 ```
 
-The fixture attaches pen strokes to a fresh task. It sends both instructions through the Studio HTTP API. Codex selects the spools, proposes the routes and submits each graph revision through delegated MCP. The test acts as the operator and reviews each route against the fixture. It holds the first line-art publication until Codex has received the second instruction and extended the same graph. The second instruction asks for a flat-colour painting of that exact line art and a separate copy of each result.
+The fixture attaches pen strokes to a fresh task. It sends both instructions through the Studio HTTP API. Codex selects the spools and submits candidate nodes through delegated MCP. The Rust host derives the authorization card from their input references, commands and destinations. The test acts as the operator and reviews each route against the fixture. It unloads the settled line-art producer and checks its name and instance label against the Apple Container inventory before sending the redirect. It holds the first line-art publication until Codex has received the second instruction and extended the same graph. The second instruction asks for a flat-colour painting of that exact line art and a separate copy of each result.
 
 A passing report records the pending publication and producer attempt at the point the user changed the goal, both submission cursors, the Codex thread and traces, both delivered hashes, and cleanup of the task's containers. Files under the run directory may contain active harness credentials. Use the summary `report.json` to share results.
 

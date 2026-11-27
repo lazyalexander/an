@@ -40,6 +40,12 @@ Each route requires four fields: `operation`, `source`, `origin`, and `destinati
 
 The existing workspace and host policy checks run first. A matching intent approval can satisfy an interactive check inside the graph scheduler, including a dynamically proposed child. Unlisted flows follow normal permission handling. An explicit `ask` requires individual confirmation even when a host allowance or turn grant exists. A matching denial fails the flow. Studio keeps unrelated requests, including evidence reads, available while the card is pending. Confirming the card settles covered approvals and denials even when a multi-input node still needs another decision. Model quota checks remain in effect. Replacing a turn or either policy revision invalidates the card. Intent matches record the card ID, route, actual revision and operation details in the effect ledger. The declared output origin identifies the trusted producer; permission matching does not inspect document semantics.
 
+### Host-derived graph review
+
+The Studio Codex adapter uses `an_graph_candidate` with the instruction cursor, base revision, new nodes and idempotency key. In one transaction the host validates the graph, derives exact input, handoff, model, preview and publication routes, and records the review and submission. Reviewed spool outputs carry their node, port and producer command. A later candidate can consume an earlier immutable output after the producer instance is gone. Existing route decisions continue to apply. An expand driver reviews publication of its metadata and its children pass the ordinary execution gates.
+
+Candidate run inputs are checked before guest allocation and rechecked when starting the command. A one-time operator decision binds to the attempt, slot, command and input version. Polling while waiting preserves that decision for the actual run.
+
 ### Turn scopes for changing graphs
 
 The controller may pass an object to `intent-propose` in place of the exact-route array. The operator reviews the rules together in Studio. Replace spool names with the task's admitted spool identifiers.

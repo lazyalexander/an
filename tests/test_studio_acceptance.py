@@ -179,11 +179,11 @@ class StudioAcceptanceTests(unittest.TestCase):
                 )
 
             records = [{"cursor": 1}, {"cursor": 9}]
-            trace(1, "first", ["an_scope_propose"])
-            trace(4, "first", ["an_graph_submit"])
-            trace(9, "first", ["an_scope_propose", "an_graph_submit"])
+            trace(1, "first", ["an_graph_state"])
+            trace(4, "first", ["an_graph_candidate"])
+            trace(9, "first", ["an_graph_state", "an_graph_candidate"])
             self.assertEqual(verify_wakes(directory, "a", records), "first")
-            trace(9, "another", ["an_scope_propose", "an_graph_submit"])
+            trace(9, "another", ["an_graph_state", "an_graph_candidate"])
             with self.assertRaisesRegex(ValueError, "original thread"):
                 verify_wakes(directory, "a", records)
 

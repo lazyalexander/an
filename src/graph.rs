@@ -1,3 +1,4 @@
+pub(crate) mod candidate;
 mod host;
 pub mod model;
 mod scheduler;
@@ -54,7 +55,13 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         tx.commit()?;
         return Ok(receipt);
     }
-    let key = canonical(&json!([task, field(args, "idempotency_key")?]));
+    let candidate = op == "graph_candidate";
+    let nonce = field(args, "idempotency_key")?;
+    let key = if candidate {
+        canonical(&json!([task, op, nonce]))
+    } else {
+        canonical(&json!([task, nonce]))
+    };
     if let Some(prior) = find(&tx, "graph_submission", &key)? {
         ensure!(
             prior["args"] == *args,
@@ -67,6 +74,22 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
     let instruction_cursor = args.get("instruction_cursor");
     if let Some(cursor) = instruction_cursor {
         let authority = hash(canonical(&permission::stamp(&tx, task)?).as_bytes());
+        if candidate {
+            let latest = graph["events"]
+                .as_array()
+                .context("Missing graph events")?
+                .iter()
+                .rev()
+                .find(|e| {
+                    e["actor"] == "user"
+                        && e["kind"] == "instruction"
+                        && e["data"]["authority"] == authority
+                });
+            ensure!(
+                latest.is_some_and(|e| e["cursor"] == *cursor),
+                "Expected the latest user instruction"
+            );
+        }
         ensure!(
             cursor.as_u64().is_some_and(|n| n > 0)
                 && graph["events"]
@@ -93,6 +116,12 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         !additions.is_empty() || !retry.is_empty() || !supersede.is_empty(),
         "Empty submission"
     );
+    if candidate {
+        ensure!(
+            instruction_cursor.is_some() && retry.is_empty() && supersede.is_empty(),
+            "A candidate adds nodes for a user instruction"
+        );
+    }
     for id in retry {
         let model_unknown =
             graph["nodes"][&id]["kind"] == "model" && graph["activity"][&id]["status"] == "unknown";
@@ -113,6 +142,30 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         state["status"] = json!("superseded");
     }
     append_nodes(&tx, &record, &mut graph, additions, None)?;
+    let card = if candidate {
+        candidate::review(
+            &tx,
+            task,
+            &record,
+            &graph,
+            additions,
+            &args["instruction_cursor"],
+        )?
+    } else {
+        Value::Null
+    };
+    if candidate {
+        let stamp = permission::stamp(&tx, task)?;
+        for node in additions {
+            let state = &mut graph["activity"][field(node, "id")?];
+            put(
+                &tx,
+                "candidate_review",
+                field(state, "id")?,
+                &json!({"card":card,"stamp":stamp}),
+            )?;
+        }
+    }
     let rev = graph["revision"].as_u64().unwrap();
     let events = graph["events"].as_array_mut().unwrap();
     let cursor = events.len() + 1;
@@ -121,7 +174,10 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         submission["instruction_cursor"] = cursor.clone();
     }
     events.push(submission);
-    let receipt = json!({"revision":rev,"cursor":cursor,"status":"accepted"});
+    let mut receipt = json!({"revision":rev,"cursor":cursor,"status":"accepted"});
+    if candidate {
+        receipt["review_card"] = card;
+    }
     put(&tx, "graph", task, &graph)?;
     put(
         &tx,
