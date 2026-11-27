@@ -1,7 +1,6 @@
-use crate::engine::{apple, capacity, observe};
+use crate::engine::{apple, capacity, observe, storage};
 use crate::{artifacts, permission, runtime, store::*};
 use anyhow::{bail, ensure, Context, Result};
-use base64::{engine::general_purpose::STANDARD, Engine};
 use rusqlite::{Connection, TransactionBehavior};
 use serde_json::{json, Value};
 use std::{
@@ -96,8 +95,16 @@ fn reconcile(db: &mut Connection, i: &mut Value, f: &File) -> Result<()> {
     let actual = crate::engine::settle(i, f, actual)?;
     let stopping = i["intent"] == "stop";
     let unloading = i["intent"] == "unload";
+    let guest_settled = (stopping || unloading) && i["status"] != "cleanup_pending";
+    if i["status"] == "unloaded" {
+        if let Err(e) = storage::remove(&path(i)?, f) {
+            i["status"] = json!("cleanup_pending");
+            i["intent"] = json!("unload");
+            i["error"] = json!(e.to_string());
+        }
+    }
     let tx = db.transaction()?;
-    if (stopping || unloading) && i["status"] != "cleanup_pending" {
+    if guest_settled {
         if let Some(id) = i["unsettled_capacity"].as_str() {
             capacity::release(&tx, id)?;
             i["unsettled_capacity"] = Value::Null;
@@ -110,15 +117,6 @@ fn reconcile(db: &mut Connection, i: &mut Value, f: &File) -> Result<()> {
             r["status"] = json!("cancelled");
             save(&tx, "run", &r)?;
             i["active"] = Value::Null;
-        }
-    }
-    if i["status"] == "unloaded" {
-        if let Err(e) = fs::remove_dir_all(path(i)?) {
-            if e.kind() != ErrorKind::NotFound {
-                i["status"] = json!("cleanup_pending");
-                i["intent"] = json!("unload");
-                i["error"] = json!(e.to_string());
-            }
         }
     }
     i["observed"] = json!(actual);
@@ -204,10 +202,12 @@ fn load(
         return Ok(prior);
     }
     let mut i = json!({"id":id,"name":format!("an-{id}"),"task":task,"spool":image,"platform":platform,"status":"loading","dedicated":dedicated,"owner":owner,"intent":"load","active":null});
-    capacity::reserve_instance(db, &i, crate::config::load()?.limit("max_loaded_instances"))?;
+    let config = crate::config::load()?;
+    let disk_mib = config.limit("instance_disk_mib");
+    i["disk_mib"] = json!(disk_mib);
+    capacity::reserve_instance(db, &i, config.limit("max_loaded_instances"))?;
     let setup = (|| -> Result<()> {
-        let p = path(&i)?;
-        fs::create_dir_all(&p)?;
+        let p = storage::create(&path(&i)?, disk_mib, f)?;
         artifacts::stage(&p.join("work"), &get(db, "revision", work)?, false)?;
         fs::create_dir(p.join("input"))?;
         fs::create_dir(p.join("output"))?;
@@ -802,6 +802,10 @@ pub(crate) fn dispatch_locked(
     if op == "unload" {
         return Ok(i);
     }
+    ensure!(
+        i["disk_mib"].is_number(),
+        "Unload and reload this instance to apply its disk budget"
+    );
     let admission = runtime::require(db, string(&i, "spool")?)?;
     ensure!(
         i["platform"] == admission["platform"],
@@ -834,7 +838,9 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
     let instance = string(&r, "instance")?.to_owned();
     let mut quiet = true;
     let run = (|| -> Result<()> {
-        let mut child = {
+        let config = crate::config::load()?;
+        let log_limit = config.limit("run_log_bytes");
+        let (mut child, log) = {
             let f = if r["capacity_managed"] == true {
                 let Some(lock) = capacity::wait(&mut db, &task, &instance, id, worker_lock)? else {
                     return Ok(());
@@ -851,7 +857,7 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
                 observe(&mut i, &f) == "running",
                 "Cannot verify running instance"
             );
-            let p = path(&i)?;
+            let p = storage::data(&path(&i)?)?;
             let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if !r["input_stamp"].is_null() || !r["source"].is_null() {
                 let authority = permission::stamp(&tx, &task);
@@ -882,25 +888,30 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             {
                 bridge_artifact(&tx, &task, &t, source)?;
             }
+            artifacts::stage(&p.join("output"), &json!({}), true)?;
             artifacts::stage(
                 &p.join("input"),
                 &get(&tx, "revision", string(&r, "input")?)?,
                 true,
             )?;
             tx.commit()?;
-            artifacts::stage(&p.join("output"), &json!({}), true)?;
             artifacts::stage(
                 &p.join("work"),
                 &get(&db, "revision", string(&r, "work")?)?,
                 true,
             )?;
             let log = File::create(root()?.join("runs").join(id).join("log"))?;
-            quiet = false;
             let argv: Vec<String> = serde_json::from_value(r["argv"].clone())?;
-            let child = apple::exec(string(&i, "name")?, &argv, log)?;
+            let child = apple::exec(
+                string(&i, "name")?,
+                &argv,
+                log.try_clone()?,
+                log_limit.checked_add(1).context("Invalid run_log_bytes")?,
+            )?;
+            quiet = false;
             r["started_at"] = json!(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64());
             save(&db, "run", &r)?;
-            child
+            (child, log)
         };
         let code = child.wait()?;
         r["exited_at"] = json!(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64());
@@ -925,17 +936,20 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             observe(&mut i, &f) == "running",
             "Instance restart not confirmed"
         );
-        ensure!(code.success(), "Guest command exited {code}");
-        let p = path(&i)?;
-        let mut files = json!({});
-        for name in serde_json::from_value::<Vec<String>>(r["outputs"].clone())? {
-            let file = p.join("output").join(artifacts::safe(&name)?);
-            ensure!(
-                file.is_file() && file.canonicalize()? == file,
-                "Missing or invalid output: {name}"
-            );
-            files[name] = json!(STANDARD.encode(fs::read(file)?));
+        if log.metadata()?.len() > log_limit {
+            log.set_len(log_limit)?;
+            bail!("Run log budget exceeded ({log_limit} bytes)");
         }
+        ensure!(code.success(), "Guest command exited {code}");
+        let p = storage::data(&path(&i)?)?;
+        let mut budget = artifacts::OutputBudget::new(config.limit("run_output_bytes"));
+        let names: Vec<String> = serde_json::from_value(r["outputs"].clone())?;
+        let files = budget.declared(&p.join("output"), &names)?;
+        let work = if r["editable"] == true {
+            Some(budget.snapshot(&p.join("work"))?)
+        } else {
+            None
+        };
         let tx = db.transaction()?;
         if files == json!({}) {
             r["status"] = json!("completed");
@@ -943,9 +957,9 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             r["status"] = json!("awaiting_publication");
             r["candidate"] = json!(revision(&tx, &files)?);
         }
-        if r["editable"] == true {
+        if let Some(work) = work {
             let mut t = get(&tx, "task", &task)?;
-            r["result_work"] = json!(revision(&tx, &artifacts::snapshot(&p.join("work"))?)?);
+            r["result_work"] = json!(revision(&tx, &work)?);
             t["work"][string(&i, "spool")?] = r["result_work"].clone();
             put(&tx, "task", &task, &t)?;
         }
@@ -964,12 +978,17 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
         if i["active"] == id && i["intent"] == "load" {
             r["status"] = json!(if quiet { "failed" } else { "unknown" });
             r["error"] = json!(e.to_string());
-            if quiet && r["editable"] == true {
-                if let Err(e) = artifacts::stage(
-                    &path(&i)?.join("work"),
-                    &get(&db, "revision", string(&r, "work")?)?,
-                    true,
-                ) {
+            if quiet && r["editable"] == true && i["disk_mib"].is_number() {
+                let restore = || -> Result<()> {
+                    let p = storage::data(&path(&i)?)?;
+                    artifacts::stage(&p.join("output"), &json!({}), true)?;
+                    artifacts::stage(
+                        &p.join("work"),
+                        &get(&db, "revision", string(&r, "work")?)?,
+                        true,
+                    )
+                };
+                if let Err(e) = restore() {
                     quiet = false;
                     i["error"] = json!(e.to_string());
                 }

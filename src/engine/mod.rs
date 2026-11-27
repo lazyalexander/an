@@ -1,5 +1,6 @@
 pub(crate) mod apple;
 pub(crate) mod capacity;
+pub(crate) mod storage;
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
 use std::fs::File;
