@@ -46,6 +46,7 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
             .retain(|e| e["cursor"].as_u64().unwrap() > after);
         permission::current(&db, task)?;
         graph["model_calls"] = json!(model::history(&db, task)?);
+        graph["turn_scopes"] = json!(crate::intent::scope_summary(&db, task)?);
         return Ok(graph);
     }
     if op == "graph_say" {
@@ -143,6 +144,32 @@ fn now_ms() -> u64 {
 fn event(graph: &mut Value, actor: &str, kind: &str, id: &str, data: Value) {
     let events = graph["events"].as_array_mut().unwrap();
     events.push(json!({"cursor":events.len()+1,"time_ms":now_ms(),"actor":actor,"kind":kind,"node":id,"data":data}));
+}
+
+/// An agent that returned after proposing a scope needs a continuation only
+/// while the corresponding instruction still lacks a submitted graph.
+pub(crate) fn intent_decided(db: &Connection, task: &str, card: &Value) -> Result<()> {
+    let Some(cursor) = card["instruction_cursor"].as_u64().filter(|n| *n > 0) else {
+        return Ok(());
+    };
+    let mut graph = get(db, "graph", task)?;
+    let events = graph["events"].as_array().context("Invalid graph events")?;
+    if events.iter().any(|e| {
+        (e["kind"] == "submitted" && e["actor"] == "agent" && e["instruction_cursor"] == cursor)
+            || (e["kind"] == "instruction"
+                && e["actor"] == "user"
+                && e["cursor"].as_u64().is_some_and(|n| n > cursor))
+    }) {
+        return Ok(());
+    }
+    event(
+        &mut graph,
+        "user",
+        "intent_decided",
+        task,
+        json!({"intent":card["id"],"instruction_cursor":cursor,"decisions":card["decisions"]}),
+    );
+    put(db, "graph", task, &graph)
 }
 
 pub(crate) fn binding_origin(item: &Value) -> String {

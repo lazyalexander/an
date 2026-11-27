@@ -26,7 +26,11 @@ pub fn inherited(command: &mut Command, file: &File) {
     }
 }
 pub fn apple(args: &[&str], lock: Option<&File>) -> Result<Vec<u8>> {
-    let mut cmd = Command::new(CONTAINER);
+    #[cfg(not(test))]
+    let executable = CONTAINER;
+    #[cfg(test)]
+    let executable = std::env::var_os("AN_TEST_CONTAINER").unwrap_or_else(|| CONTAINER.into());
+    let mut cmd = Command::new(executable);
     cmd.args(args);
     if let Some(f) = lock {
         inherited(&mut cmd, f);

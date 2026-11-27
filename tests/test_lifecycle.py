@@ -54,37 +54,6 @@ class LifecycleTest(unittest.TestCase):
             )
             cli.assert_not_called()
 
-    def test_deletion_failure_retried_after_confirmation(self):
-        with (
-            patch.object(instances, "observe", return_value="stopped"),
-            patch.object(instances, "apple", side_effect=RuntimeError("busy")),
-        ):
-            self.assertEqual(
-                instances.call(self.task, "unload", {"instance": self.i["id"]})[
-                    "status"
-                ],
-                "cleanup_pending",
-            )
-        with (
-            patch.object(instances, "observe", side_effect=["stopped", "absent"]),
-            patch.object(instances, "apple") as cli,
-        ):
-            self.assertEqual(self.state()["status"], "unloaded")
-            self.assertEqual(cli.call_args.args[0], ["delete", "test"])
-
-    def test_wrong_identity_left_untouched(self):
-        with (
-            patch.object(instances, "observe", return_value="identity_mismatch"),
-            patch.object(instances, "apple") as cli,
-        ):
-            self.assertEqual(
-                instances.call(self.task, "unload", {"instance": self.i["id"]})[
-                    "status"
-                ],
-                "cleanup_pending",
-            )
-            cli.assert_not_called()
-
     def test_worker_launch_failure_releases_slot(self):
         self.i["status"] = "running"
         with (

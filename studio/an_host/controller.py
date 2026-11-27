@@ -8,7 +8,7 @@ import tomllib
 import uuid
 from pathlib import Path
 
-from .runner import Runner
+from .runner import Runner, signal_wake
 
 ACTIONS = set(tomllib.loads(Path(__file__).with_name("controller.toml").read_text())["studio"]["graph_actions"])
 
@@ -55,7 +55,7 @@ def controller(directory, options):
         with runner.guard:
             proc = runner.procs.get(key)
             if proc and proc.poll() is None:
-                proc.terminate()
+                signal_wake(proc)
             runner.status_by_task.pop(key, None)
 
     runner = Runner(binary, options["agent"], turns, mcp, retire=retire, refresh=lambda key: delegate(key, turns[key]))

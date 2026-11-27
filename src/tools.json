@@ -377,7 +377,7 @@
   },
   {
     "name": "an_graph_state",
-    "description": "Read the current graph and events following a cursor.",
+    "description": "Read current nodes, attempts, turn_scopes with reviewed route decisions, and events following a cursor.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -391,10 +391,10 @@
   },
   {
     "name": "an_scope_propose",
-    "description": "Before submitting a graph for a new instruction, propose the minimal turn routes for the person to review in Studio. Each route has operation, origin, source, destination. Use source.input for a named task input, source.node and source.port for an exact output, or source.producer_port and producer_argv for recurring immutable spool outputs. Name graph-metadata for subgraph publication and model:<granted alias> for model inputs. Only the person can approve.",
+    "description": "Before submitting a graph for a new instruction, propose the minimal turn routes for the person to review in Studio. Each route has operation, origin, source, destination. Use source.input for a named task input, source.node and source.port for an exact output, or source.producer_port and producer_argv for recurring immutable spool outputs. Name graph-metadata for subgraph publication and model:<granted alias> for model inputs. For a follow-up on the same turn, give the latest user instruction_cursor and propose only additional routes. Only the person can approve.",
     "inputSchema": {
       "type": "object",
-      "properties": {"routes": {"type": "array", "minItems": 1, "items": {"type": "object"}}},
+      "properties": {"routes": {"type": "array", "minItems": 1, "items": {"type": "object"}}, "instruction_cursor": {"type": "integer", "minimum": 1}},
       "required": ["routes"],
       "additionalProperties": false
     }

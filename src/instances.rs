@@ -1049,6 +1049,112 @@ mod tests {
         Ok(())
     }
     #[test]
+    fn closed_task_retries_owner_checked_cleanup_after_restart() -> Result<()> {
+        // Exercise graph finish in separate host processes against one durable registry.
+        // Only the container CLI boundary is replaced in the test executable.
+        if std::env::var_os("AN_CLEANUP_CHILD").is_some() {
+            let report = crate::graph::host("t", "finish", &json!({}))?;
+            fs::write(root()?.join("finish.json"), report.to_string())?;
+            return Ok(());
+        }
+
+        use std::os::unix::fs::PermissionsExt;
+        let dir = std::env::temp_dir().join(uid());
+        fs::create_dir_all(dir.join("instances/i"))?;
+        let executable = dir.join("container");
+        fs::write(
+            &executable,
+            r#"#!/bin/sh
+set -eu
+cd "$AN_HOME"
+echo "$*" >> calls
+case "$1" in
+    list)
+        if test ! -f inventory; then echo unavailable >&2; exit 1; fi
+        cat inventory ;;
+    delete)
+        if test -f busy; then echo busy >&2; exit 1; fi
+        echo '[]' > inventory ;;
+    *) exit 2 ;;
+esac
+"#,
+        )?;
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700))?;
+        let db = Connection::open(dir.join("registry.sqlite3"))?;
+        db.execute_batch("CREATE TABLE objects(kind,id,body,PRIMARY KEY(kind,id))")?;
+        put(&db, "task", "t", &json!({"work": {}}))?;
+        put(&db, "turn", "t", &json!("owner"))?;
+        let instance = json!({"id":"i", "task":"t", "name":"an-i", "spool":"demo@sha256:abc",
+                             "intent":"load", "status":"running", "active":null});
+        save(&db, "instance", &instance)?;
+
+        let finish = || -> Result<Value> {
+            fs::write(dir.join("calls"), "")?;
+            let result = Command::new(std::env::current_exe()?)
+                .args([
+                    "--exact",
+                    "instances::tests::closed_task_retries_owner_checked_cleanup_after_restart",
+                ])
+                .env("AN_CLEANUP_CHILD", "1")
+                .env("AN_HOME", &dir)
+                .env("AN_TURN", "owner")
+                .env("AN_TEST_CONTAINER", &executable)
+                .output()?;
+            ensure!(
+                result.status.success(),
+                "{}",
+                String::from_utf8_lossy(&result.stdout)
+            );
+            Ok(serde_json::from_slice(&fs::read(dir.join("finish.json"))?)?)
+        };
+        let pending = json!({"closed": true, "cleanup_pending": ["i"]});
+        let done = json!({"closed": true, "cleanup_pending": []});
+        let list = "list --all --format json\n";
+        assert_eq!(finish()?, pending);
+        assert_eq!(get(&db, "task", "t")?["closed"], true);
+        assert!(get(&db, "turn", "t")?.is_null());
+        let saved = get(&db, "instance", "i")?;
+        assert_eq!(saved["intent"], "unload");
+        assert_eq!(saved["observed"], "unknown");
+        assert_eq!(saved["status"], "cleanup_pending");
+        assert_eq!(fs::read_to_string(dir.join("calls"))?, list);
+
+        let inventory = |label: &str, digest: &str| -> Result<()> {
+            let item = json!({"id":"an-i", "status":{"state":"stopped"},
+                        "configuration":{"labels":{"an.instance":label},
+                                         "image":{"descriptor":{"digest":digest}}}});
+            Ok(fs::write(dir.join("inventory"), json!([item]).to_string())?)
+        };
+        for (label, digest) in [("foreign", "sha256:abc"), ("i", "sha256:other")] {
+            inventory(label, digest)?;
+            assert_eq!(finish()?, pending);
+            assert_eq!(get(&db, "instance", "i")?["observed"], "identity_mismatch");
+            assert_eq!(fs::read_to_string(dir.join("calls"))?, list);
+        }
+
+        inventory("i", "sha256:abc")?;
+        fs::write(dir.join("busy"), "")?;
+        assert_eq!(finish()?, pending);
+        let delete = format!("{list}delete an-i\n{list}");
+        assert_eq!(fs::read_to_string(dir.join("calls"))?, delete);
+        assert!(dir.join("instances/i").is_dir());
+
+        fs::remove_file(dir.join("busy"))?;
+        assert_eq!(finish()?, done);
+        assert_eq!(fs::read_to_string(dir.join("calls"))?, delete);
+        assert_eq!(get(&db, "instance", "i")?["status"], "unloaded");
+        assert!(!dir.join("instances/i").exists());
+        assert_eq!(finish()?, done);
+        assert_eq!(fs::read_to_string(dir.join("calls"))?, "");
+        assert_eq!(
+            get(&db, "graph", "t")?["events"].as_array().unwrap().len(),
+            1
+        );
+        fs::remove_dir_all(dir)?;
+        Ok(())
+    }
+
+    #[test]
     fn named_inputs_preserve_approvals_and_tickets_until_all_ports_commit() -> Result<()> {
         // One subprocess owns its environment and throwaway registry.
         if std::env::var_os("AN_RESERVATION_CHILD").is_none() {
