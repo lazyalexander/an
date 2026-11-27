@@ -121,8 +121,23 @@ pub fn start(
     Ok(actual)
 }
 
-pub fn exec(name: &str, argv: &[String], log: File) -> Result<Child> {
-    Ok(command()
+pub fn exec(name: &str, argv: &[String], log: File, log_limit: u64) -> Result<Child> {
+    let mut cmd = command();
+    // stdout and stderr share the same regular file. Bound the writer itself so
+    // a dead worker cannot leave a container CLI filling the host filesystem.
+    unsafe {
+        cmd.pre_exec(move || {
+            let limit = libc::rlimit {
+                rlim_cur: log_limit,
+                rlim_max: log_limit,
+            };
+            if libc::setrlimit(libc::RLIMIT_FSIZE, &limit) == -1 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    Ok(cmd
         .args(["exec", name])
         .args(argv)
         .stdout(log.try_clone()?)

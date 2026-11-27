@@ -1,4 +1,7 @@
 {
+  "instance_disk_mib": 512,
+  "run_output_bytes": 33554432,
+  "run_log_bytes": 4194304,
   "container_cpus": 2,
   "container_memory_mib": 1024,
   "max_loaded_instances": 8,
