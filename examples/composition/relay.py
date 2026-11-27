@@ -8,6 +8,7 @@ import tomllib
 
 from catalog import COMMAND, CONTAINER, HERE, SPOOLS
 from live import Runtime
+from scoring import assess_safely
 
 
 def reference(case, images):
@@ -41,6 +42,20 @@ def reference(case, images):
         "decision": "plan" if nodes else "unsupported",
         "nodes": list(reversed(nodes)),
     }
+
+
+def read_plan(path, case):
+    plan = json.loads(path.read_text())
+    aliases = {name: name for name in SPOOLS}
+    if not all(assess_safely(plan, case, aliases).values()):
+        raise ValueError("Planner output failed fixture grading")
+    for node in plan["nodes"]:
+        fields = {"id", "kind", "title", "after", "inputs", "outputs"}
+        if node["kind"] == "run":
+            fields.update({"spool", "argv"})
+        if node.keys() - fields:
+            raise ValueError("Unexpected fixture node field")
+    return plan
 
 
 def check_access(report):
@@ -104,6 +119,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--an", type=Path, default=HERE.parents[1] / "target/debug/an")
+    parser.add_argument(
+        "--plan", type=Path, help="Replay a recorded flat-colour planner answer"
+    )
     args = parser.parse_args()
     directory = args.out.resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=False)
@@ -116,13 +134,25 @@ def main():
     runtime = None
     report = {"case": case["name"], "stage": "access", "passed": False}
     try:
+        plan = None
+        if args.plan:
+            report["stage"] = "grade"
+            plan = read_plan(args.plan, case)
+            report["plan_source"] = "recorded"
+        report["stage"] = "access"
         check_access(report)
         report["stage"] = "provision"
         runtime = Runtime(directory, args.an.resolve(), case["parents"])
         report["images"] = runtime.images
         report["stage"] = "submit"
         runtime.begin(case)
-        plan = reference(case, runtime.images)
+        if plan is None:
+            plan = reference(case, runtime.images)
+        else:
+            for node in plan["nodes"]:
+                if node["kind"] == "run":
+                    node["spool"] = runtime.images[node["spool"]]
+        (directory / "submitted-plan.json").write_text(json.dumps(plan, indent=2))
         receipt = runtime.graph(
             "submit",
             nodes=plan["nodes"],
