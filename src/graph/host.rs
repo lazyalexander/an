@@ -377,10 +377,7 @@ fn control(
             let mut run: Value = serde_json::from_str(&body)?;
             if let Some(instance) = run["instance"].as_str() {
                 let mut i = get(tx, "instance", instance)?;
-                if i["active"] != id
-                    && !(i["active"].is_null()
-                        && matches!(i["intent"].as_str(), Some("stop" | "unload")))
-                {
+                if !instances::can_cancel_run(&i, &id) {
                     continue;
                 }
                 if i["intent"] == "load" {

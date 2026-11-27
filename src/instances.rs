@@ -82,9 +82,8 @@ fn reconcile(db: &mut Connection, i: &mut Value, f: &File) -> Result<()> {
         return Ok(());
     }
     let actual = observe(i, f);
-    let active = i["active"].as_str().map(str::to_owned);
     i["checked_at"] = json!(SystemTime::now().duration_since(UNIX_EPOCH)?.as_secs_f64());
-    if let Some(id) = &active {
+    if let Some(id) = i["active"].as_str() {
         let lease = File::options()
             .create(true)
             .append(true)
@@ -106,23 +105,29 @@ fn reconcile(db: &mut Connection, i: &mut Value, f: &File) -> Result<()> {
             i["error"] = json!(e.to_string());
         }
     }
-    let tx = db.transaction()?;
+    i["observed"] = json!(actual);
+    save_observation(db, i, guest_settled)
+}
+
+fn save_observation(db: &mut Connection, i: &mut Value, guest_settled: bool) -> Result<()> {
+    // Reserve the writer before reading the run. A deferred read cannot upgrade
+    // while a competing queue worker holds SQLite's write reservation.
+    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     if guest_settled {
         if let Some(id) = i["unsettled_capacity"].as_str() {
             capacity::release(&tx, id)?;
             i["unsettled_capacity"] = Value::Null;
         }
-        if let Some(id) = active {
-            let mut r = get(&tx, "run", &id)?;
+        if let Some(id) = i["active"].as_str() {
+            let mut r = get(&tx, "run", id)?;
             if r["capacity_managed"] == true {
-                capacity::release(&tx, &id)?;
+                capacity::release(&tx, id)?;
             }
             r["status"] = json!("cancelled");
             save(&tx, "run", &r)?;
             i["active"] = Value::Null;
         }
     }
-    i["observed"] = json!(actual);
     save(&tx, "instance", i)?;
     tx.commit()?;
     Ok(())
@@ -243,6 +248,15 @@ fn owned(db: &Connection, task: &str, id: &str) -> Result<Value> {
     ensure!(r["task"] == task, "Run outside task");
     Ok(r)
 }
+
+/// A worker can clear active after it records an uncertain guest exit. Its instance
+/// then keeps the stop intent through reconciliation, even after the guest is gone.
+pub(crate) fn can_cancel_run(instance: &Value, run: &str) -> bool {
+    instance["active"] == run
+        || (instance["active"].is_null()
+            && matches!(instance["intent"].as_str(), Some("stop" | "unload")))
+}
+
 fn bridge_artifact(db: &Connection, task: &str, t: &Value, source: &str) -> Result<Value> {
     let item = get(db, "artifact", source)?;
     let origin = string(&item, "tool")?;
@@ -719,11 +733,16 @@ pub(crate) fn dispatch_locked(
                 return Ok(r);
             }
             let mut i = get(db, "instance", string(&r, "instance")?)?;
-            if op == "cancel" && i["active"] == id && i["intent"] == "load" {
+            if op == "cancel"
+                && matches!(r["status"].as_str(), Some("running" | "unknown"))
+                && can_cancel_run(&i, id)
+            {
                 let tx = db.transaction()?;
-                i["intent"] = json!("stop");
+                if i["intent"] == "load" {
+                    i["intent"] = json!("stop");
+                    save(&tx, "instance", &i)?;
+                }
                 r["status"] = json!("cancel_pending");
-                save(&tx, "instance", &i)?;
                 save(&tx, "run", &r)?;
                 tx.commit()?;
             }
@@ -792,7 +811,7 @@ pub(crate) fn dispatch_locked(
     }
     if op == "unload" && i["status"] != "unloaded" {
         i["intent"] = json!("unload");
-        let tx = db.transaction()?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if let Some(id) = i["active"].as_str() {
             let mut r = owned(&tx, task, id)?;
             r["status"] = json!("cancel_pending");
@@ -953,7 +972,7 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
         } else {
             None
         };
-        let tx = db.transaction()?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
         if files == json!({}) {
             r["status"] = json!("completed");
         } else {
@@ -1023,6 +1042,49 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cancellation_waits_for_a_competing_capacity_writer() -> Result<()> {
+        let file = std::env::temp_dir().join(uid());
+        let mut db = Connection::open(&file)?;
+        db.execute_batch("CREATE TABLE objects(kind,id,body,PRIMARY KEY(kind,id))")?;
+        let tx = db.transaction()?;
+        save(
+            &tx,
+            "run",
+            &json!({"id":"a", "status":"cancel_pending", "capacity_managed":true}),
+        )?;
+        capacity::enqueue(&tx, "a")?;
+        tx.execute("UPDATE execution_queue SET admitted=1 WHERE run='a'", [])?;
+        tx.commit()?;
+        let (reserved, wait) = std::sync::mpsc::channel();
+        let writer = Connection::open(&file)?;
+        let other = std::thread::spawn(move || -> Result<()> {
+            let mut writer = writer;
+            let tx = writer.transaction_with_behavior(TransactionBehavior::Immediate)?;
+            capacity::enqueue(&tx, "b")?;
+            reserved.send(())?;
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            tx.commit()?;
+            Ok(())
+        });
+        wait.recv()?;
+        let mut instance =
+            json!({"id":"i","active":"a","intent":"stop","status":"stopped","observed":"stopped"});
+        let result = save_observation(&mut db, &mut instance, true);
+        other.join().unwrap()?;
+        result?;
+        assert_eq!(get(&db, "run", "a")?["status"], "cancelled");
+        assert!(get(&db, "instance", "i")?["active"].is_null());
+        let remaining: Vec<String> = db
+            .prepare("SELECT run FROM execution_queue")?
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        assert_eq!(remaining, ["b"]);
+        drop(db);
+        fs::remove_file(file)?;
+        Ok(())
+    }
     #[test]
     fn closing_marks_only_this_tasks_settled_instances() -> Result<()> {
         let mut db = Connection::open_in_memory()?;
