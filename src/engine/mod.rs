@@ -21,6 +21,9 @@ pub(crate) fn observe(i: &mut Value, f: &File) -> String {
                 {
                     "identity_mismatch".into()
                 } else {
+                    if let Some(resources) = cfg.get("resources") {
+                        i["resources"] = json!({"cpus":resources["cpus"],"memory_bytes":resources["memoryInBytes"]});
+                    }
                     hit["status"]["state"].as_str().unwrap_or("unknown").into()
                 }
             }

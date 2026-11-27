@@ -1,4 +1,6 @@
 {
+  "container_cpus": 2,
+  "container_memory_mib": 1024,
   "max_loaded_instances": 8,
   "max_concurrent_runs": 4,
   "sqlite_busy_s": 20,

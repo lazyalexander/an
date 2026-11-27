@@ -10,6 +10,7 @@ with tempfile.TemporaryDirectory(dir="/private/tmp") as tmp:
     def cli(*args):
         return subprocess.check_output(["target/debug/an",*args],text=True).strip()
     def call(*args): return json.loads(cli(*args))
+    (Path(tmp)/"config.json").write_text(json.dumps({"container_cpus": 1, "container_memory_mib": 512}))
     image=cli("register", args.image)
     src=Path(tmp)/"seed"
     src.write_text("round trip")
@@ -20,11 +21,16 @@ with tempfile.TemporaryDirectory(dir="/private/tmp") as tmp:
         req=op(name,*args,*tail)["request_id"]
         call("permission","decide","--task",task,"--request-id",req,"--decision","once")
         return op(name,"--request-id",req,*args,*tail)
-    i=op("load","--spool",image)["id"]
+    loaded=op("load","--spool",image)
+    i=loaded["id"]
     try:
+        assert loaded["resources"] == {"cpus": 1, "memory_bytes": 512 * 1024**2}, loaded
         # Exercise the guest boundary through the same public run path as the jobs below.
         os.environ["AN_SMOKE_HOST_ONLY"] = "host-only-marker"
         probe = op("run", "--instance", i, "--", "/bin/sh", "-ec", """
+            read -r quota period </sys/fs/cgroup/cpu.max
+            test "$period" -gt 0 && test "$quota" -eq "$period"
+            test "$(cat /sys/fs/cgroup/memory.max)" = 536870912
             test -z "${AN_SMOKE_HOST_ONLY+x}"
             test -z "${AN_TURN+x}"
             test -z "${AN_HOME+x}"

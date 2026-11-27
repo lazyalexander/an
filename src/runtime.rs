@@ -295,7 +295,7 @@ pub fn register(db: &Connection, reference: &str) -> Result<String> {
         for d in ["input", "output", "work"] {
             fs::create_dir_all(path.join(d))?;
         }
-        start(
+        let i = start(
             &image,
             &id,
             &format!("an.probe={id}"),
@@ -304,7 +304,6 @@ pub fn register(db: &Connection, reference: &str) -> Result<String> {
             &info["platform"],
             &lock,
         )?;
-        let i = inspect(&["inspect", &id], Some(&lock))?;
         let cfg = &i["configuration"];
         ensure!(
             i["status"]["state"] == "running"

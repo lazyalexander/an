@@ -62,7 +62,7 @@ pub fn start(
     editable: bool,
     platform: &Value,
     lock: &File,
-) -> Result<()> {
+) -> Result<Value> {
     let p = path.to_str().context("Invalid mount path")?;
     ensure!(!p.contains(','), "Unsupported comma in mount path");
     let plat = ["os", "architecture", "variant"]
@@ -70,9 +70,21 @@ pub fn start(
         .filter_map(|k| platform[*k].as_str())
         .collect::<Vec<_>>()
         .join("/");
+    let config = crate::config::load()?;
+    let cpus = config.limit("container_cpus");
+    let memory = config
+        .limit("container_memory_mib")
+        .checked_mul(1024 * 1024)
+        .context("container_memory_mib exceeds the runtime byte range")?;
+    let cpu_arg = cpus.to_string();
+    let memory_arg = memory.to_string();
     let mut args = vec![
         "run",
         "--detach",
+        "--cpus",
+        &cpu_arg,
+        "--memory",
+        &memory_arg,
         "--platform",
         &plat,
         "--name",
@@ -102,7 +114,11 @@ pub fn start(
     }
     args.extend([image, "infinity"]);
     invoke(&args, Some(lock))?;
-    Ok(())
+    let actual = inspect(&["inspect", id], Some(lock))?;
+    let resources = &actual["configuration"]["resources"];
+    ensure!(resources["cpus"].as_u64() == Some(cpus) && resources["memoryInBytes"].as_u64() == Some(memory),
+        "Container compute allocation mismatch: requested {cpus} CPUs and {memory} bytes, observed {resources}");
+    Ok(actual)
 }
 
 pub fn exec(name: &str, argv: &[String], log: File) -> Result<Child> {
