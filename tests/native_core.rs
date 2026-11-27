@@ -1567,6 +1567,29 @@ fn redirect_closes_an_already_viewed_decision() {
 }
 
 #[test]
+fn cancel_settles_an_unknown_run_after_its_instance_was_removed() {
+    let f = Fixture::graph_task();
+    f.insert(
+        "instance",
+        "gone",
+        json!({
+            "id":"gone", "task":"task", "status":"unloaded", "intent":"unload", "active":null
+        }),
+    );
+    f.insert(
+        "run",
+        "attempt",
+        json!({
+            "id":"attempt", "task":"task", "instance":"gone", "status":"unknown"
+        }),
+    );
+    let status = |op| f.call(&[op, "--task", "task", "attempt"])["status"].clone();
+    assert_eq!(status("status"), "unknown");
+    assert_eq!(status("cancel"), "cancelled");
+    assert_eq!(status("cancel"), "cancelled");
+}
+
+#[test]
 fn stop_reconciles_idle_instance_for_an_indeterminate_attempt() {
     let f = Fixture::graph_task();
     f.insert("instance","idle", json!({"id":"idle","name":"an-idle","task":"task","intent":"stop","status":"cleanup_pending","active":null}));
