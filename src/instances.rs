@@ -1,4 +1,4 @@
-use crate::engine::{apple, observe};
+use crate::engine::{apple, capacity, observe};
 use crate::{artifacts, permission, runtime, store::*};
 use anyhow::{bail, ensure, Context, Result};
 use base64::{engine::general_purpose::STANDARD, Engine};
@@ -98,8 +98,15 @@ fn reconcile(db: &mut Connection, i: &mut Value, f: &File) -> Result<()> {
     let unloading = i["intent"] == "unload";
     let tx = db.transaction()?;
     if (stopping || unloading) && i["status"] != "cleanup_pending" {
+        if let Some(id) = i["unsettled_capacity"].as_str() {
+            capacity::release(&tx, id)?;
+            i["unsettled_capacity"] = Value::Null;
+        }
         if let Some(id) = active {
             let mut r = get(&tx, "run", &id)?;
+            if r["capacity_managed"] == true {
+                capacity::release(&tx, &id)?;
+            }
             r["status"] = json!("cancelled");
             save(&tx, "run", &r)?;
             i["active"] = Value::Null;
@@ -477,6 +484,8 @@ fn submit(
         r["image_code"] = image["code_revision"].clone();
         r["code_omissions"] = image["code_omissions"].clone();
     }
+    capacity::enqueue(&tx, &id)?;
+    r["capacity_managed"] = json!(true);
     i["active"] = json!(id);
     save(&tx, "run", &r)?;
     save(&tx, "instance", i)?;
@@ -490,6 +499,7 @@ fn submit(
         }
         Err(e) => {
             let tx = db.transaction()?;
+            capacity::release(&tx, &id)?;
             for (key, record) in tickets {
                 put(&tx, "handoff", key, &record)?;
             }
@@ -723,7 +733,13 @@ pub(crate) fn dispatch_locked(
                 r["status"] = json!("cancelled");
                 put(db, "run", id, &r)?;
             }
-            return Ok(json!({"id":id,"status":r["status"],"spool":r["spool"]}));
+            let mut status = json!({"id":id,"status":r["status"],"spool":r["spool"]});
+            if r["capacity_managed"] == true && r["status"] == "running" {
+                if let Some(position) = capacity::position(db, id)? {
+                    status["waiting"] = json!({"reason":"execution_capacity","position":position});
+                }
+            }
+            return Ok(status);
         }
         "run" | "unload" => {}
         _ => bail!("Unknown operation {op}"),
@@ -818,7 +834,14 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
     let mut quiet = true;
     let run = (|| -> Result<()> {
         let mut child = {
-            let f = worker_lock;
+            let f = if r["capacity_managed"] == true {
+                let Some(lock) = capacity::wait(&mut db, &task, &instance, id, worker_lock)? else {
+                    return Ok(());
+                };
+                lock
+            } else {
+                worker_lock
+            };
             let mut i = get(&db, "instance", &instance)?;
             if i["active"] != id || i["intent"] != "load" {
                 return Ok(());
@@ -834,6 +857,9 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
                 if r["graph_bindings"].is_object()
                     && authority.as_ref().ok() != Some(&r["input_stamp"])
                 {
+                    if r["capacity_managed"] == true {
+                        capacity::release(&tx, id)?;
+                    }
                     r["status"] = json!("authorization_expired");
                     i["active"] = Value::Null;
                     save(&tx, "run", &r)?;
@@ -922,6 +948,9 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             t["work"][string(&i, "spool")?] = r["result_work"].clone();
             put(&tx, "task", &task, &t)?;
         }
+        if r["capacity_managed"] == true {
+            capacity::release(&tx, id)?;
+        }
         i["active"] = Value::Null;
         save(&tx, "run", &r)?;
         save(&tx, "instance", &i)?;
@@ -950,6 +979,13 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
             }
             i["active"] = Value::Null;
             let tx = db.transaction()?;
+            if r["capacity_managed"] == true {
+                if quiet {
+                    capacity::release(&tx, id)?;
+                } else {
+                    i["unsettled_capacity"] = json!(id);
+                }
+            }
             save(&tx, "run", &r)?;
             save(&tx, "instance", &i)?;
             tx.commit()?;
