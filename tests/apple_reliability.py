@@ -15,6 +15,11 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
 from pathlib import Path
 
+if not __debug__:
+    raise RuntimeError(
+        "Acceptance checks require Python assertions; disable optimization"
+    )
+
 AN = Path("target/debug/an").resolve()
 APPLE = "/usr/local/bin/container"
 
@@ -104,9 +109,10 @@ class Host:
             time.sleep(0.2)
         raise TimeoutError((run, expected))
 
-    def rows(self, sql, params=()):
+    def rows(self, sql, params=(), *, recover=False):
         database = (self.home / "registry.sqlite3").as_uri()
-        with closing(sqlite3.connect(f"{database}?mode=ro", uri=True)) as db:
+        mode = "rw" if recover else "ro"
+        with closing(sqlite3.connect(f"{database}?mode={mode}", uri=True)) as db:
             return db.execute(sql, params).fetchall()
 
     def record(self, kind, key):
@@ -219,7 +225,7 @@ def memory_exhaustion(host, owner, follower, turn):
         "reason": "execution_capacity",
         "position": 1,
     }
-    (output / "proceed").touch()
+    (output / "proceed").touch(exist_ok=False)
     host.wait(owner, victim, "failed")
     record = host.record("run", victim)
     assert record["exit_code"] == 137 and not record.get("candidate"), record
