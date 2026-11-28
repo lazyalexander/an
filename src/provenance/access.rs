@@ -29,6 +29,10 @@ pub enum Right {
         version: VersionId,
         recipient: String,
     },
+    ReadInbox,
+    SubmitReview {
+        source: BlockRef,
+    },
     Register {
         artifact: ArtifactId,
     },
@@ -134,6 +138,8 @@ impl Actor {
                 Ok(graph["nodes"][node].get("publication_review").is_some()
                     && graph["activity"][node]["id"] == attempt.as_str())
             }
+            Right::ReadInbox => super::inbox::is_primary(db, &self.task),
+            Right::SubmitReview { source } => self.owns(db, &source.artifact),
             Right::Evidence { snapshot } => Ok(find(db, "frozen_evidence", snapshot)?
                 .is_some_and(|s| s["task"] == self.task)
                 || super::evidence::reopened(db, &self.task, snapshot)?),
@@ -235,6 +241,22 @@ pub fn grant(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
                 )?,
                 "Unknown version"
             );
+        }
+    }
+    if rights
+        .iter()
+        .any(|r| matches!(r, Right::ReadInbox | Right::SubmitReview { .. }))
+    {
+        ensure!(
+            target == actor.task && rights.len() == 1,
+            "Inbox delegation requires a single task-local right"
+        );
+    }
+    if let [Right::SubmitReview { source }] = rights.as_slice() {
+        if let Some(pending) =
+            super::inbox::authorize(db, actor, source, args["request_id"].as_str())?
+        {
+            return Ok(pending);
         }
     }
     let evidence: Vec<_> = rights

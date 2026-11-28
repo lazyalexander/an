@@ -36,6 +36,9 @@ enum Workspace {
         request: String,
     },
     Create {
+        /// Bind the optional primary agent identity when creating this workspace.
+        #[command(flatten)]
+        primary: Selector,
         #[arg(long)]
         review_owner_digest: Option<String>,
         #[command(flatten)]
@@ -257,6 +260,7 @@ pub fn execute() -> Result<Value> {
                 Workspace::Create {
                     grants,
                     review_owner_digest,
+                    primary,
                 },
         } => {
             ensure!(!grants.spool.is_empty(), "Grant a spool");
@@ -268,6 +272,19 @@ pub fn execute() -> Result<Value> {
                 &id,
                 &json!({"images":images,"editable":grants.editable,"tools":tools}),
             )?;
+            if let Some(identity) = primary.identity()? {
+                ensure!(
+                    find(&tx, "binding", &identity)?.is_none(),
+                    "Primary identity already bound"
+                );
+                put(
+                    &tx,
+                    "binding",
+                    &identity,
+                    &json!({"workspace":id,"task":null}),
+                )?;
+                put(&tx, "workspace_primary", &id, &json!(identity))?;
+            }
             if let Some(digest) = review_owner_digest {
                 ensure!(
                     digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_hexdigit()),
@@ -332,6 +349,7 @@ pub fn execute() -> Result<Value> {
                     let (s, d) = (&row[1], &row[2]);
                     let valid = match row[0].as_str() {
                         Some("input") => s.is_string() && images.contains(d),
+                        Some("submit_review") => crate::provenance::valid_endpoint(s) && d == &id,
                         Some("block_input") => {
                             crate::provenance::valid_endpoint(s) && images.contains(d)
                         }

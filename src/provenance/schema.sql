@@ -93,3 +93,9 @@ CREATE INDEX IF NOT EXISTS pv_notice_history ON pv_notice_attempt(notice,seq);
 CREATE TABLE IF NOT EXISTS pv_correction (
     previous TEXT PRIMARY KEY, replacement TEXT UNIQUE NOT NULL
 );
+CREATE TABLE IF NOT EXISTS pv_inbox (
+    seq INTEGER PRIMARY KEY, workspace TEXT NOT NULL, receipt TEXT NOT NULL UNIQUE,
+    artifact TEXT NOT NULL, version INTEGER NOT NULL, block TEXT NOT NULL,
+    metadata TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pv_workspace_inbox ON pv_inbox(workspace,seq);

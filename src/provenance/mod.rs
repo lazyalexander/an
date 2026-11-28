@@ -11,6 +11,7 @@ mod handoff;
 mod history;
 pub(crate) use handoff::valid_endpoint;
 pub(crate) use history::require_accepted;
+mod inbox;
 mod material;
 mod notification;
 pub(crate) mod publication;
@@ -42,6 +43,18 @@ pub fn execute(task: &str, action: &str, args: &Value) -> Result<Value> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let actor = Actor::authenticate(&tx, task)?;
     let result = match action {
+        "inbox" => inbox::list(&tx, &actor)?,
+        "submit-review" => {
+            let submission: inbox::Submission = serde_json::from_value(args.clone())?;
+            replay(
+                &tx,
+                &actor,
+                &submission.idempotency_key,
+                action,
+                args,
+                || inbox::submit(&tx, &actor, &submission.source),
+            )?
+        }
         "notify-correction" => correction::notify(&tx, &actor, args)?,
         "corrections" => correction::inspect(&tx, &actor, args)?,
         "notifications" => notification::list(&tx, &actor)?,
