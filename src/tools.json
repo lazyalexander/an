@@ -1,7 +1,7 @@
 [
   {
     "name":"an_provenance",
-    "description":"Query versioned blocks, impacts, graph history and frozen evidence. Commit or decide with an explicit delegation. Send the same JSON payload as an provenance.",
+    "description":"Query versioned blocks, impacts, graph history and frozen evidence. Commit or decide with an explicit delegation. Use inbox to read hand-ins and review-inbox to record a disposition with review_inbox authority. Send the same JSON payload as an provenance.",
     "inputSchema":{"type":"object","properties":{"action":{"type":"string"},"payload":{"type":"object","additionalProperties":true}},"required":["action","payload"],"additionalProperties":false}
   },
   {

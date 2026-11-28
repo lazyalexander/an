@@ -26,6 +26,7 @@ def exercise(worker, primary):
                 ["input", "minutes.json", image],
                 ["preview", image, "provenance"],
                 ["submit_review", source, workspace],
+                ["submit_review", endpoint("schedule", "proposal", 2), workspace],
             ]
         )
     )
@@ -36,7 +37,7 @@ def exercise(worker, primary):
         "grant", target=primary.task, rights=[{"right": "read_inbox"}]
     )
 
-    def reconnect():
+    def reconnect(credential=reader):
         return Mcp(
             {
                 "command": str(ROOT / "target/debug/an"),
@@ -45,7 +46,7 @@ def exercise(worker, primary):
                     **primary.env,
                     "AN_TURN": "",
                     "AN_AGENT_TOKEN": "",
-                    "AN_PROVENANCE_TOKEN": reader["token"],
+                    "AN_PROVENANCE_TOKEN": credential["token"],
                 },
             }
         )
@@ -137,13 +138,52 @@ print('Private review log')
         purpose="publish",
         denied="unknown field",
     )
+    client = reconnect()
+    try:
+        assert inbox(client) == [{"text": text, "receipt": receipt}]
+    finally:
+        client.close()
+    reviewer = primary.provenance(
+        "grant", target=primary.task, rights=[{"right": "review_inbox"}]
+    )
+    first = dict(receipt=receipt["id"], outcome="request_evidence", idempotency_key="review-v1")
+    primary.provenance("review-inbox", token=reader["token"], denied="outside authority", **first)
+    client = reconnect(reviewer)
+    try:
+        result = client.tool("an_provenance", {"action": "review-inbox", "payload": first})
+    finally:
+        client.close()
+    assert result["source"] == source and result["grant"] == reviewer["grant"]
+    assert primary.provenance("review-inbox", token=reviewer["token"], **first) == result
+    primary.provenance("review-inbox", token=reviewer["token"], **{**first, "outcome": "return"},
+                       denied="different content")
+    primary.provenance("review-inbox", token=reviewer["token"], **{**first, "idempotency_key": "again"},
+                       denied="already reviewed")
+
+    revised = "Friday release confirmed by the scheduling team."
+    worker.provenance("commit", idempotency_key="revise", versions=[
+        version("schedule", [content("proposal", revised)], expected=1)
+    ])
+    second_source = endpoint("schedule", "proposal", 2)
+    sender = worker.provenance("grant", target=worker.task, rights=send_right(second_source))
+    second = submit(second_source, "send-v2")
     worker.graph("finish")
     worker.task = None
+    adopted = primary.provenance("review-inbox", token=reviewer["token"], receipt=second["id"],
+                                 outcome="adopt", idempotency_key="review-v2")
+    assert adopted["source"] == second_source and adopted["outcome"] == "adopt"
+    destination = primary.home / "external-export"
+    primary.call("export", second["id"], destination, token=reviewer["token"],
+                 denied="Delegation limited to provenance")
+    assert not destination.exists()
     for _ in range(2):
         client = reconnect()
         try:
             items = inbox(client)
-            assert items == [{"text": text, "receipt": receipt}]
+            assert items == [
+                {"text": text, "receipt": receipt, "disposition": result},
+                {"text": revised, "receipt": second, "disposition": adopted},
+            ]
             assert all(
                 marker not in json.dumps(items)
                 for marker in [*files[:3], private, "Private review log"]
@@ -171,4 +211,4 @@ if __name__ == "__main__":
         finally:
             for host in (worker, primary):
                 host.cleanup()
-    print("Verified offline hand-in, scoped inbox and reconnect after task closure.")
+    print("Verified offline hand-in, version-bound review, export denial and reconnect after task closure.")

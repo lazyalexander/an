@@ -102,3 +102,8 @@ CREATE INDEX IF NOT EXISTS pv_workspace_inbox ON pv_inbox(workspace,seq);
 
 CREATE VIEW IF NOT EXISTS pv_frozen_text AS
 SELECT artifact,version,block,json_extract(body,'$.text') AS text FROM pv_block;
+
+CREATE TABLE IF NOT EXISTS pv_inbox_disposition (
+    receipt TEXT PRIMARY KEY REFERENCES pv_inbox(receipt),
+    metadata TEXT NOT NULL
+);

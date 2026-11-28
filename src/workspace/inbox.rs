@@ -5,7 +5,7 @@ use crate::{
     store::{find, get, uid},
 };
 use anyhow::{ensure, Context, Result};
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
@@ -124,7 +124,52 @@ pub(crate) fn list(db: &Connection, actor: &Actor) -> Result<Value> {
     let mut items = vec![];
     while let Some(row) = rows.next()? {
         let receipt: Value = serde_json::from_str(&row.get::<_, String>(0)?)?;
-        items.push(json!({"receipt":receipt,"text":row.get::<_,String>(1)?}));
+        let mut item = json!({"receipt":receipt,"text":row.get::<_,String>(1)?});
+        if let Some(metadata) = row.get::<_, Option<String>>(2)? {
+            item["disposition"] = serde_json::from_str(&metadata)?;
+        }
+        items.push(item);
     }
     Ok(json!({"items":items}))
+}
+
+#[derive(Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+enum Outcome {
+    Adopt,
+    Return,
+    RequestEvidence,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Review {
+    pub idempotency_key: String,
+    receipt: String,
+    outcome: Outcome,
+}
+
+pub(crate) fn review(db: &Connection, actor: &Actor, review: &Review) -> Result<Value> {
+    let ws = workspace(db, &actor.task)?;
+    let submission: String = db
+        .query_row(
+            "SELECT metadata FROM pv_inbox WHERE workspace=? AND receipt=?",
+            params![ws, review.receipt],
+            |row| row.get(0),
+        )
+        .optional()?
+        .context("Unknown workspace inbox receipt")?;
+    let submission: Value = serde_json::from_str(&submission)?;
+    let disposition = json!({
+        "id": uid(), "receipt": review.receipt, "source": submission["source"],
+        "workspace": ws, "task": actor.task, "actor": actor.id, "grant": actor.grant,
+        "outcome": review.outcome
+    });
+    let inserted = db.execute(
+        "INSERT INTO pv_inbox_disposition(receipt,metadata) VALUES(?,?)
+         ON CONFLICT(receipt) DO NOTHING",
+        params![review.receipt, disposition.to_string()],
+    )?;
+    ensure!(inserted == 1, "Inbox receipt already reviewed");
+    Ok(disposition)
 }

@@ -76,6 +76,14 @@ fn dispatch(task: &str, action: &str, args: &Value, from_mcp: bool) -> Result<Va
     let op = operation?;
     let result = match op {
         Operation::Inbox => inbox::list(&tx, &actor)?,
+        Operation::ReviewInbox => {
+            let review: inbox::Review = serde_json::from_value(args.clone())?;
+            actor.require(&tx, Right::ReviewInbox)?;
+            ensure!(inbox::is_primary(&tx, task)?, "Primary inbox outside task");
+            replay(&tx, &actor, &review.idempotency_key, action, args, || {
+                inbox::review(&tx, &actor, &review)
+            })?
+        }
         Operation::SubmitReview => {
             let submission: inbox::Submission = serde_json::from_value(args.clone())?;
             replay(

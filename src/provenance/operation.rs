@@ -6,6 +6,7 @@ use serde::Deserialize;
 pub(super) enum Operation {
     Inbox,
     SubmitReview,
+    ReviewInbox,
     NotifyCorrection,
     Corrections,
     Notifications,
@@ -40,7 +41,7 @@ impl Operation {
             HandoffBlock | NotifyCorrection | Grant | Revoke | AdmitMaterial | Freeze
             | ReopenEvidence => false,
             Commit | Decide => delegated,
-            Inbox | SubmitReview | Corrections | Notifications | TakeNotification
+            Inbox | ReviewInbox | SubmitReview | Corrections | Notifications | TakeNotification
             | AckNotification | Release | RequestReview | ReadReview | Sources | Impact
             | ReadEvidence | History => true,
         };
@@ -58,7 +59,7 @@ mod tests {
         for (names, ordinary, scoped) in [
             ("handoff-block notify-correction grant revoke admit-material freeze reopen-evidence", false, false),
             ("commit decide", false, true),
-            ("inbox submit-review corrections notifications take-notification ack-notification release request-review read-review sources impact read-evidence history", true, true),
+            ("inbox review-inbox submit-review corrections notifications take-notification ack-notification release request-review read-review sources impact read-evidence history", true, true),
         ] {
             for name in names.split_whitespace() {
                 let operation = Operation::parse(name).unwrap();

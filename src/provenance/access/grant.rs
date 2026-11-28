@@ -57,10 +57,12 @@ pub fn grant(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
             );
         }
     }
-    if rights
-        .iter()
-        .any(|r| matches!(r, Right::ReadInbox | Right::SubmitReview { .. }))
-    {
+    if rights.iter().any(|r| {
+        matches!(
+            r,
+            Right::ReadInbox | Right::ReviewInbox | Right::SubmitReview { .. }
+        )
+    }) {
         ensure!(
             target == actor.task && rights.len() == 1,
             "Inbox delegation requires a single task-local right"

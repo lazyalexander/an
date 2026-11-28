@@ -32,6 +32,7 @@ pub enum Right {
         recipient: String,
     },
     ReadInbox,
+    ReviewInbox,
     SubmitReview {
         source: BlockRef,
     },
@@ -140,7 +141,7 @@ impl Actor {
                 Ok(graph["nodes"][node].get("publication_review").is_some()
                     && graph["activity"][node]["id"] == attempt.as_str())
             }
-            Right::ReadInbox => super::inbox::is_primary(db, &self.task),
+            Right::ReadInbox | Right::ReviewInbox => super::inbox::is_primary(db, &self.task),
             Right::SubmitReview { source } => self.owns(db, &source.artifact),
             Right::Evidence { snapshot } => Ok(find(db, "frozen_evidence", snapshot)?
                 .is_some_and(|s| s["task"] == self.task)
