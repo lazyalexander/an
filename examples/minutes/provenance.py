@@ -310,6 +310,36 @@ def accept_and_expand(host, organize, formatter):
     return receipt
 
 
+def record_minutes(host, monday, free, snapshots):
+    raw = FIXTURE.read_bytes()
+    opening = endpoint("opening", "conclusion")
+    blocks = [
+        content("opening", monday, raw, source=opening),
+        content("registration", free, raw, source=endpoint("registration", "rule")),
+    ]
+    observed = []
+    for expected, snapshot in enumerate(snapshots, start=1):
+        document = version(
+            "minutes",
+            blocks,
+            expected=expected,
+            file="minutes.json",
+            material={"kind": "input", "name": "minutes.json"},
+            evidence=[snapshot],
+        )
+        host.provenance(
+            "commit", versions=[document], idempotency_key=f"minutes-{expected + 1}"
+        )
+    for number, snapshot in enumerate(snapshots, start=2):
+        trace = host.provenance("sources", **endpoint("minutes", "opening", number))
+        block = trace["blocks"][0]
+        assert block["previous_version"] == number - 1
+        assert block["evidence"] == [snapshot]
+        assert trace["edges"][0]["source"] == opening
+        observed.append((block["content"], block["material"]["revision"]))
+    assert observed[0] == observed[1] and observed[0][1]
+
+
 def publish(host):
     documents = []
     for node, file, artifact in [
@@ -370,6 +400,7 @@ def check_trace(host, delivery, receipt, organize, formatter):
         "opening",
         "announcement",
         "actions",
+        "minutes",
     }
     phases = {flow["phase"] for block in uses["blocks"] for flow in block["file_flows"]}
     assert phases >= {"authorized", "handed_off", "published"}
@@ -464,7 +495,14 @@ def revise(host, resumed, delivery, monday, free, snapshot, second_snapshot):
     still_using = host.provenance("impact", **endpoint("opening", "conclusion"))
     assert {
         (b["ref"]["artifact"], b["ref"]["version"]) for b in still_using["blocks"]
-    } == {("opening", 1), ("announcement", 1), ("actions", 1), ("review", 1)}
+    } == {
+        ("opening", 1),
+        ("announcement", 1),
+        ("actions", 1),
+        ("review", 1),
+        ("minutes", 2),
+        ("minutes", 3),
+    }
 
     return original_log
 
@@ -541,6 +579,7 @@ def exercise(host, resumed):
     monday, free, snapshot, second_snapshot = propose(host, organize)
     check_block_input(host, formatter, monday)
     receipt = accept_and_expand(host, organize, formatter)
+    record_minutes(host, monday, free, [snapshot, second_snapshot])
     delivery = publish(host)
     check_trace(host, delivery, receipt, organize, formatter)
     host.provenance(
@@ -592,6 +631,16 @@ def exercise(host, resumed):
     check_export(host, delivery, dest)
     host.graph("finish")
     host.task = None
+    public = resumed.provenance(
+        "sources", delivery=delivery, binding="announcement", block="opening"
+    )
+    assert [item["ref"] for item in public["blocks"]] == [
+        endpoint("announcement", "opening")
+    ]
+    assert public["edges"] == []
+    resumed.provenance(
+        "sources", **endpoint("opening", "conclusion"), denied="outside authority"
+    )
     assert resumed.provenance("reopen-evidence", delivery=delivery, snapshot=snapshot)[
         "authorized"
     ]

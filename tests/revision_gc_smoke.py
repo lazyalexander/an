@@ -121,6 +121,11 @@ def exercise(home, image):
     env.pop("AN_TURN")
     resumed = an("task", "resume", delivery)["task"]
     env["AN_TURN"] = an("permission", "begin", "--task", resumed)["turn"]
+    lineage = an(
+        "provenance", "--task", resumed, "sources",
+        body={"delivery": delivery, "binding": "doc"},
+    )
+    assert lineage["precision"] == "file" and "doc" in lineage["bindings"]
     args = ["export", delivery, destination, "--task", resumed]
     request = an(*args)["request_id"]
     an(
