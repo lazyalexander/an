@@ -29,7 +29,15 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum Workspace {
+    Review {
+        workspace: String,
+        #[arg(value_enum)]
+        decision: crate::provenance::review::Disposition,
+        request: String,
+    },
     Create {
+        #[arg(long)]
+        review_owner_digest: Option<String>,
         #[command(flatten)]
         grants: Grants,
     },
@@ -223,11 +231,33 @@ pub fn execute() -> Result<Value> {
             lock = Some(guard(&id, true)?);
         }
     }
+    if let Command::Workspace {
+        action:
+            Workspace::Review {
+                workspace,
+                decision,
+                request,
+            },
+    } = cli.command
+    {
+        let key: String = serde_json::from_reader(std::io::stdin().lock())?;
+        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
+        let receipt = crate::provenance::review::settle(&tx, &workspace, decision, &request, &key)?;
+        tx.commit()?;
+        return Ok(receipt);
+    }
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let result = match cli.command {
+        Command::Workspace {
+            action: Workspace::Review { .. },
+        } => unreachable!(),
         Command::Deliveries { task, after } => deliveries(&tx, &task, after)?,
         Command::Workspace {
-            action: Workspace::Create { grants },
+            action:
+                Workspace::Create {
+                    grants,
+                    review_owner_digest,
+                },
         } => {
             ensure!(!grants.spool.is_empty(), "Grant a spool");
             let (images, tools) = resolve_grants(&tx, &grants)?;
@@ -238,6 +268,18 @@ pub fn execute() -> Result<Value> {
                 &id,
                 &json!({"images":images,"editable":grants.editable,"tools":tools}),
             )?;
+            if let Some(digest) = review_owner_digest {
+                ensure!(
+                    digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_hexdigit()),
+                    "Expected SHA-256 digest"
+                );
+                put(
+                    &tx,
+                    "review_owner",
+                    &id,
+                    &json!(digest.to_ascii_lowercase()),
+                )?;
+            }
             json!({"workspace":id})
         }
         Command::Workspace {

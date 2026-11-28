@@ -1,6 +1,8 @@
 """Exercise the five provenance contracts using the real minutes spools and a disposable registry."""
 
 import base64
+import hashlib
+import secrets
 import json
 import os
 from pathlib import Path
@@ -169,13 +171,20 @@ def step(name, spool, port, source, file, *options):
     )
 
 
-def create_task(host):
+def create_task(host, owner_key):
     organize, formatter = (
         host.call("register", f"an-minutes-{name}:provenance")
         for name in ("organize", "format")
     )
     workspace = host.call(
-        "workspace", "create", "--spool", organize, "--spool", formatter
+        "workspace",
+        "create",
+        "--spool",
+        organize,
+        "--spool",
+        formatter,
+        "--review-owner-digest",
+        hashlib.sha256(owner_key.encode()).hexdigest(),
     )["workspace"]
     selector = ["--harness", "minutes-provenance", "--key", workspace]
     host.call("workspace", "bind", workspace, *selector)
@@ -574,8 +583,38 @@ assert (root/files[0]).read_bytes()==sys.argv[1].encode()
     host.call(*args, denied="Invalid or revoked handoff")
 
 
+def check_owner_review(host, delivery, owner_key, expected_text):
+    def request(version):
+        return host.provenance(
+            "request-review",
+            delivery=delivery,
+            target={"artifact": "opening", "version": version},
+        )
+
+    pending = request(1)
+    review_id = pending["id"]
+    command = ["workspace", "review", pending["workspace"]]
+    host.provenance("read-review", id=review_id, denied="Review unavailable")
+    host.call(*command, "approve", review_id, body="wrong-key", denied="owner required")
+    assert host.call(*command, "show", review_id, body=owner_key) == pending
+    approved = host.call(*command, "approve", review_id, body=owner_key)
+    assert host.call(*command, "approve", review_id, body=owner_key) == approved
+    result = host.provenance("read-review", id=review_id)
+    assert result["blocks"] == [{"block": "conclusion", "text": expected_text}]
+    assert result["approval"] == approved["approved"]
+    unrelated = request(2)["id"]
+    host.call(
+        *command, "approve", unrelated, body=owner_key, denied="Decision unavailable"
+    )
+    host.call(*command, "deny", unrelated, body=owner_key)
+    revoked = host.call(*command, "revoke", review_id, body=owner_key)
+    assert revoked["approved"] == result["approval"] and revoked["revoked"]["receipt"]
+    host.provenance("read-review", id=review_id, denied="Review unavailable")
+
+
 def exercise(host, resumed):
-    organize, formatter, dest = create_task(host)
+    owner_key = secrets.token_hex(32)
+    organize, formatter, dest = create_task(host, owner_key)
     monday, free, snapshot, second_snapshot = propose(host, organize)
     check_block_input(host, formatter, monday)
     receipt = accept_and_expand(host, organize, formatter)
@@ -641,6 +680,7 @@ def exercise(host, resumed):
     resumed.provenance(
         "sources", **endpoint("opening", "conclusion"), denied="outside authority"
     )
+    check_owner_review(resumed, delivery, owner_key, monday)
     assert resumed.provenance("reopen-evidence", delivery=delivery, snapshot=snapshot)[
         "authorized"
     ]
