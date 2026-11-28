@@ -60,6 +60,9 @@ enum Core {
         task: Option<String>,
         #[arg(long)]
         request_id: Option<String>,
+        /// Start a new attempt after an unknown outcome.
+        #[arg(long)]
+        retry: bool,
     },
     /// Task-host graph interface. Read arguments as JSON on stdin.
     Graph {
@@ -198,83 +201,15 @@ fn run() -> Result<()> {
             destination,
             task,
             request_id,
+            retry,
         } => {
-            let mut db = store::connect()?;
-            let tx = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let (owner, revision, origins, details) = if let Some(group) =
-                store::find(&tx, "graph_delivery", &delivery)?
-            {
-                let owner = group["task"].as_str().context("Invalid graph delivery")?;
-                let target = task.as_deref().unwrap_or(owner);
-                ensure!(
-                    target == owner
-                        || (group["workspace"].is_string()
-                            && store::get(&tx, "task", target)?["workspace"] == group["workspace"]),
-                    "Delivery outside workspace"
-                );
-                let origins: std::collections::BTreeSet<_> = group["bindings"]
-                    .as_object()
-                    .context("Missing delivery bindings")?
-                    .values()
-                    .map(graph::binding_origin)
-                    .collect();
-                ensure!(!origins.is_empty(), "Missing delivery origins");
-                (
-                    target.to_owned(),
-                    group["revision"].clone(),
-                    origins.into_iter().collect::<Vec<_>>(),
-                    json!({"bindings":group["bindings"]}),
-                )
-            } else {
-                let r = store::get(&tx, "run", &delivery)?;
-                ensure!(r["status"] == "delivered", "Expected published delivery");
-                let owner = r["task"].as_str().context("Invalid delivery")?;
-                ensure!(
-                    task.as_deref().is_none_or(|t| t == owner),
-                    "Run outside task"
-                );
-                (
-                    owner.to_owned(),
-                    r["output"].clone(),
-                    vec![r["spool"].as_str().context("Invalid spool")?.to_owned()],
-                    json!({}),
-                )
-            };
-            let dir = std::env::current_dir()?.join(destination);
-            let dest = if dir.exists() {
-                dir.canonicalize()?
-            } else {
-                dir.parent()
-                    .context("Invalid export destination")?
-                    .canonicalize()?
-                    .join(dir.file_name().context("Invalid export destination")?)
-            };
-            let flows = origins
-                .iter()
-                .map(|origin| json!(["export", origin, dest]))
-                .collect::<Vec<_>>();
-            if let Some(p) = permission::gate_flows(
-                &tx,
-                &owner,
-                "export",
-                json!([delivery, revision, dest]),
-                details,
+            display(provenance::export::run(
+                &delivery,
+                &destination,
+                task.as_deref(),
                 request_id.as_deref(),
-                &flows,
-            )? {
-                display(p);
-            } else {
-                artifacts::stage(
-                    &dest,
-                    &store::get(
-                        &tx,
-                        "revision",
-                        revision.as_str().context("Missing revision")?,
-                    )?,
-                    false,
-                )?;
-            }
-            tx.commit()?;
+                retry,
+            )?);
             Ok(())
         }
         Core::Graph { target, action } => {

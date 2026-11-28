@@ -120,7 +120,10 @@ impl Gateway {
                 .as_str()
                 .context("Expected provenance action")?;
             ensure!(
-                !matches!(action, "grant" | "revoke" | "admit-material" | "freeze"),
+                !matches!(
+                    action,
+                    "grant" | "revoke" | "admit-material" | "freeze" | "reopen-evidence"
+                ) && (!matches!(action, "commit" | "decide") || crate::provenance::scoped()),
                 "Controller CLI required"
             );
             return Ok(text(crate::provenance::execute(

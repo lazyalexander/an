@@ -299,6 +299,7 @@ fn accept_expansion(
     let mut next = graph.clone();
     append_nodes(
         &tx,
+        task,
         &get(&tx, "task", task)?,
         &mut next,
         additions,
@@ -495,6 +496,15 @@ fn step(
         }
         let rev = revision(&tx, &files)?;
         let record = json!({"id":attempt,"task":task,"node":node["id"],"title":node["title"],"bindings":bound,"package":node["package"],"revision":rev,"outputs":files.as_object().unwrap().keys().collect::<Vec<_>>(),"workspace":t["workspace"]});
+        crate::provenance::flow::record(
+            &tx,
+            task,
+            crate::provenance::flow::Phase::Published,
+            &attempt,
+            t["workspace"].as_str().unwrap_or(task),
+            bound,
+        )?;
+        crate::provenance::publication::publish(&tx, task, node, &record)?;
         put(&tx, "graph_delivery", &attempt, &record)?;
         state["delivery"] = json!(attempt);
         state["status"] = json!(AttemptStatus::Done);

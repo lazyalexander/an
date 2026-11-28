@@ -1,9 +1,14 @@
 //! The transaction boundary shared by the CLI and the task MCP gateway.
 mod access;
 mod domain;
+mod evidence;
+pub(crate) mod export;
+pub(crate) mod flow;
 mod history;
 pub(crate) use history::require_accepted;
 mod material;
+pub(crate) mod publication;
+mod query;
 mod versions;
 use crate::{
     instances,
@@ -29,8 +34,13 @@ pub fn execute(task: &str, action: &str, args: &Value) -> Result<Value> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let actor = Actor::authenticate(&tx, task)?;
     let result = match action {
+        "sources" => query::trace(&tx, &actor, args, query::Direction::Sources)?,
+        "impact" => query::trace(&tx, &actor, args, query::Direction::Impact)?,
         "grant" => access::grant(&tx, &actor, args)?,
         "revoke" => access::revoke(&tx, &actor, args)?,
+        "freeze" => evidence::freeze(&tx, &actor, args)?,
+        "read-evidence" => evidence::read(&tx, &actor, args)?,
+        "reopen-evidence" => evidence::reopen(&tx, &actor, args)?,
         "admit-material" => material::admit(&tx, &actor, args)?,
         "history" => history::view(
             &tx,

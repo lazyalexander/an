@@ -41,7 +41,8 @@ pub fn scoped() -> bool {
 
 impl Actor {
     pub fn authenticate(db: &Connection, task: &str) -> Result<Self> {
-        if let Ok(token) = std::env::var("AN_PROVENANCE_TOKEN") {
+        if scoped() {
+            let token = std::env::var("AN_PROVENANCE_TOKEN").context("Invalid delegation")?;
             let digest = hash(token.as_bytes());
             let grant = find(db, "provenance_key", &digest)?.context("Inactive delegation")?;
             let record = get(
@@ -53,7 +54,11 @@ impl Actor {
                 record["active"] == true
                     && record["target"] == task
                     && record["epoch"].is_string()
-                    && get(db, "turn", task)? == record["epoch"],
+                    && permission::delegation_scope(db, task)? == record["target_scope"]
+                    && permission::delegation_scope(
+                        db,
+                        record["task"].as_str().context("Invalid issuer")?
+                    )? == record["source_scope"],
                 "Inactive delegation"
             );
             return Ok(Self {
@@ -93,12 +98,17 @@ impl Actor {
             return Ok(self.rights.contains(right));
         }
         match right {
-            Right::Evidence { snapshot } => {
-                Ok(find(db, "frozen_evidence", snapshot)?.is_some_and(|s| s["task"] == self.task))
+            Right::Evidence { snapshot } => Ok(find(db, "frozen_evidence", snapshot)?
+                .is_some_and(|s| s["task"] == self.task)
+                || super::evidence::reopened(db, &self.task, snapshot)?),
+            Right::Read { artifact, version } => {
+                if self.owns(db, artifact)? {
+                    return Ok(true);
+                }
+                Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM pv_published WHERE artifact=? AND version=? AND workspace=(
+                    SELECT json_extract(body,'$.workspace') FROM objects WHERE kind='task' AND id=?))",rusqlite::params![artifact.0,version.0,self.task],|r|r.get(0))?)
             }
-            Right::Read { artifact, .. }
-            | Right::Revise { artifact }
-            | Right::Decide { artifact, .. } => self.owns(db, artifact),
+            Right::Revise { artifact } | Right::Decide { artifact, .. } => self.owns(db, artifact),
         }
     }
 
@@ -134,9 +144,29 @@ pub fn grant(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
             );
         }
     }
+    let evidence: Vec<_> = rights
+        .iter()
+        .filter_map(|right| match right {
+            Right::Evidence { snapshot } => Some(snapshot),
+            _ => None,
+        })
+        .collect();
+    if !evidence.is_empty() {
+        if let Some(p) = permission::gate(
+            db,
+            &actor.task,
+            "log",
+            json!(["delegate", target, evidence]),
+            json!([epoch]),
+            args["request_id"].as_str(),
+            None,
+        )? {
+            return Ok(p);
+        }
+    }
     let id = uid();
     let secret = uid();
-    let record = json!({"id":id,"issuer":actor.id,"task":actor.task,"target":target,"epoch":epoch,"rights":rights,"active":true});
+    let record = json!({"id":id,"issuer":actor.id,"task":actor.task,"target":target,"epoch":epoch,"target_scope":permission::delegation_scope(db,target)?,"source_scope":permission::delegation_scope(db,&actor.task)?,"rights":rights,"active":true});
     put(db, "provenance_grant", &id, &record)?;
     put(db, "provenance_key", &hash(secret.as_bytes()), &json!(id))?;
     Ok(json!({"grant":id,"token":secret}))

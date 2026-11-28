@@ -152,6 +152,16 @@ impl WorkerRun<'_> {
             &get(&tx, "revision", string(&self.run, "input")?)?,
             true,
         )?;
+        if let Some(inputs) = self.run.get("bound_inputs") {
+            crate::provenance::flow::record(
+                &tx,
+                self.task,
+                crate::provenance::flow::Phase::HandedOff,
+                self.id,
+                string(&self.run, "spool")?,
+                inputs,
+            )?;
+        }
         tx.commit()?;
         artifacts::stage(
             &directory.join("work"),
@@ -201,9 +211,11 @@ impl WorkerRun<'_> {
         );
         let log_limit = config.limit("run_log_bytes");
         if log.metadata()?.len() > log_limit {
+            self.run["log_truncated"] = json!(true);
             log.set_len(log_limit)?;
             bail!("Run log budget exceeded ({log_limit} bytes)");
         }
+        self.run["log_truncated"] = json!(false);
         ensure!(code.success(), "Guest command exited {code}");
         let directory = storage::data(&path(&instance)?)?;
         let mut budget = artifacts::OutputBudget::new(config.limit("run_output_bytes"));

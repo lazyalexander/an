@@ -21,12 +21,11 @@ fn revision(db: &Connection, task: &str, cursor: u64) -> Result<u64> {
 }
 
 pub fn view(db: &Connection, actor: &Actor, cursor: u64) -> Result<Value> {
-    actor.controller()?;
     let rev = revision(db, &actor.task, cursor)?;
-    let mut stmt = db.prepare(
-        "SELECT node,body FROM pv_node_history h WHERE task=?1 AND cursor=(
-        SELECT max(cursor) FROM pv_node_history WHERE task=?1 AND node=h.node AND cursor<=?2)",
-    )?;
+    if actor.grant.is_some() {
+        return Ok(json!({"task":actor.task,"cursor":cursor,"revision":rev}));
+    }
+    let mut stmt = db.prepare(include_str!("history.sql"))?;
     let mut rows = stmt.query(params![actor.task, cursor])?;
     let mut nodes = json!({});
     while let Some(r) = rows.next()? {
@@ -37,8 +36,13 @@ pub fn view(db: &Connection, actor: &Actor, cursor: u64) -> Result<Value> {
         params![actor.task, cursor],
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
+    let mut choices=db.prepare("SELECT v.artifact,v.version,CASE WHEN json_extract(c.body,'$.task')=?1 AND
+        json_extract(c.body,'$.accepted.cursor')<=?2 THEN json_extract(c.body,'$.choice') ELSE 'proposed' END
+        FROM pv_version v JOIN pv_artifact a ON a.id=v.artifact LEFT JOIN pv_choice c USING(artifact,version)
+        WHERE a.kind='decision' AND v.task=?1 AND v.registered_cursor<=?2 ORDER BY v.artifact,v.version")?;
+    let decisions=choices.query_map(params![actor.task,cursor],|r|Ok(json!({"artifact":r.get::<_,String>(0)?,"version":r.get::<_,u64>(1)?,"state":r.get::<_,String>(2)?})))?.collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(
-        json!({"task":actor.task,"cursor":cursor,"revision":rev,"nodes":nodes,"control":control,
+        json!({"decisions":decisions,"task":actor.task,"cursor":cursor,"revision":rev,"nodes":nodes,"control":control,
         "event":event.map(|s|serde_json::from_str::<Value>(&s)).transpose()?}),
     )
 }

@@ -243,6 +243,11 @@ fn named_inputs_preserve_approvals_and_tickets_until_all_ports_commit() -> Resul
     let failed = submit(&mut db, "t", &t, &mut i, &args, &manifest, fail)?;
     let run = get(&db, "run", failed.as_str().unwrap())?;
     assert_eq!(run["status"], "failed");
+    let phases: Vec<String> = db
+        .prepare("SELECT DISTINCT phase FROM pv_flow WHERE attempt=?")?
+        .query_map([failed.as_str()], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(phases, ["authorized"]);
     assert!(get(&db, "instance", "i")?["active"].is_null());
     assert_eq!(get(&db, "handoff", "handoff-one")?, ticket);
     for name in ["b", "c"] {

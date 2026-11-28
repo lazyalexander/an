@@ -98,7 +98,9 @@ pub fn cursors(args: Value) -> Result<Value> {
     Ok(result)
 }
 fn context(db: &Connection, task: &str) -> Result<(String, Value, Value)> {
-    let turn = current(db, task)?;
+    policy_context(db, task, current(db, task)?)
+}
+fn policy_context(db: &Connection, task: &str, turn: String) -> Result<(String, Value, Value)> {
     let t = get(db, "task", task)?;
     let flows = if let Some(w) = t["workspace"].as_str() {
         get(db, "workspace", w)?.get("policy").cloned()
@@ -114,6 +116,17 @@ pub fn stamp(db: &Connection, task: &str) -> Result<Value> {
     let (turn, flows, host) = context(db, task)?;
     Ok(json!([turn, flows["revision"], host["revision"]]))
 }
+/// Compare the scope of a previously issued delegation without treating its
+/// bearer as the task controller.
+pub(crate) fn delegation_scope(db: &Connection, task: &str) -> Result<Value> {
+    let epoch = get(db, "turn", task)?;
+    let Some(epoch) = epoch.as_str() else {
+        return Ok(Value::Null);
+    };
+    let (turn, flows, host) = policy_context(db, task, epoch.to_owned())?;
+    Ok(json!([turn, flows["revision"], host["revision"]]))
+}
+
 fn decision_key(effect: &Value) -> Result<String> {
     for field in ["operation", "scope", "details"] {
         ensure!(effect.get(field).is_some(), "Missing effect field {field}");

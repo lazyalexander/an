@@ -174,7 +174,7 @@ pub(super) fn schedule(
     match field(&call, "state")? {
         "completed" => {
             let name = call["output_name"].as_str().unwrap_or("result.json");
-            state["outputs"][name] = json!({"spool":dest,"revision":call["output"]});
+            state["outputs"][name] = json!({"spool":dest,"revision":call["output"],"attempt":id});
             state["status"] = json!(AttemptStatus::Done);
         }
         "unknown" | "failed" => {

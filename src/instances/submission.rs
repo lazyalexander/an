@@ -51,6 +51,7 @@ pub(super) fn submit(
     let mut tickets = Vec::new();
     let mut decisions = Vec::new();
     let mut files = json!({});
+    let mut provenance_inputs = json!({});
     let mut input_stamp = Value::Null;
     if !bindings.is_empty() || args["_graph_run"].is_string() {
         input_stamp = permission::stamp(&tx, task)?;
@@ -150,6 +151,11 @@ pub(super) fn submit(
                 return Ok(pending);
             }
         }
+        let producer = args["_graph_bindings"]
+            .get(source)
+            .and_then(|binding| binding.get("run").or(binding.get("attempt")));
+        provenance_inputs[port.unwrap_or("input")] =
+            json!({"revision":rev,"run":producer,"source":t["inputs"].get(source).map(|_|source)});
         let input = get(&tx, "revision", rev.as_str().context("Invalid revision")?)?;
         for (name, entry) in input.as_object().context("Invalid files")? {
             artifacts::safe(name)?;
@@ -187,6 +193,15 @@ pub(super) fn submit(
         r["image_code"] = image["code_revision"].clone();
         r["code_omissions"] = image["code_omissions"].clone();
     }
+    crate::provenance::flow::record(
+        &tx,
+        task,
+        crate::provenance::flow::Phase::Authorized,
+        &id,
+        spool,
+        &provenance_inputs,
+    )?;
+    r["bound_inputs"] = provenance_inputs;
     capacity::enqueue(&tx, &id)?;
     r["capacity_managed"] = json!(true);
     i["active"] = json!(id);

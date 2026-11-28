@@ -307,7 +307,9 @@ pub fn execute() -> Result<Value> {
                                 || s.as_str().is_some_and(|v| v.starts_with("model:")))
                                 && images.contains(d)
                         }
-                        Some("preview") => graph_origin(images, s) && d == "studio",
+                        Some("preview") => {
+                            graph_origin(images, s) && (d == "studio" || d == "provenance")
+                        }
                         Some("publish") => {
                             graph_origin(images, s) && (d == &id || d == "graph-metadata")
                         }

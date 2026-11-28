@@ -66,7 +66,7 @@ pub fn admit(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
     if find(db, "provenance_material", &id)?.is_some() {
         return Ok(json!({"admitted":id}));
     }
-    let (record, origin) = resolve(db, &actor.task, &material)?;
+    let (mut record, origin) = resolve(db, &actor.task, &material)?;
     if let Some(pending) = permission::gate(
         db,
         &actor.task,
@@ -78,6 +78,7 @@ pub fn admit(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
     )? {
         return Ok(pending);
     }
+    record["task"] = json!(actor.task);
     put(db, "provenance_material", &id, &record)?;
     Ok(json!({"admitted":id}))
 }

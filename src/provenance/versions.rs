@@ -50,6 +50,20 @@ pub fn commit(tx: &Transaction, actor: &Actor, batch: Batch) -> Result<Value> {
                     )
                     .optional()?
                     .with_context(|| format!("Unresolved source for {}", block.id))?;
+                if matches!(draft.material, Some(Material::Output { .. })) {
+                    let bound:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM pv_version output,pv_version source,
+                        json_each(output.material,'$.bindings') port WHERE output.artifact=? AND output.version=?
+                        AND source.artifact=? AND source.version=? AND source.task=output.task
+                        AND json_extract(port.value,'$.revision')=json_extract(source.material,'$.revision')
+                        AND json_extract(port.value,'$.source') IS json_extract(source.material,'$.input')
+                        AND coalesce(json_extract(port.value,'$.run'),json_extract(port.value,'$.attempt')) IS json_extract(source.material,'$.attempt'))",
+                        params![draft.artifact.0,version,src.artifact.0,src.version.0],|r|r.get(0))?;
+                    ensure!(
+                        bound,
+                        "Source was not bound to the producing attempt for {}",
+                        block.id
+                    );
+                }
                 if citation.relation == Relation::Quotes {
                     ensure!(
                         serde_json::from_str::<Value>(&source)?["text"] == block.text,

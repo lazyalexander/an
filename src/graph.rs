@@ -127,7 +127,7 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
             .remove("waiting_reason");
         state["status"] = json!(AttemptStatus::Superseded);
     }
-    append_nodes(&tx, &record, &mut graph, additions, None)?;
+    append_nodes(&tx, task, &record, &mut graph, additions, None)?;
     let rev = graph["revision"].as_u64().unwrap();
     let events = graph["events"].as_array_mut().unwrap();
     let cursor = events.len() + 1;
@@ -207,6 +207,7 @@ pub(crate) fn binding_origin(item: &Value) -> String {
 
 fn append_nodes(
     db: &Connection,
+    task: &str,
     record: &Value,
     graph: &mut Value,
     additions: &[Value],
@@ -236,6 +237,13 @@ fn append_nodes(
         );
     }
     for node in additions {
+        if node.get("versions").is_some() {
+            ensure!(
+                driver.is_none(),
+                "Delivery block selection requires controller submission"
+            );
+            crate::provenance::publication::validate(db, task, node)?;
+        }
         let id = field(node, "id")?;
         if let Some(owner) = reserved.get(id) {
             ensure!(
@@ -381,6 +389,7 @@ fn append_nodes(
                         | "outputs"
                         | "save"
                         | "continuation"
+                        | "versions"
                         | "panel"
                         | "spool"
                 )),
