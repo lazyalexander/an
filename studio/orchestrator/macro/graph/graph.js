@@ -74,101 +74,12 @@ function filesPanel(files, parent = el("content")) {
     }
   }
 }
-// Pressure sketch field. The brush follows a classic paint pipeline in miniature:
-// pressure curve, spacing-based dabs, weighted smoothing and every coalesced
-// hardware sample. Points are normalized [x, y, pressure].
-function sketchField(initial, reference, changed) {
-  const box = document.createElement("div");
-  box.className = "sketch";
-  const bar = document.createElement("div");
-  const color = Object.assign(document.createElement("input"), {type:"color", value:"#1d3557"});
-  const size = Object.assign(document.createElement("input"), {type:"range", min:1, max:40, value:12});
-  const canvas = document.createElement("canvas");
-  if (reference) canvas.style.backgroundImage = `url("${reference}")`;
-  let strokes = Array.isArray(initial) ? initial : [], current = null;
-  const ctx = canvas.getContext("2d");
-  const curve = p => p * p * (3 - 2 * p), SPACING = 0.15;
-  let scale = 1;
-  function fit() {
-    const width = canvas.clientWidth, height = canvas.clientHeight, dpr = devicePixelRatio || 1;
-    canvas.width = width * dpr; canvas.height = height * dpr;
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0); scale = width; redraw();
-  }
-  function segment(s, a, b) {
-    const w = canvas.clientWidth, h = canvas.clientHeight;
-    const ax = a[0] * w, ay = a[1] * h, bx = b[0] * w, by = b[1] * h;
-    const dist = Math.hypot(bx - ax, by - ay);
-    const px = s.size * w / 800;
-    const step = Math.max(0.5, px * SPACING * Math.max(curve(Math.max(a[2], b[2])), .1));
-    let t = s.carry || 0;
-    ctx.fillStyle = s.color;
-    while (t <= dist) {
-      const k = dist ? t / dist : 0, p = a[2] + (b[2] - a[2]) * k;
-      ctx.beginPath(); ctx.arc(ax + (bx - ax) * k, ay + (by - ay) * k, Math.max(.4, px * curve(p) / 2), 0, Math.PI * 2); ctx.fill();
-      t += step;
-    }
-    s.carry = t - dist;
-  }
-  function redraw() {
-    ctx.clearRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-    for (const s of strokes) { s.carry = 0; for (let i = 1; i < s.points.length; i++) segment(s, s.points[i - 1], s.points[i]); }
-  }
-  const clean = () => strokes.map(({color, size, points}) => ({color, size, points}));
-  function sample(e, prev) {
-    const r = canvas.getBoundingClientRect();
-    let x = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-    let y = Math.min(1, Math.max(0, (e.clientY - r.top) / r.height));
-    if (prev) { x = prev[0] + (x - prev[0]) * .45; y = prev[1] + (y - prev[1]) * .45; }
-    const p = e.pointerType === "mouse" ? .5 : Math.min(1, Math.max(0, e.pressure));
-    return [+x.toFixed(4), +y.toFixed(4), +p.toFixed(3)];
-  }
-  canvas.addEventListener("pointerdown", e => {
-    try { canvas.setPointerCapture(e.pointerId); } catch {}  // capture is best effort
-    current = {color: color.value, size: +size.value, points: [sample(e)]};
-    strokes.push(current);
-  });
-  canvas.addEventListener("pointermove", e => {
-    if (!current) return;
-    const list = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
-    for (const ev of list.length ? list : [e]) {
-      const prev = current.points[current.points.length - 1], pt = sample(ev, prev);
-      current.points.push(pt); segment(current, prev, pt);
-    }
-  });
-  const end = () => { if (current) { current = null; changed(); } };
-  canvas.addEventListener("pointerup", end);
-  canvas.addEventListener("pointercancel", end);
-  const undo = button(t("sketch.undo"), () => { strokes.pop(); redraw(); changed(); });
-  const clear = button(t("sketch.clear"), () => { strokes = []; redraw(); changed(); });
-  for (const b of [undo, clear]) b.type = "button";
-  bar.append(color, size, undo, clear);
-  box.append(bar, canvas);
-  new ResizeObserver(fit).observe(canvas);
-  return {element: box, read: clean};
-}
-function referenceImage(files) {
-  for (const group of Object.values(files || {})) {
-    for (const [name, entry] of Object.entries(group)) {
-      const type = /\.svg$/i.test(name) ? "image/svg+xml" : /\.png$/i.test(name) ? "image/png"
-        : /\.jpe?g$/i.test(name) ? "image/jpeg" : null;
-      if (type) return `data:${type};base64,${entry.data ?? entry}`;
-    }
-  }
-  return null;
-}
 async function basicPanel(pkg, ref, epoch) {
   if (epoch !== panelEpoch) return;
   filesPanel(pkg.files);
   const form = document.createElement("form");
   const inputs = new Map();
   for (const [key, rule] of Object.entries(pkg.response.properties)) {
-    if (pkg.declaration.decision.type === "sketch" && key === "strokes") {
-      const field = sketchField(pkg.draft?.strokes, referenceImage(pkg.files),
-                                () => form.dispatchEvent(new Event("input")));
-      inputs.set(key, field.read);
-      form.append(field.element);
-      continue;
-    }
     const label = document.createElement("label");
     label.textContent = key + " ";
     const options = rule.enum || (rule.type === "boolean" ? [true,false] : null);

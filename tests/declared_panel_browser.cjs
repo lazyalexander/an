@@ -26,7 +26,7 @@ function gate() {
       const name = new URL(route.request().url()).pathname.split("/").pop();
       let json = {};
       switch(name) {
-        case "config.json": json={settings:{poll_ms:60000,panel_timeout_ms:5000},strings:{}};break;
+        case "config.json": json={task:"task",settings:{poll_ms:60000,panel_timeout_ms:5000},strings:{}};break;
         case "view": json={task:"task",nodes:{ask:{}},activity:{ask:{id:"current",status:"waiting"}},intent:card,permissions:evidenceDecision ? [covered] : [covered,evidence],authorized:true};break;
         case "decide": evidenceDecision=route.request().postDataJSON();break;
         case "panel": requests++;json={...pkg,draft};break;

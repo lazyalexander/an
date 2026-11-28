@@ -33,7 +33,19 @@ pub fn load() -> Result<Config> {
         Ok(bytes) => {
             let overrides: Map<String, Value> =
                 serde_json::from_slice(&bytes).context("Invalid config.json")?;
-            for (key, value) in overrides {
+            for (key, mut value) in overrides {
+                // Older hosts may share this registry with the visual experiment.
+                if matches!(
+                    key.as_str(),
+                    "image_port" | "image_timeout_s" | "image_output_bytes"
+                ) {
+                    continue;
+                }
+                if key == "model_aliases" {
+                    if let Some(aliases) = value.as_object_mut() {
+                        aliases.retain(|_, model| model["kind"] != "image");
+                    }
+                }
                 if !settings.contains_key(&key) {
                     bail!("Unknown setting {key} in config.json");
                 }
@@ -46,14 +58,14 @@ pub fn load() -> Result<Config> {
     for (key, value) in &settings {
         if key == "model_aliases" {
             ensure!(
-                value
-                    .as_object()
-                    .is_some_and(|m| m.iter().all(|(k, v)| !k.is_empty() && alias_valid(v))),
+                value.as_object().is_some_and(|m| m
+                    .iter()
+                    .all(|(k, v)| !k.is_empty() && v.as_str().is_some_and(|s| !s.is_empty()))),
                 "Invalid model aliases"
             );
             continue;
         }
-        if key == "ollama_port" || key == "image_port" {
+        if key == "ollama_port" {
             ensure!(
                 value.as_u64().is_some_and(|p| p <= 65535),
                 "Invalid Ollama port"
@@ -65,56 +77,4 @@ pub fn load() -> Result<Config> {
         );
     }
     Ok(Config(settings))
-}
-
-/// A text alias names a local Ollama model. An image alias is an object with
-/// `kind: "image"`, a `backend` (`local` loopback service or `openai`), a
-/// `model`, and for `openai` the Keychain service holding the API key.
-fn alias_valid(value: &Value) -> bool {
-    if let Some(name) = value.as_str() {
-        return !name.is_empty();
-    }
-    let Some(object) = value.as_object() else {
-        return false;
-    };
-    let text = |key: &str| {
-        object
-            .get(key)
-            .and_then(Value::as_str)
-            .is_some_and(|s| !s.is_empty())
-    };
-    object
-        .keys()
-        .all(|k| matches!(k.as_str(), "kind" | "backend" | "model" | "keychain"))
-        && object.get("kind").and_then(Value::as_str) == Some("image")
-        && text("model")
-        && match object.get("backend").and_then(Value::as_str) {
-            Some("local") => !object.contains_key("keychain"),
-            Some("openai") => text("keychain"),
-            _ => false,
-        }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn image_aliases_name_a_backend_and_keep_keys_in_the_keychain() {
-        assert!(alias_valid(&serde_json::json!("qwen3:8b")));
-        assert!(alias_valid(
-            &serde_json::json!({"kind":"image","backend":"local","model":"m"})
-        ));
-        assert!(alias_valid(&serde_json::json!(
-            {"kind":"image","backend":"openai","model":"m","keychain":"an.openai"})));
-        for bad in [
-            serde_json::json!({"kind":"image","backend":"openai","model":"m"}),
-            serde_json::json!({"kind":"image","backend":"openai","model":"m","keychain":"k","api_key":"sk"}),
-            serde_json::json!({"kind":"image","backend":"local","model":"m","keychain":"k"}),
-            serde_json::json!({"kind":"video","backend":"local","model":"m"}),
-            serde_json::json!(""),
-        ] {
-            assert!(!alias_valid(&bad), "{bad}");
-        }
-    }
 }

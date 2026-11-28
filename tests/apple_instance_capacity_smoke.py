@@ -1,4 +1,4 @@
-"""Use the composition painting spool to exercise a shared one-instance limit."""
+"""Use the Markdown review spool to exercise a shared one-instance limit."""
 from concurrent.futures import ThreadPoolExecutor
 import json
 import os
@@ -27,8 +27,8 @@ def exercise(home, reference):
         return json.loads(command(*args, body=body).stdout)
 
     spool = command("register", reference).stdout.strip()
-    seed = home / "seed.svg"
-    seed.write_text("<svg/>")
+    seed = home / "seed.md"
+    seed.write_text("capacity probe")
     tasks = [cli("task", "new", "--spool", spool, "--input", str(seed))["task"] for _ in range(2)]
 
     def load(task):
@@ -52,7 +52,7 @@ def exercise(home, reference):
 
         graph("submit", base_revision=0, idempotency_key="capacity", nodes=[
             {"id":"probe", "kind":"run", "spool":spool, "argv":["/bin/true"],
-             "inputs":{"lines":{"input":"seed.svg"}}, "outputs":[]}])
+             "inputs":{"source":{"input":"seed.md"}}, "outputs":[]}])
         queued = graph("state")["activity"]["probe"]
         assert queued["status"] == "queued", queued
         assert queued["waiting_reason"] == {"reason":"instance_capacity", "limit":1}
@@ -64,7 +64,7 @@ def exercise(home, reference):
             assert state["id"] == queued["id"] and state["status"] != "failed", state
             if state["status"] == "permission_required":
                 cli("permission", "decide", "--task", waiter, "--request-id",
-                    state["requests"]["lines"], "--decision", "once")
+                    state["requests"]["source"], "--decision", "once")
             if state["status"] == "done":
                 assert "waiting_reason" not in state
                 break
