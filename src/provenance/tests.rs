@@ -150,3 +150,38 @@ fn replay_returns_the_assigned_artifact_id() -> Result<()> {
     assert!(uuid::Uuid::parse_str(receipt["versions"][0]["artifact"].as_str().unwrap()).is_ok());
     Ok(())
 }
+
+#[test]
+fn moving_a_block_preserves_identity_and_removal_retires_it() -> Result<()> {
+    let mut db = db()?;
+    let actor = access::test_controller("t");
+    let mut revise = |previous, names: &[&str]| -> Result<()> {
+        let blocks: Vec<_> = names
+            .iter()
+            .map(|id| json!({"id":id,"text":id,"original":true}))
+            .collect();
+        let batch = versions::parse(json!({"idempotency_key":"edit","versions":[
+            {"artifact":"doc","expected":previous,"kind":"document","blocks":blocks}
+        ]}))?;
+        let tx = db.transaction()?;
+        versions::commit(&tx, &actor, batch)?;
+        Ok(tx.commit()?)
+    };
+    revise(0, &["a", "b"])?;
+    revise(1, &["b", "a"])?;
+    revise(2, &["b"])?;
+    assert!(revise(3, &["new", "a"])
+        .unwrap_err()
+        .to_string()
+        .contains("Retired block ID"));
+    revise(3, &["new", "b"])?;
+    let view = query::trace(
+        &db,
+        &actor,
+        &json!({"artifact":"doc","version":2}),
+        query::Direction::Sources,
+    )?;
+    assert_eq!(view["blocks"][0]["ref"]["block"], "b");
+    assert_eq!(view["blocks"][1]["ref"]["block"], "a");
+    Ok(())
+}

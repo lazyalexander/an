@@ -201,8 +201,17 @@ fn insert(
             serde_json::to_string(&draft.evidence)?
         ],
     )?;
+    // A moved block exists in the parent. A removed identity remains
+    // addressable in history and cannot be assigned to a new block.
+    let mut retired = tx.prepare(
+        "SELECT EXISTS(SELECT 1 FROM pv_block WHERE artifact=?1 AND block=?2 AND version<?3)
+         AND NOT EXISTS(SELECT 1 FROM pv_block WHERE artifact=?1 AND block=?2 AND version=?3)",
+    )?;
     let mut names = BTreeSet::new();
     for block in &draft.blocks {
+        let reused: bool =
+            retired.query_row(params![id, block.id, draft.expected.0], |row| row.get(0))?;
+        ensure!(!reused, "Retired block ID: {}", block.id);
         ensure!(
             valid_name(&block.id) && names.insert(&block.id),
             "Invalid or duplicate block ID"
