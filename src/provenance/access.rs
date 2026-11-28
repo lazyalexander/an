@@ -20,6 +20,15 @@ pub enum Right {
         node: String,
         attempt: String,
     },
+    ReceiveNotice {
+        artifact: ArtifactId,
+        version: VersionId,
+    },
+    Notify {
+        artifact: ArtifactId,
+        version: VersionId,
+        recipient: String,
+    },
     Register {
         artifact: ArtifactId,
     },
@@ -163,7 +172,9 @@ impl Actor {
                     |row| row.get(0),
                 )?)
             }
-            Right::Register { artifact }
+            Right::ReceiveNotice { artifact, .. }
+            | Right::Notify { artifact, .. }
+            | Right::Register { artifact }
             | Right::Revise { artifact }
             | Right::Decide { artifact, .. } => self.owns(db, artifact),
         }
@@ -193,8 +204,29 @@ pub fn grant(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
             !matches!(right, Right::Release { .. }) || target == actor.task,
             "Release requires the delivery task"
         );
+        if let Right::Notify {
+            artifact,
+            version,
+            recipient,
+        } = right
+        {
+            ensure!(
+                target == actor.task,
+                "Notification requires the decision task"
+            );
+            super::notification::recipient(db, target, recipient, artifact, *version)?;
+        }
+        if matches!(right, Right::ReceiveNotice { .. }) {
+            ensure!(
+                target == actor.task,
+                "Notification requires the decision task"
+            );
+        }
         actor.require(db, right.clone())?;
-        if let Right::Read { artifact, version } | Right::Decide { artifact, version } = right {
+        if let Right::Read { artifact, version }
+        | Right::ReceiveNotice { artifact, version }
+        | Right::Decide { artifact, version } = right
+        {
             ensure!(
                 db.query_row(
                     "SELECT EXISTS(SELECT 1 FROM pv_version WHERE artifact=? AND version=?)",

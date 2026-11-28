@@ -85,3 +85,11 @@
 一次明确的同意或拒绝为两项动作分别记录 ID、对象、请求、主体和结果。可在 `graph state` 对应 surface 的 `activity.confirmations` 和 `responded` 事件中核对。重复响应沿用原回执。拒绝会终止该交付尝试；同意后仍由调度器重新检查当前权限和发布流向。成功交付的 `release_receipt` 指向第二项确认，`delivery` 给出实际交付 ID。确认文档准确不改变文档引用的业务决定。
 
 运行会议纪要无头案例可复验 CLI 作答、面板清单、拒绝、重放和实际交付。`tests/declared_panel_browser.cjs` 使用模拟宿主响应驱动真实浏览器，核对清单渲染、初始未选择和提交。
+
+### 决定后的任务内通知
+
+控制器给收件 agent 签发指定决定版本的 `receive_notice`，给决策 agent 另行签发同版本的 `notify`，其中 `recipient` 是收件委托 ID。决策 agent 在 `decide` 中填写 `notify_grant`。宿主在同一事务里记录决定、通知 ID 和收件委托，原请求重放返回原回执。
+
+收件方通过任务 MCP 或 CLI 的 `notifications` 查收件记录，再用 `take-notification {"id":"…"}` 领取。宿主交回决定回执 ID、版本与结论，交接前核对双方委托。每次领取在返回正文前落账为 `unknown`。收件方用 `ack-notification {"attempt":"…","status":"received"}` 确认收到，明确处理失败时回报 `failed`。此处的失败是收件方报告的结果。收件方缺席时通知保持排队，没有领取尝试。
+
+丢失回执或进程退出后，查询和重放决定均不会触发发送。显式重试要在领取请求中用 `retry_after` 指出最近一次尝试 ID；若有任一次已确认收到，后续领取会被拒绝。回执丢失时重新领取可能造成重复处理，接收程序可以用稳定的通知 ID 去重。控制器通过 `notifications` 查询整条尝试历史。验收命令为 `python3 tests/decision_notifications.py`，范围是同任务的受托收件方。

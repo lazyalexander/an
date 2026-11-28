@@ -80,3 +80,13 @@ CREATE TABLE IF NOT EXISTS pv_attribution (
     artifact TEXT NOT NULL, version INTEGER NOT NULL, record TEXT NOT NULL, registered_at INTEGER NOT NULL,
     PRIMARY KEY (artifact, version)
 );
+CREATE TABLE IF NOT EXISTS pv_notice (
+    id TEXT PRIMARY KEY, task TEXT NOT NULL, decision TEXT UNIQUE NOT NULL,
+    sender_grant TEXT, recipient TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS pv_notice_inbox ON pv_notice(task,recipient);
+CREATE TABLE IF NOT EXISTS pv_notice_attempt (
+    seq INTEGER PRIMARY KEY, notice TEXT NOT NULL, id TEXT UNIQUE NOT NULL,
+    status TEXT NOT NULL, started INTEGER NOT NULL, settled INTEGER
+);
+CREATE INDEX IF NOT EXISTS pv_notice_history ON pv_notice_attempt(notice,seq);

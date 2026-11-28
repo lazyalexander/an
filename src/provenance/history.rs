@@ -109,6 +109,10 @@ pub fn decide(tx: &Transaction, actor: &Actor, decision: Decision) -> Result<Val
     if let Some(grant) = &actor.grant {
         receipt["delegated_by"] = get(tx, "provenance_grant", grant)?["issuer"].clone();
     }
+    if let Some(recipient) = &decision.notify_grant {
+        receipt["notification"] =
+            super::notification::enqueue(tx, actor, &decision, recipient, &id)?;
+    }
     if let Some(report) = decision.review {
         receipt["review"] = serde_json::to_value(report)?;
     }

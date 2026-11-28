@@ -11,6 +11,7 @@ mod history;
 pub(crate) use handoff::valid_endpoint;
 pub(crate) use history::require_accepted;
 mod material;
+mod notification;
 pub(crate) mod publication;
 mod query;
 pub(crate) mod release;
@@ -40,6 +41,9 @@ pub fn execute(task: &str, action: &str, args: &Value) -> Result<Value> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let actor = Actor::authenticate(&tx, task)?;
     let result = match action {
+        "notifications" => notification::list(&tx, &actor)?,
+        "take-notification" => notification::take(&tx, &actor, args)?,
+        "ack-notification" => notification::ack(&tx, &actor, args)?,
         "release" => release::submit(&tx, &actor, args)?,
         "request-review" => review::request(&tx, &actor, args)?,
         "read-review" => review::read(&tx, &actor, args)?,
