@@ -173,8 +173,11 @@ def step(name, spool, port, source, file, *options):
 
 def create_task(host, owner_key):
     organize, formatter = (
-        host.call("register", f"an-minutes-{name}:provenance")
-        for name in ("organize", "format")
+        host.call("register", image)
+        for image in (
+            "an-minutes-organize:provenance",
+            "an-minutes-format:confirmation",
+        )
     )
     workspace = host.call(
         "workspace",
@@ -201,6 +204,7 @@ def create_task(host, owner_key):
                 ["preview", "task-input:minutes.json", "provenance"],
                 ["preview", organize, "provenance"],
                 ["preview", formatter, "provenance"],
+                ["preview", formatter, "studio"],
                 ["publish", formatter, workspace],
                 ["export", formatter, str(dest)],
             ]
@@ -612,7 +616,7 @@ def check_owner_review(host, delivery, owner_key, expected_text):
     host.provenance("read-review", id=review_id, denied="Review unavailable")
 
 
-def check_reviewed_release(host, workspace):
+def check_reviewed_release(host, workspace, formatter):
     doc = {"artifact": "announcement", "version": 1}
     node = {
         "kind": "delivery",
@@ -675,6 +679,76 @@ def check_reviewed_release(host, workspace):
         else:
             assert host.wait(name)["release_receipt"] == receipt["id"]
 
+    for accepted in [False, True]:
+        delivery_id = "human-release" if accepted else "declined-release"
+        host.submit(delivery_id, [{**node, "id": delivery_id}])
+        attempt = host.graph("state")["activity"][delivery_id]["id"]
+        surface = "verify-and-release" if accepted else "decline"
+        host.submit(
+            surface,
+            [
+                {
+                    "kind": "surface",
+                    "id": surface,
+                    "panel": "confirm-release",
+                    "spool": formatter,
+                    "inputs": node["inputs"],
+                    "outputs": ["response"],
+                    "confirm_delivery": {"node": delivery_id, "attempt": attempt},
+                }
+            ],
+        )
+        for request in host.graph("requests"):
+            host.approve(request["id"])
+        host.graph("state")
+        row = next(
+            r
+            for r in host.call("decision", "list", "--task", host.task)
+            if r["node"] == surface
+        )
+        ref = {"node": surface, "request": row["request"]}
+        assert host.graph("panel", **ref)["actions"] == row["actions"]
+        assert [a["operation"] for a in row["actions"]] == [
+            "confirm_accuracy",
+            "approve_publication",
+        ]
+        host.call(
+            "decision",
+            "answer",
+            "--task",
+            host.task,
+            "--node",
+            surface,
+            "--request",
+            row["request"],
+            "--json",
+            "-",
+            body={"confirmed": accepted},
+        )
+        state = host.graph("state")["activity"]
+        receipts = state[surface]["confirmations"]
+        assert len({r["id"] for r in receipts}) == 2
+        assert all(
+            r["confirmed"] == accepted
+            and r["request"] == row["request"]
+            and r["document"] == doc
+            for r in receipts
+        )
+        host.graph("respond", **ref, value={"confirmed": accepted})
+        assert host.graph("state")["activity"][surface]["confirmations"] == receipts
+        if accepted:
+            delivered = host.wait(delivery_id)
+            assert (
+                delivered["release_receipt"]
+                == receipts[1]["id"]
+                != delivered["delivery"]
+            )
+        else:
+            assert (
+                state[delivery_id]["status"] == "failed"
+                and "delivery" not in state[delivery_id]
+            )
+
 
 def exercise(host, resumed):
     owner_key = secrets.token_hex(32)
@@ -713,7 +787,7 @@ def exercise(host, resumed):
             )
         ],
     )
-    check_reviewed_release(host, workspace)
+    check_reviewed_release(host, workspace, formatter)
     reader = host.provenance(
         "grant",
         target=host.task,

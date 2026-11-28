@@ -91,7 +91,11 @@ pub fn execute(action: Action) -> Result<()> {
         let activity = &state["activity"][id];
         if activity["status"] == "waiting" && node["package"]["declaration"].is_object() {
             let d = &node["package"]["declaration"];
-            waiting.push(json!({"node":id,"request":activity["id"],"title":d["title"],"decision":d["decision"],"response":node["response"],"bindings":activity["bindings"]}));
+            let mut row = json!({"node":id,"request":activity["id"],"title":d["title"],"decision":d["decision"],"response":node["response"],"bindings":activity["bindings"]});
+            if let Some(actions) = node.get("actions") {
+                row["actions"] = actions.clone();
+            }
+            waiting.push(row);
         }
     }
     if let Action::Answer {

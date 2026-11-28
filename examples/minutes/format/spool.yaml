@@ -1,7 +1,13 @@
-schema: an.spool/v1
+schema: an.spool/v2
 name: minutes-format
 summary: Prepare announcement.md.
 inputs:
   - {name: summary, description: Source, media_types: [application/json], required: true}
 outputs:
   - {name: result, description: Result, media_types: [application/octet-stream]}
+panels:
+  confirm-release:
+    title: Confirm document and publication
+    kind: surface
+    bindings: [doc]
+    decision: {type: confirm}

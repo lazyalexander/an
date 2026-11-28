@@ -66,5 +66,19 @@ function gate() {
     await individual.waitFor({state:"detached"});
     assert.deepEqual(evidenceDecision,{request:"evidence",decision:"once"});
     assert(await page.locator("#intent button").isVisible());
+
+    delete pkg.html;
+    draft = undefined;
+    pkg.actions = [{label:"Confirm accuracy of minutes v3"},
+      {label:"Approve publication of minutes v3 to workspace internal"}];
+    pkg.response = {properties:{confirmed:{type:"boolean"}}};
+    await page.reload();
+    const choice = page.getByLabel("confirmed");
+    await choice.waitFor();
+    assert.deepEqual(await page.locator("#content form li").allTextContents(), pkg.actions.map(a=>a.label));
+    assert.equal(await choice.evaluate(select=>select.selectedIndex), -1);
+    await choice.selectOption("true");
+    await page.getByRole("button",{name:"panel.submit"}).click();
+    assert.deepEqual(response,{confirmed:true});
   } finally { await browser.close(); }
 })().catch(e=>{console.error(e);process.exitCode=1;});

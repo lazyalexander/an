@@ -64,6 +64,9 @@ pub(super) fn handle(
 ) -> Result<Value> {
     let id = field(args, "node")?;
     let node = graph["nodes"].get(id).context("Unknown node")?.clone();
+    if node.get("confirm_delivery").is_some() {
+        permission::controller(&tx, task)?;
+    }
     let mut state = graph["activity"][id].clone();
     ensure!(
         state["id"] == args["request"]
@@ -87,6 +90,9 @@ pub(super) fn handle(
             return Ok(json!({"draft":draft}));
         }
         let mut result = package(&tx, &state["bindings"], &node["package"], &node["response"])?;
+        if let Some(actions) = node.get("actions") {
+            result["actions"] = actions.clone();
+        }
         result["draft"] = draft;
         return Ok(result);
     }
@@ -135,6 +141,10 @@ pub(super) fn handle(
                 );
             }
         }
+        if node.get("confirm_delivery").is_some() {
+            state["confirmations"] =
+                super::confirmation::record(&tx, task, &graph, &node, &state, response)?;
+        }
         state["response"] = response.clone();
         let rev = revision(
             &tx,
@@ -147,13 +157,11 @@ pub(super) fn handle(
             "done"
         });
         graph["activity"][id] = state.clone();
-        event(
-            &mut graph,
-            "user",
-            "responded",
-            id,
-            json!({"request":request,"revision":rev,"bindings":state["bindings"],"response":response}),
-        );
+        let mut detail = json!({"request":request,"revision":rev,"bindings":state["bindings"],"response":response});
+        if let Some(receipts) = state.get("confirmations") {
+            detail["confirmations"] = receipts.clone();
+        }
+        event(&mut graph, "user", "responded", id, detail);
         put(&tx, "graph", task, &graph)?;
     } else {
         anyhow::bail!("Unknown graph host action")
@@ -161,7 +169,9 @@ pub(super) fn handle(
     tx.commit()?;
     if action == "respond" {
         drop(lock);
-        wake(task)?;
+        if let Err(error) = wake(task) {
+            eprintln!("Response recorded. Scheduler will reconcile on next state read: {error}");
+        }
     }
     Ok(json!({"status":state["status"]}))
 }

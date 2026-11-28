@@ -72,7 +72,7 @@ cargo test --offline
 cargo build --offline
 python3 tests/provenance_mcp.py
 container build --tag an-minutes-organize:provenance examples/minutes/organize
-container build --tag an-minutes-format:provenance examples/minutes/format
+container build --tag an-minutes-format:confirmation examples/minutes/format
 python3 examples/minutes/provenance.py
 cargo test --release --offline provenance::benchmark -- --ignored --nocapture
 ```

@@ -1,5 +1,6 @@
 mod attempt;
 use attempt::AttemptStatus;
+mod confirmation;
 mod control;
 mod deliveries;
 mod host;
@@ -398,6 +399,7 @@ fn append_nodes(
                         | "continuation"
                         | "versions"
                         | "publication_review"
+                        | "confirm_delivery"
                         | "panel"
                         | "spool"
                 )),
@@ -440,6 +442,18 @@ fn append_nodes(
         nodes.insert(id.to_owned(), stored);
     }
     validate(nodes)?;
+    for node in additions
+        .iter()
+        .filter(|n| n.get("confirm_delivery").is_some())
+    {
+        ensure!(
+            driver.is_none(),
+            "Confirmation requires controller submission"
+        );
+        let id = field(node, "id")?;
+        let actions = confirmation::declare(db, task, graph, &graph["nodes"][id])?;
+        graph["nodes"][id]["actions"] = actions;
+    }
     for node in additions {
         graph["activity"][field(node, "id")?] = attempt::queued(1);
     }

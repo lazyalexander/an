@@ -78,6 +78,15 @@ async function basicPanel(pkg, ref, epoch) {
   if (epoch !== panelEpoch) return;
   filesPanel(pkg.files);
   const form = document.createElement("form");
+  if (pkg.actions) {
+    const list = document.createElement("ul");
+    for (const action of pkg.actions) {
+      const item = document.createElement("li");
+      item.textContent = action.label;
+      list.append(item);
+    }
+    form.append(list);
+  }
   const inputs = new Map();
   for (const [key, rule] of Object.entries(pkg.response.properties)) {
     const label = document.createElement("label");
@@ -95,6 +104,10 @@ async function basicPanel(pkg, ref, epoch) {
     }
     const decision = pkg.declaration.decision;
     const initial = pkg.draft?.[key] ?? (decision.field === key ? decision.default : undefined);
+    if (pkg.actions && key === "confirmed" && initial === undefined) {
+      input.selectedIndex = -1;
+      input.required = true;
+    }
     if (initial !== undefined) input.value = options ? JSON.stringify(initial) : initial;
     inputs.set(key, () => options ? JSON.parse(input.value) : input.type === "number" ? input.valueAsNumber : input.value);
     label.append(input);

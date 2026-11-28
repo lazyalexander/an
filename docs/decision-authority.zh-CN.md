@@ -77,3 +77,11 @@
 签发 `{"right":"release","node":"…","attempt":"…"}` 后，受托 agent 通过任务 MCP 或 CLI 的 `release` 动作提交 `node`、`attempt`、`workspace` 和 `document`（产物 ID、版本）。这一步返回指令回执。宿主推进交付时，在交付事务中再次核对委托、当前流向权限及实际文件版本。交付记录保存指令回执 ID。重放同一指令得到原回执；重试节点产生新尝试，需要另行授权。
 
 会议纪要用例在真实容器输出的公告上检查不完整的核验报告、替换版本、改发其他目标、落账前撤销，以及指定版本成功交付。运行 `python3 examples/minutes/provenance.py` 可复验。
+
+### 一次人工响应确认两个动作
+
+对已经排队的单文件核验交付，控制器可提交一个使用 spool 基础 `confirm` 面板的 surface，用 `confirm_delivery: {"node":"…","attempt":"…"}` 指定本次交付。面板的输入须和交付输入一致。An 从宿主保存的交付生成两项说明：确认指定文档版本准确，以及同意将该版发布到指定工作区。CLI 的 `decision list`、`decision answer` 和 Studio 的面板都使用这份清单。
+
+一次明确的同意或拒绝为两项动作分别记录 ID、对象、请求、主体和结果。可在 `graph state` 对应 surface 的 `activity.confirmations` 和 `responded` 事件中核对。重复响应沿用原回执。拒绝会终止该交付尝试；同意后仍由调度器重新检查当前权限和发布流向。成功交付的 `release_receipt` 指向第二项确认，`delivery` 给出实际交付 ID。确认文档准确不改变文档引用的业务决定。
+
+运行会议纪要无头案例可复验 CLI 作答、面板清单、拒绝、重放和实际交付。`tests/declared_panel_browser.cjs` 使用模拟宿主响应驱动真实浏览器，核对清单渲染、初始未选择和提交。

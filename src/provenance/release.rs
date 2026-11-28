@@ -123,6 +123,18 @@ pub(crate) fn authorized(db: &Connection, task: &str, attempt: &str) -> Result<O
     let Some(record) = find(db, "publication_release", attempt)? else {
         return Ok(None);
     };
+    if record.get("confirmation").is_some() {
+        ensure!(record["confirmed"] == true, "Human declined publication");
+        ensure!(
+            record["task"] == task
+                && record["authority"]
+                    == crate::store::hash(
+                        crate::store::canonical(&crate::permission::stamp(db, task)?).as_bytes()
+                    ),
+            "Human publication approval expired"
+        );
+        return Ok(Some(record));
+    }
     let grant = get(
         db,
         "provenance_grant",
