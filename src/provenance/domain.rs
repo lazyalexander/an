@@ -131,6 +131,7 @@ pub struct Decision {
     pub choice: Choice,
     pub seen_cursor: u64,
     pub notify_grant: Option<String>,
+    pub corrects: Option<String>,
     pub review: Option<BlockRef>,
     pub reason: Option<String>,
     pub reported_participant: Option<String>,

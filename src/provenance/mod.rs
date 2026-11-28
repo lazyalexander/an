@@ -2,6 +2,7 @@
 mod access;
 mod attribution;
 pub(crate) mod continuation;
+mod correction;
 mod domain;
 mod evidence;
 pub(crate) mod export;
@@ -41,6 +42,8 @@ pub fn execute(task: &str, action: &str, args: &Value) -> Result<Value> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let actor = Actor::authenticate(&tx, task)?;
     let result = match action {
+        "notify-correction" => correction::notify(&tx, &actor, args)?,
+        "corrections" => correction::inspect(&tx, &actor, args)?,
         "notifications" => notification::list(&tx, &actor)?,
         "take-notification" => notification::take(&tx, &actor, args)?,
         "ack-notification" => notification::ack(&tx, &actor, args)?,

@@ -148,7 +148,119 @@ def exercise(home):
     op("revoke", grant=sender["grant"])
     take(pending, denied="Inactive delegation")
     assert history(pending) == []
+    check_corrections(
+        op, grant, lambda: cli("graph", "--task", task, "state")["cursor"]
+    )
     cli("graph", "--task", task, "finish")
+
+
+def check_corrections(op, grant, cursor):
+    for original_status in ("received", "unknown", "unclaimed"):
+        name = f"correction-{original_status}"
+        for expected in (0, 1):
+            op(
+                "commit",
+                idempotency_key=f"{name}-v{expected + 1}",
+                versions=[
+                    {
+                        "artifact": name,
+                        "expected": expected,
+                        "kind": "decision",
+                        "blocks": [
+                            {
+                                "id": "text",
+                                "text": f"draft {expected + 1}",
+                                "original": True,
+                            }
+                        ],
+                    }
+                ],
+            )
+        reader = grant(
+            [
+                {"right": "receive_notice", "artifact": name, "version": n}
+                for n in (1, 2)
+            ]
+        )
+        first = op(
+            "decide",
+            idempotency_key=name,
+            artifact=name,
+            version=1,
+            seen_cursor=cursor(),
+            choice="accept",
+            notify_grant=reader["grant"],
+        )
+        old_notice = first["notification"]["id"]
+
+        def take(notice, **kwargs):
+            return op("take-notification", token=reader["token"], id=notice, **kwargs)
+
+        def ack(attempt):
+            return op(
+                "ack-notification",
+                token=reader["token"],
+                attempt=attempt,
+                status="received",
+            )
+
+        if original_status != "unclaimed":
+            old_attempt = take(old_notice)["attempt"]
+            if original_status == "received":
+                ack(old_attempt)
+        change = dict(
+            idempotency_key=name + "-amend",
+            artifact=name,
+            version=2,
+            seen_cursor=cursor(),
+            choice="reject",
+            corrects=first["id"],
+        )
+        narrow = grant([{"right": "decide", "artifact": name, "version": 2}])
+        op("decide", token=narrow["token"], denied="outside authority", **change)
+        assert op("corrections", decision=first["id"])["corrections"] == []
+        revised = op("decide", **change)
+        assert revised["corrects"] == first["id"] and op("decide", **change) == revised
+
+        def inspect():
+            before = op("corrections", decision=first["id"])
+            assert before == op("corrections", decision=revised["id"])
+            (link,) = before["corrections"]
+            assert (link["previous"], link["replacement"]) == (
+                first["id"],
+                revised["id"],
+            )
+            (route,) = link["recipients"]
+            return route
+
+        assert inspect() == {
+            "recipient": reader["grant"],
+            "original": original_status,
+            "correction": "not_requested",
+        }
+        take(old_notice, denied="Decision corrected")
+
+        def queue():
+            return op(
+                "notify-correction", decision=revised["id"], recipient=reader["grant"]
+            )
+
+        notice = queue()
+        assert queue() == notice and inspect()["correction"] == "unclaimed"
+        delivery = take(notice["id"])
+        assert delivery["corrects"] == first["id"] and delivery["choice"] == "reject"
+        assert inspect()["correction"] == "unknown"
+        ack(delivery["attempt"])
+        assert inspect()["correction"] == "received"
+        if original_status == "unknown":
+            ack(old_attempt)
+            assert inspect()["original"] == "received"
+        op(
+            "corrections",
+            token=reader["token"],
+            decision=first["id"],
+            denied="Controller required",
+        )
 
 
 if __name__ == "__main__":
@@ -157,5 +269,5 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as home:
         exercise(home)
     print(
-        "Verified notification failure, lost receipt, restart, explicit retry and revocation."
+        "Verified notification recovery, revocation, decision corrections and late receipts."
     )

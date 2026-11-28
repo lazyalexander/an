@@ -123,6 +123,7 @@ impl Gateway {
                 !matches!(
                     action,
                     "handoff-block"
+                        | "notify-correction"
                         | "grant"
                         | "revoke"
                         | "admit-material"

@@ -1,7 +1,7 @@
 //! A task-local recipient polls for work. Dispatch is durable before payload return.
 use super::{
     access::{require_active_grant, Actor, Right},
-    domain::{ArtifactId, Decision, VersionId},
+    domain::{ArtifactId, VersionId},
 };
 use crate::store::{get, uid};
 use anyhow::{ensure, Context, Result};
@@ -31,19 +31,20 @@ pub(super) fn recipient(
 pub fn enqueue(
     db: &Connection,
     actor: &Actor,
-    decision: &Decision,
+    artifact: &ArtifactId,
+    version: VersionId,
     to: &str,
     receipt: &str,
 ) -> Result<Value> {
     actor.require(
         db,
         Right::Notify {
-            artifact: decision.artifact.clone(),
-            version: decision.version,
+            artifact: artifact.clone(),
+            version,
             recipient: to.into(),
         },
     )?;
-    recipient(db, &actor.task, to, &decision.artifact, decision.version)?;
+    recipient(db, &actor.task, to, artifact, version)?;
     let id = uid();
     db.execute(
         "INSERT INTO pv_notice(id,task,decision,sender_grant,recipient) VALUES(?,?,?,?,?)",
@@ -105,6 +106,14 @@ pub fn take(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
         )
         .optional()?
         .context("Notification unavailable")?;
+    ensure!(
+        !db.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pv_correction WHERE previous=?)",
+            [&decision],
+            |r| r.get::<_, bool>(0)
+        )?,
+        "Decision corrected; old notification closed"
+    );
     if let Some(sender) = sender {
         require_active_grant(db, &actor.task, &get(db, "provenance_grant", &sender)?)?;
     }
@@ -136,9 +145,19 @@ pub fn take(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
         [&decision],
         |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
     )?;
-    Ok(
-        json!({"id":id,"attempt":attempt,"decision":decision,"artifact":artifact,"version":version,"choice":choice}),
-    )
+    let mut payload = json!({"id":id,"attempt":attempt,"decision":decision,"artifact":artifact,"version":version,"choice":choice});
+    let previous: Option<String> = db
+        .query_row(
+            "SELECT c.previous FROM pv_correction c JOIN pv_notice n ON n.decision=c.previous
+         WHERE c.replacement=? AND n.recipient=?",
+            params![decision, receiver(actor)?],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(previous) = previous {
+        payload["corrects"] = json!(previous);
+    }
+    Ok(payload)
 }
 
 pub fn ack(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {

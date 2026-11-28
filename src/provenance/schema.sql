@@ -90,3 +90,6 @@ CREATE TABLE IF NOT EXISTS pv_notice_attempt (
     status TEXT NOT NULL, started INTEGER NOT NULL, settled INTEGER
 );
 CREATE INDEX IF NOT EXISTS pv_notice_history ON pv_notice_attempt(notice,seq);
+CREATE TABLE IF NOT EXISTS pv_correction (
+    previous TEXT PRIMARY KEY, replacement TEXT UNIQUE NOT NULL
+);
