@@ -751,7 +751,8 @@ pub(crate) fn dispatch_locked(
             if r["status"] == "cancel_pending"
                 && i["active"].is_null()
                 && matches!(i["intent"].as_str(), Some("stop" | "unload"))
-                && matches!(i["status"].as_str(), Some("stopped" | "unloaded"))
+                && (matches!(i["status"].as_str(), Some("stopped" | "unloaded"))
+                    || (i["status"] == "cleanup_pending" && i["observed"] == "absent"))
             {
                 r["status"] = json!("cancelled");
                 put(db, "run", id, &r)?;

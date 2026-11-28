@@ -1,6 +1,7 @@
 """Prepare or verify a persistent test case across an operator-initiated Mac reboot."""
 
 import argparse
+import fcntl
 import hashlib
 import json
 import os
@@ -33,14 +34,20 @@ def checkpoint(path, data):
         os.fsync(parent)
     finally:
         os.close(parent)
+    # Flush the device cache after the rename and directory sync.
+    with path.open("rb") as committed:
+        fcntl.fcntl(committed.fileno(), fcntl.F_FULLFSYNC)
 
 
 def prepare(directory, image):
     boot = boot_session()
     directory.mkdir(mode=0o700)
     host = Host.create(directory, image, slots=1)
+    turn = None
     try:
         task, follower = host.new_task(), host.new_task()
+        cleanup_case = {"task": task, "image": host.image}
+        checkpoint(directory / "cleanup.json", cleanup_case)
         turn = host.cli("permission", "begin", "--task", task)["turn"]
         # The isolated case directory is private to the operator. Keep this
         # credential separate from the report and outside every guest mount.
@@ -49,7 +56,7 @@ def prepare(directory, image):
         with os.fdopen(fd, "w") as file:
             file.write(turn)
             file.flush()
-            os.fsync(file.fileno())
+            fcntl.fcntl(file.fileno(), fcntl.F_FULLFSYNC)
         payload = os.urandom(32).hex() + "\r\n"
         published = host.run(task, 'printf %s "$1" > /output/result', payload)
         host.wait(task, published, "awaiting_publication")
@@ -85,7 +92,12 @@ def prepare(directory, image):
             },
         )
     except BaseException:
-        host.cleanup()
+        try:
+            if turn is not None:
+                host.cli("permission", "end", "--task", task, turn=turn)
+                (directory / "operator").unlink(missing_ok=True)
+        finally:
+            host.cleanup()
         raise
     return {
         "prepared": True,
@@ -99,7 +111,7 @@ def check_recovery(directory, case, boot):
     task, follower = case["task"], case["follower"]
     observed = directory / "observed.json"
     if not observed.exists():
-        assert host.rows("PRAGMA integrity_check") == [("ok",)]
+        assert host.rows("PRAGMA integrity_check", recover=True) == [("ok",)]
         assert {
             row[0] for row in host.rows("SELECT id FROM objects WHERE kind='run'")
         } == {
@@ -107,6 +119,9 @@ def check_recovery(directory, case, boot):
             case["run"],
             case["queued"],
         }
+        assert host.rows(
+            "SELECT run, admitted FROM execution_queue ORDER BY ticket"
+        ) == [(case["run"], 1), (case["queued"], 0)]
         for owner, run in ((task, case["run"]), (follower, case["queued"])):
             assert host.cli("status", "--task", owner, run)["status"] == "unknown"
             assert not host.record("run", run).get("candidate")
@@ -186,9 +201,14 @@ if __name__ == "__main__":
     elif args.action == "verify":
         result = verify(directory)
     else:
-        case = json.loads((directory / "prepared.json").read_text())
+        metadata = directory / "cleanup.json"
+        if not metadata.exists():
+            metadata = directory / "prepared.json"
+        case = json.loads(metadata.read_text())
         host = Host(directory, case["image"])
-        host.cleanup()
-        end_turn(host, directory, case)
+        try:
+            end_turn(host, directory, case)
+        finally:
+            host.cleanup()
         result = {"cleanup": "confirmed"}
     print(json.dumps(result))
