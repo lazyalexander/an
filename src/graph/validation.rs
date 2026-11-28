@@ -19,16 +19,13 @@ pub(super) fn validate(nodes: &serde_json::Map<String, Value>) -> Result<()> {
             .flatten()
             .map(|(_, r)| r)
         {
-            if reference.get("input").is_some() {
-                field(reference, "input")?;
-                ensure!(
-                    reference.as_object().is_some_and(|m| m.len() == 1),
-                    "Ambiguous input reference"
-                );
+            let ArtifactRef::Output {
+                node: upstream,
+                port,
+            } = ArtifactRef::declared(reference)?
+            else {
                 continue;
-            }
-            let upstream = field(reference, "node")?;
-            let port = field(reference, "port")?;
+            };
             let producer = nodes.get(upstream).context("Unknown source node")?;
             ensure!(
                 producer["outputs"]

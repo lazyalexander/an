@@ -149,7 +149,7 @@ pub(super) fn schedule(
             )?,
         )? {
             state["requests"]["model"] = p["request_id"].clone();
-            state["status"] = json!("permission_required");
+            state["status"] = json!(AttemptStatus::PermissionRequired);
             tx.commit()?;
             return Ok(());
         }
@@ -175,23 +175,23 @@ pub(super) fn schedule(
         "completed" => {
             let name = call["output_name"].as_str().unwrap_or("result.json");
             state["outputs"][name] = json!({"spool":dest,"revision":call["output"]});
-            state["status"] = json!("done");
+            state["status"] = json!(AttemptStatus::Done);
         }
         "unknown" | "failed" => {
             state["status"] = call["state"].clone();
             state["error"] = call["error"].clone();
         }
         "withdrawn" => {
-            state["status"] = json!("failed");
+            state["status"] = json!(AttemptStatus::Failed);
             state["error"] = call["error"].clone();
         }
-        "sending" => state["status"] = json!("running"),
+        "sending" => state["status"] = json!(AttemptStatus::Running),
         "reserved" if !call["model"].is_string() => {
             release_unsent(db, &id, "This model requires the visual experiment branch")?;
             anyhow::bail!("This model requires the visual experiment branch");
         }
         "reserved" => {
-            state["status"] = json!("running");
+            state["status"] = json!(AttemptStatus::Running);
             if !paused {
                 let lease = match try_lease(&id) {
                     Ok(Some(lease)) => lease,

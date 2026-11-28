@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import sqlite3
 import subprocess
 import sys
@@ -25,6 +26,28 @@ def setup_workspace(tmp_path):
     config.write_text("[agent]\npoll_ms = 1000\ncommand = " +
                       json.dumps([sys.executable, str(STUDIO / "tests/fake_agent.py")]))
     return workspace, config
+
+
+def test_workspace_controller_runs_with_only_headless_files(tmp_path, monkeypatch):
+    monkeypatch.setenv("AN_HOME", str(tmp_path))
+    monkeypatch.delenv("PYTHONPATH", raising=False)
+    workspace, _ = setup_workspace(tmp_path)
+    install = tmp_path / "headless"
+    shutil.copytree(STUDIO / "an_host", install / "an_host",
+                    ignore=shutil.ignore_patterns("__pycache__"))
+    (install / "config").mkdir()
+    shutil.copyfile(STUDIO / "config/studio.json", install / "config/studio.json")
+
+    cli = [sys.executable, "-m", "an_host", "--an", str(BINARY), "--workspace", workspace]
+    try:
+        task = json.loads(subprocess.check_output([*cli, "start", "headless review"],
+                                                  cwd=install, timeout=15))["task"]
+        with sqlite3.connect(tmp_path / "registry.sqlite3") as db:
+            graph = json.loads(db.execute("SELECT body FROM objects WHERE kind='graph' AND id=?",
+                                          [task]).fetchone()[0])
+        assert graph["events"][0]["data"]["text"] == "headless review"
+    finally:
+        subprocess.run([*cli, "stop"], cwd=install, check=True, timeout=10)
 
 
 def test_restart_studio(tmp_path, monkeypatch):

@@ -128,6 +128,18 @@ A pipeline without the macro UI still needs somewhere to present surfaces and pe
 
 The An host owns tasks, grants, graph transitions, immutable versions and receipt validation. Task Studio starts with `cd studio && python3 -m orchestrator --task TASK`. Its entry point imports only the graph server and configuration. A task's admitted panel declarations supply the decisions shown in the timeline.
 
+The backend and the macro UI share three contracts:
+
+| Owner | Entry point | Responsibilities |
+| --- | --- | --- |
+| Rust host | `src/graph/host.rs`, `src/instances.rs` | Validate task authority, persist graph changes, run containers and settle results. The graph view projects records and redacts them when the turn has expired. |
+| Headless controller | `studio/an_host` | Restore task ownership, delegate limited MCP credentials, supervise the harness and serve the local controller socket. This package runs with the shared settings in `studio/config/studio.json`. |
+| Macro UI | `studio/orchestrator` | Serve browser assets and translate user actions into controller requests. The browser renders the timeline, permissions, decisions and evidence. |
+
+The Rust host resolves a task input or a producer's output to the same artifact reference in graph validation, scheduling and permission matching. Attempt status controls retry, pause and closure. The execution engine reconciles the requested instance lifecycle with its observation of the guest. Cancellation consumes that termination result, so deferred disk cleanup can continue after the run settles. The registry and MCP retain their existing JSON record formats.
+
+A demo can use the CLI or the same controller client as Studio. New presentations can be developed independently as long as they use the same task operations and receipts. The controller test starts a workspace from an installation containing only the headless package and shared settings.
+
 Markdown review and minutes own their prompts, transformations, spools and fixtures under `examples/`. The Codex adapter under `examples/agents/` connects a harness to the task MCP interface. Studio and the scheduler can run independently of all three examples.
 
 The [visual experiment branch](https://github.com/lazyalexander/an/tree/experiment/visual-studio) preserves the Bridge and CAD workflows, canvas, image services, composition benchmarks and their tests. The common boundary is a frozen artifact revision and its published bindings. Opening, exporting or resuming from a published visual delivery reads those records directly. Finish pending visual work with the experiment build. Use a separate registry for new experiments. A capability belongs on `dev` when a spool-independent contract can express it and a headless test can verify its behavior. A domain workflow stays with its fixtures and acceptance tests.

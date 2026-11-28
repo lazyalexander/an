@@ -241,26 +241,21 @@ pub fn decide(db: &Connection, task: &str, id: &str, decisions: Value) -> Result
 }
 
 pub fn route_index(card: &Value, actual: &Value) -> Option<usize> {
-    let source = &actual["source"];
-    // Resolve references by the same fields as the graph scheduler, including
-    // for graphs and permission requests persisted by older releases.
-    let source = if let Some(input) = source["input"].as_str() {
-        json!({"input":input})
-    } else {
-        json!({"node":source["node"].as_str()?,"port":source["port"].as_str()?})
-    };
+    use crate::graph::ArtifactRef;
+    let source = ArtifactRef::try_from(&actual["source"]).ok()?;
+    let canonical = json!(source);
     card["routes"].as_array()?.iter().position(|r| {
-        (r["source"] == source
+        (r["source"] == canonical
             || (card["turn_scope"] == true
-                && source["node"].is_string()
+                && matches!(source, ArtifactRef::Output { .. })
                 && r["source"]["producer_port"].is_string()
-                && r["source"]["producer_port"] == source["port"]
+                && r["source"]["producer_port"] == canonical["port"]
                 && r["producer_argv"].is_array()
                 && r["producer_argv"] == actual["producer_argv"]))
             && ["operation", "origin", "destination"]
                 .iter()
                 .all(|k| r[k] == actual[k])
-            && (!source["input"].is_string() || actual["revision"] == r["revision"])
+            && (!matches!(source, ArtifactRef::Input { .. }) || actual["revision"] == r["revision"])
     })
 }
 

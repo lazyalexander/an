@@ -1,15 +1,23 @@
+mod attempt;
+use attempt::AttemptStatus;
+mod control;
+mod deliveries;
 mod host;
 pub mod model;
+mod reference;
+pub(crate) use reference::ArtifactRef;
 mod scheduler;
 mod sources;
+mod surfaces;
+mod view;
 pub(crate) use sources::lineage;
 mod validation;
 
 pub use host::host;
-use host::package;
 use scheduler::advance;
 pub(crate) use scheduler::paused;
 pub use scheduler::wake;
+use surfaces::package;
 pub(crate) use validation::response_valid;
 use validation::validate;
 
@@ -95,27 +103,25 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
         "Empty submission"
     );
     for id in retry {
-        let model_unknown =
-            graph["nodes"][&id]["kind"] == "model" && graph["activity"][&id]["status"] == "unknown";
+        let is_model = graph["nodes"][&id]["kind"] == "model";
         let state = &mut graph["activity"][&id];
         ensure!(
-            state["status"] == "failed" || state["status"] == "cancelled" || model_unknown,
+            AttemptStatus::of(state).can_retry(is_model),
             "Expected settled failed attempt"
         );
-        *state =
-            json!({"id":uid(),"attempt":state["attempt"].as_u64().unwrap()+1,"status":"queued"});
+        *state = attempt::next(state)?;
     }
     for id in supersede {
         let state = &mut graph["activity"][&id];
         ensure!(
-            state["status"] == "waiting" || state["status"] == "queued",
+            AttemptStatus::of(state).can_supersede(),
             "Expected unconsumed node"
         );
         state
             .as_object_mut()
             .context("Invalid activity")?
             .remove("waiting_reason");
-        state["status"] = json!("superseded");
+        state["status"] = json!(AttemptStatus::Superseded);
     }
     append_nodes(&tx, &record, &mut graph, additions, None)?;
     let rev = graph["revision"].as_u64().unwrap();
@@ -406,7 +412,7 @@ fn append_nodes(
     }
     validate(nodes)?;
     for node in additions {
-        graph["activity"][field(node, "id")?] = json!({"status":"queued","attempt":1,"id":uid()});
+        graph["activity"][field(node, "id")?] = attempt::queued(1);
     }
     graph["revision"] = json!(graph["revision"].as_u64().unwrap() + 1);
     Ok(())

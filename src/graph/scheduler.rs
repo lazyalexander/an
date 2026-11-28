@@ -8,24 +8,30 @@ fn bindings(db: &Connection, task: &str, graph: &Value, node: &Value) -> Result<
         }
     }
     for (name, r) in node["inputs"].as_object().into_iter().flatten() {
-        if let Some(source) = r["input"].as_str() {
-            result[name] =
-                json!({"source":source,"revision":get(db,"task",task)?["inputs"][source]});
-        } else {
-            let state = &graph["activity"][field(r, "node")?];
-            if state["status"] != "done"
-                && !(state["status"] == "saving"
-                    && r["port"] == "response"
-                    && (graph["nodes"][field(r, "node")?]["save"]["node"] == node["id"]
-                        || graph["nodes"][field(r, "node")?]["continuation"] == node["id"]))
-            {
-                return Ok(None);
+        result[name] = match ArtifactRef::try_from(r)? {
+            ArtifactRef::Input { input } => {
+                json!({"source":input,"revision":get(db,"task",task)?["inputs"][input]})
             }
-            result[name] = state["outputs"]
-                .get(field(r, "port")?)
-                .context("Missing upstream version")?
-                .clone();
-        }
+            ArtifactRef::Output {
+                node: upstream,
+                port,
+            } => {
+                let producer = &graph["nodes"][upstream];
+                let state = &graph["activity"][upstream];
+                let provisional = port == "response"
+                    && (producer["save"]["node"] == node["id"]
+                        || producer["continuation"] == node["id"]);
+                match AttemptStatus::of(state) {
+                    AttemptStatus::Done => {}
+                    AttemptStatus::Saving if provisional => {}
+                    _ => return Ok(None),
+                }
+                state["outputs"]
+                    .get(port)
+                    .context("Missing upstream version")?
+                    .clone()
+            }
+        };
     }
     Ok(Some(result))
 }
@@ -73,7 +79,7 @@ pub(super) fn advance(
                     .as_str()
                     .is_some_and(|id| graph["activity"][id]["status"] == "superseded");
                 if run["status"] == "superseded" || continuation_superseded {
-                    state["status"] = json!("superseded");
+                    state["status"] = json!(AttemptStatus::Superseded);
                     graph["activity"][id] = state;
                     event(graph, "host", "superseded", id, json!({"save_node":saver}));
                     put(db, "graph", task, graph)?;
@@ -83,7 +89,7 @@ pub(super) fn advance(
                         .context("Missing saved version")?
                         .clone();
                     state["outputs"]["document"] = saved.clone();
-                    state["status"] = json!("done");
+                    state["status"] = json!(AttemptStatus::Done);
                     graph["activity"][id] = state.clone();
                     event(
                         graph,
@@ -101,7 +107,7 @@ pub(super) fn advance(
                 && state["authority"]
                     != json!(hash(canonical(&permission::stamp(db, task)?).as_bytes()))
             {
-                state = json!({"id":uid(),"attempt":state["attempt"].as_u64().unwrap()+1,"status":"queued"});
+                state = attempt::next(&state)?;
             }
             if state["status"] == "cancel_pending" {
                 let run = instances::dispatch_locked(
@@ -114,24 +120,12 @@ pub(super) fn advance(
                 if run["status"] != "cancelled" {
                     continue;
                 }
-                state["status"] = json!("cancelled");
+                state["status"] = json!(AttemptStatus::Cancelled);
             } else if state["status"] == "cleanup_pending" {
                 state["status"] = state["after_cleanup"].take();
             } else {
-                if !matches!(
-                    state["status"].as_str(),
-                    Some("queued" | "running" | "permission_required" | "unknown")
-                ) {
-                    continue;
-                }
-                // A person's pause starts no new work. Execution already under
-                // way keeps being observed so it can settle and be reclaimed.
-                if paused(graph)
-                    && matches!(
-                        state["status"].as_str(),
-                        Some("queued" | "permission_required")
-                    )
-                {
+                // Paused tasks still observe work that may already be running.
+                if !AttemptStatus::of(&state).can_advance(paused(graph)) {
                     continue;
                 }
                 let Some(bound) = bindings(db, task, graph, node)? else {
@@ -149,21 +143,16 @@ pub(super) fn advance(
                     if let Some(limit) =
                         error.downcast_ref::<crate::engine::capacity::InstanceLimit>()
                     {
-                        state["status"] = json!("queued");
+                        state["status"] = json!(AttemptStatus::Queued);
                         state["waiting_reason"] =
                             json!({"reason":"instance_capacity","limit":limit.0});
                     } else {
-                        state["status"] = json!("failed");
+                        state["status"] = json!(AttemptStatus::Failed);
                         state["error"] = json!(error.to_string());
                     }
                 }
             }
-            if node["kind"] == "expand"
-                && matches!(
-                    state["status"].as_str(),
-                    Some("done" | "failed" | "cancelled" | "authorization_expired")
-                )
-            {
+            if node["kind"] == "expand" && AttemptStatus::of(&state).needs_driver_cleanup() {
                 ensure!(
                     state["status"] != "done" || state["instance"].is_string(),
                     "Missing driver instance"
@@ -179,7 +168,7 @@ pub(super) fn advance(
                         )?;
                         if settled["status"] != "unloaded" {
                             state["after_cleanup"] = state["status"].take();
-                            state["status"] = json!("cleanup_pending");
+                            state["status"] = json!(AttemptStatus::CleanupPending);
                         }
                     } else {
                         ensure!(state["status"] != "done", "Missing driver instance");
@@ -190,7 +179,7 @@ pub(super) fn advance(
                         if permission::current(db, task).is_err() {
                             return Ok(());
                         }
-                        state["status"] = json!("failed");
+                        state["status"] = json!(AttemptStatus::Failed);
                         state["error"] = json!(error.to_string());
                     }
                 }
@@ -199,7 +188,7 @@ pub(super) fn advance(
             if graph["activity"][id] != state {
                 if state["status"] == "authorization_expired" {
                     event(graph, "host", "authorization_expired", id, state.clone());
-                    state = json!({"id":uid(),"status":"queued","attempt":state["attempt"].as_u64().unwrap()+1});
+                    state = attempt::next(&state)?;
                     finished = true;
                 }
                 graph["activity"][id] = state.clone();
@@ -272,7 +261,7 @@ fn accept_expansion(
         )?,
     )? {
         state["proposal_request"] = request["request_id"].clone();
-        state["status"] = json!("permission_required");
+        state["status"] = json!(AttemptStatus::PermissionRequired);
         graph["activity"][id] = state.clone();
         put(&tx, "graph", task, graph)?;
         tx.commit()?;
@@ -364,12 +353,12 @@ fn step(
             let run = get(db, "run", &attempt)?;
             state["evidence"] = json!({"run":attempt,"spool":run["spool"],"argv":run["argv"],"work":run["work"],"code":run["image_code"],"code_omissions":run["code_omissions"],"input":run["input"],"outputs":run["outputs"],"exit_code":run["exit_code"],"started_at":run["started_at"],"exited_at":run["exited_at"],"log":attempt});
             match field(&run, "status")? {
-                "running" | "cancel_pending" => state["status"] = json!("running"),
+                "running" | "cancel_pending" => state["status"] = json!(AttemptStatus::Running),
                 "completed" | "awaiting_publication" | "delivered" => {
                     if let Some(rev) = run["candidate"].as_str().or(run["output"].as_str()) {
                         state["outputs"] = project_run_outputs(db, &run, &attempt, rev)?;
                     }
-                    state["status"] = json!("done");
+                    state["status"] = json!(AttemptStatus::Done);
                 }
                 other => {
                     state["status"] = json!(other);
@@ -406,7 +395,7 @@ fn step(
         };
         state["instance"] = instance["id"].clone();
         if !instance["active"].is_null() {
-            state["status"] = json!("queued");
+            state["status"] = json!(AttemptStatus::Queued);
             return Ok(());
         }
         let mut inputs = json!({});
@@ -429,9 +418,9 @@ fn step(
         )?;
         if let Some(request) = result["request_id"].as_str() {
             state["requests"][field(&result, "port")?] = json!(request);
-            state["status"] = json!("permission_required");
+            state["status"] = json!(AttemptStatus::PermissionRequired);
         } else {
-            state["status"] = json!("running");
+            state["status"] = json!(AttemptStatus::Running);
             state["run"] = json!(attempt);
         }
         return Ok(());
@@ -465,7 +454,7 @@ fn step(
             tx.execute_batch("ROLLBACK TO graph_access")?;
             put(&tx, "request", id, &row)?;
             state["requests"][name] = json!(id);
-            state["status"] = json!("permission_required");
+            state["status"] = json!(AttemptStatus::PermissionRequired);
             tx.commit()?;
             return Ok(());
         }
@@ -498,9 +487,9 @@ fn step(
         let record = json!({"id":attempt,"task":task,"node":node["id"],"title":node["title"],"bindings":bound,"package":node["package"],"revision":rev,"outputs":files.as_object().unwrap().keys().collect::<Vec<_>>(),"workspace":t["workspace"]});
         put(&tx, "graph_delivery", &attempt, &record)?;
         state["delivery"] = json!(attempt);
-        state["status"] = json!("done");
+        state["status"] = json!(AttemptStatus::Done);
     } else {
-        state["status"] = json!("waiting");
+        state["status"] = json!(AttemptStatus::Waiting);
     }
     // Commit permission consumption with its result, even across a process exit.
     put(&tx, "graph_ready", &attempt, state)?;
