@@ -6,6 +6,9 @@ use serde_json::Value;
 use std::collections::BTreeMap;
 
 pub fn validate(db: &Connection, task: &str, node: &Value) -> Result<()> {
+    if node.get("publication_review").is_some() {
+        super::release::validate(db, task, node)?;
+    }
     if let Some(selection) = node.get("versions") {
         permission::controller(db, task)?;
         let selections: BTreeMap<String, VersionRef> = serde_json::from_value(selection.clone())?;

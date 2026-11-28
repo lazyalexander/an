@@ -16,6 +16,10 @@ pub enum Right {
         artifact: ArtifactId,
         version: VersionId,
     },
+    Release {
+        node: String,
+        attempt: String,
+    },
     Register {
         artifact: ArtifactId,
     },
@@ -47,6 +51,21 @@ pub fn scoped() -> bool {
     std::env::var_os("AN_PROVENANCE_TOKEN").is_some()
 }
 
+pub(super) fn require_active_grant(db: &Connection, task: &str, record: &Value) -> Result<()> {
+    ensure!(
+        record["active"] == true
+            && record["target"] == task
+            && record["epoch"].is_string()
+            && permission::delegation_scope(db, task)? == record["target_scope"]
+            && permission::delegation_scope(
+                db,
+                record["task"].as_str().context("Invalid issuer")?
+            )? == record["source_scope"],
+        "Inactive delegation"
+    );
+    Ok(())
+}
+
 impl Actor {
     pub fn authenticate(db: &Connection, task: &str) -> Result<Self> {
         if scoped() {
@@ -55,17 +74,7 @@ impl Actor {
             let grant = find(db, "provenance_key", &digest)?.context("Inactive delegation")?;
             let grant_id = grant.as_str().context("Invalid delegation")?;
             let record = get(db, "provenance_grant", grant_id)?;
-            ensure!(
-                record["active"] == true
-                    && record["target"] == task
-                    && record["epoch"].is_string()
-                    && permission::delegation_scope(db, task)? == record["target_scope"]
-                    && permission::delegation_scope(
-                        db,
-                        record["task"].as_str().context("Invalid issuer")?
-                    )? == record["source_scope"],
-                "Inactive delegation"
-            );
+            require_active_grant(db, task, &record)?;
             return Ok(Self {
                 id: format!("agent:{grant_id}"),
                 task: task.into(),
@@ -111,6 +120,11 @@ impl Actor {
             return Ok(self.rights.contains(right));
         }
         match right {
+            Right::Release { node, attempt } => {
+                let graph = get(db, "graph", &self.task)?;
+                Ok(graph["nodes"][node].get("publication_review").is_some()
+                    && graph["activity"][node]["id"] == attempt.as_str())
+            }
             Right::Evidence { snapshot } => Ok(find(db, "frozen_evidence", snapshot)?
                 .is_some_and(|s| s["task"] == self.task)
                 || super::evidence::reopened(db, &self.task, snapshot)?),
@@ -175,6 +189,10 @@ pub fn grant(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
     let rights: Vec<Right> = serde_json::from_value(args["rights"].clone())?;
     ensure!(!rights.is_empty(), "Empty grant");
     for right in &rights {
+        ensure!(
+            !matches!(right, Right::Release { .. }) || target == actor.task,
+            "Release requires the delivery task"
+        );
         actor.require(db, right.clone())?;
         if let Right::Read { artifact, version } | Right::Decide { artifact, version } = right {
             ensure!(

@@ -208,7 +208,7 @@ def create_task(host, owner_key):
     )
     host.call("workspace", "policy", "set", workspace, "--file", policy)
     host.begin(host.call("task", "new", *selector, "--input", FIXTURE)["task"])
-    return organize, formatter, dest
+    return organize, formatter, dest, workspace
 
 
 def propose(host, organize):
@@ -612,15 +612,88 @@ def check_owner_review(host, delivery, owner_key, expected_text):
     host.provenance("read-review", id=review_id, denied="Review unavailable")
 
 
+def check_reviewed_release(host, workspace):
+    doc = {"artifact": "announcement", "version": 1}
+    node = {
+        "kind": "delivery",
+        "outputs": [],
+        "inputs": {"doc": {"node": "format", "port": "announcement.md"}},
+        "versions": {"doc": doc},
+        "publication_review": endpoint("review", "checked"),
+    }
+    partial = {
+        **node,
+        "id": "partial-release",
+        "publication_review": endpoint("review", "registration-only"),
+    }
+    host.call(
+        "graph",
+        "--task",
+        host.task,
+        "submit",
+        body={
+            "base_revision": host.graph("state")["revision"],
+            "idempotency_key": "partial-release",
+            "nodes": [partial],
+        },
+        denied="Report must verify every declared block",
+    )
+    assert "partial-release" not in host.graph("state")["activity"]
+    for name in ("withdrawn-release", "reviewed-release"):
+        host.submit(name, [{**node, "id": name}])
+        state = host.graph("state")["activity"][name]
+        assert state["waiting_reason"] == {"reason": "publication_review"}
+        right = {"right": "release", "node": name, "attempt": state["id"]}
+        grant = host.provenance("grant", target=host.task, rights=[right])
+        instruction = {
+            "node": name,
+            "attempt": state["id"],
+            "workspace": workspace,
+            "document": doc,
+        }
+        for different in [
+            {"document": {**doc, "version": 2}},
+            {"workspace": "customer"},
+        ]:
+            host.provenance(
+                "release",
+                token=grant["token"],
+                denied="outside approved scope",
+                **{**instruction, **different},
+            )
+        receipt = host.provenance("release", token=grant["token"], **instruction)
+        assert (
+            host.provenance("release", token=grant["token"], **instruction) == receipt
+        )
+        if name == "withdrawn-release":
+            host.provenance("revoke", grant=grant["grant"])
+            state = host.graph("state")["activity"][name]
+            assert (
+                state["status"] == "failed" and "Inactive delegation" in state["error"]
+            )
+            assert "delivery" not in state
+        else:
+            assert host.wait(name)["release_receipt"] == receipt["id"]
+
+
 def exercise(host, resumed):
     owner_key = secrets.token_hex(32)
-    organize, formatter, dest = create_task(host, owner_key)
+    organize, formatter, dest, workspace = create_task(host, owner_key)
     monday, free, snapshot, second_snapshot = propose(host, organize)
     check_block_input(host, formatter, monday)
     receipt = accept_and_expand(host, organize, formatter)
     record_minutes(host, monday, free, [snapshot, second_snapshot])
     delivery = publish(host)
     check_trace(host, delivery, receipt, organize, formatter)
+    finding = content(
+        "checked",
+        monday,
+        source=endpoint("announcement", "opening"),
+        relation="verifies",
+    )
+    finding["cites"].append(
+        {"relation": "verifies", "source": endpoint("announcement", "registration")}
+    )
     host.provenance(
         "commit",
         idempotency_key="review",
@@ -628,17 +701,19 @@ def exercise(host, resumed):
             version(
                 "review",
                 [
+                    finding,
                     content(
-                        "checked",
-                        monday,
-                        source=endpoint("announcement", "opening"),
+                        "registration-only",
+                        free,
+                        source=endpoint("announcement", "registration"),
                         relation="verifies",
-                    )
+                    ),
                 ],
                 kind="report",
             )
         ],
     )
+    check_reviewed_release(host, workspace)
     reader = host.provenance(
         "grant",
         target=host.task,

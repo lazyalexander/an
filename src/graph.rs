@@ -244,7 +244,7 @@ fn append_nodes(
             );
             crate::provenance::continuation::declare(db, task, node)?;
         }
-        if node.get("versions").is_some() {
+        if node.get("versions").is_some() || node.get("publication_review").is_some() {
             ensure!(
                 driver.is_none(),
                 "Delivery block selection requires controller submission"
@@ -397,6 +397,7 @@ fn append_nodes(
                         | "save"
                         | "continuation"
                         | "versions"
+                        | "publication_review"
                         | "panel"
                         | "spool"
                 )),

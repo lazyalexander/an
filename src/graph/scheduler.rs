@@ -451,6 +451,14 @@ fn step(
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let t = get(&tx, "task", task)?;
     let delivery = node["kind"] == "delivery";
+    let mut release = None;
+    if node.get("publication_review").is_some() {
+        release = crate::provenance::release::authorized(&tx, task, &attempt)?;
+        if release.is_none() {
+            state["waiting_reason"] = json!({"reason":"publication_review"});
+            return Ok(());
+        }
+    }
     let op = if delivery { "publish" } else { "preview" };
     // Keep grants for the whole set atomic when one file still needs consent.
     tx.execute_batch("SAVEPOINT graph_access")?;
@@ -506,7 +514,11 @@ fn step(
             }
         }
         let rev = revision(&tx, &files)?;
-        let record = json!({"id":attempt,"task":task,"node":node["id"],"title":node["title"],"bindings":bound,"package":node["package"],"revision":rev,"outputs":files.as_object().unwrap().keys().collect::<Vec<_>>(),"workspace":t["workspace"]});
+        let mut record = json!({"id":attempt,"task":task,"node":node["id"],"title":node["title"],"bindings":bound,"package":node["package"],"revision":rev,"outputs":files.as_object().unwrap().keys().collect::<Vec<_>>(),"workspace":t["workspace"]});
+        if let Some(receipt) = release {
+            record["release_receipt"] = receipt["id"].clone();
+            state["release_receipt"] = receipt["id"].clone();
+        }
         crate::provenance::flow::record(
             &tx,
             task,

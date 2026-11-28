@@ -13,6 +13,7 @@ pub(crate) use history::require_accepted;
 mod material;
 pub(crate) mod publication;
 mod query;
+pub(crate) mod release;
 pub(crate) mod review;
 mod versions;
 use crate::{
@@ -39,6 +40,7 @@ pub fn execute(task: &str, action: &str, args: &Value) -> Result<Value> {
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let actor = Actor::authenticate(&tx, task)?;
     let result = match action {
+        "release" => release::submit(&tx, &actor, args)?,
         "request-review" => review::request(&tx, &actor, args)?,
         "read-review" => review::read(&tx, &actor, args)?,
         "sources" => query::trace(&tx, &actor, args, query::Direction::Sources)?,
