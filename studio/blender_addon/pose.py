@@ -1,1 +1,0 @@
-../../examples/legacy_studio/blender_addon/pose.py

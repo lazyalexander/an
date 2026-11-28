@@ -57,6 +57,5 @@ panels:
 | `region` | Normalized `x`, `y`, `width`, `height` on a bound artifact |
 | `adjust` | The named `field` of `value_type` (integer, number or string), optionally constrained by `options` and initialized with `default` |
 | `confirm` | Boolean `confirmed` |
-| `sketch` | `strokes`: a list of `{color, size, points}` where each point is a normalized `[x, y, pressure]`; at most one optional reference binding is drawn under the canvas |
 
-Use `decision.extra` to add required text or coordinate fields. Every surface, including a custom HTML one, requires a decision. A delivery panel declares `kind: delivery` and only presents the bound published files. See the full Bridge and CAD declarations in `examples/graph_studio/spool/spool.yaml`.
+Use `decision.extra` to add required text or coordinate fields. Every surface, including a custom HTML one, requires a decision. A delivery panel declares `kind: delivery` and only presents the bound published files. The [Markdown review manifest](../examples/markdown_review/spool/spool.yaml) declares a choice between two frozen suggestions.

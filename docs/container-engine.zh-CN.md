@@ -41,7 +41,7 @@ CLI / MCP / Studio
 
 运行 `cargo test` 检查授权、恢复与故障路径。清理测试在独立子进程中替换 Apple CLI，覆盖库存不可读、删除失败、身份冲突和恢复。生产二进制使用固定的 Apple CLI 路径。
 
-参考机可用 `python3 examples/composition/relay.py --out <新目录>` 从图入口检验真实的分支交付、版本来源和实例回收。用 `python3 tests/apple_permission_smoke.py <本地镜像>` 从直接运行入口检查两轮授权、发布与导出字节。两项检查均可无头运行。
+参考机可用 `python3 tests/markdown_review_smoke.py --intent` 从图入口检验文字审阅的两条分支、授权和交付字节。用 `python3 tests/apple_permission_smoke.py <本地镜像>` 从直接运行入口检查两轮授权、发布与导出字节。两项检查均可无头运行。
 
 ## 跨任务执行容量
 
@@ -57,7 +57,7 @@ CLI / MCP / Studio
 
 直接调用 `load` 满额时返回可重试错误。图节点保持 `queued`，在 `graph state` 的 activity 中返回 `waiting_reason.reason = instance_capacity` 和当前上限。持有方卸载实例或结束任务后，下一次图调度会重试同一次尝试。宿主保留空闲实例供复用；如一个任务已占满容量，又需要加载另一种 spool，可通过 CLI 或 MCP 卸载已用完的实例。实例名额按可用时申请，不提供跨任务 FIFO 保证。
 
-参考机验收命令为 `python3 tests/apple_instance_capacity_smoke.py <composition painting 镜像>`。该测试让两个任务并发申请同一个名额，验证原实例复用、图节点等待原因和卸载后继续执行。
+参考机验收命令为 `python3 tests/apple_instance_capacity_smoke.py an-markdown-review:headless`。该测试让两个任务并发申请同一个名额，验证原实例复用、图节点等待原因和卸载后继续执行。
 
 ## 每个实例的 CPU 与内存
 

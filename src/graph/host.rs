@@ -237,6 +237,9 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
         "Stale surface"
     );
     let request = field(&state, "id")?.to_owned();
+    if let Some(panel) = node["package"].get("declaration") {
+        crate::panels::schema(panel).context("This build cannot handle the stored decision")?;
+    }
     if matches!(action, "panel" | "decision") {
         ensure!(state["status"] == "waiting", "Surface closed");
         let draft = find(&tx, "graph_draft", &request)?.unwrap_or(Value::Null);
@@ -294,19 +297,6 @@ pub fn host(task: &str, action: &str, args: &Value) -> Result<Value> {
                     length > 0.0 && start + length <= 1.0,
                     "Region extends outside artifact or has zero area"
                 );
-            }
-        }
-        if node["package"]
-            .get("declaration")
-            .is_some_and(|p| p["decision"]["type"] == "sketch")
-        {
-            for stroke in response["strokes"].as_array().into_iter().flatten() {
-                for point in stroke["points"].as_array().into_iter().flatten() {
-                    ensure!(
-                        point.as_array().is_some_and(|p| p.len() == 3),
-                        "Sketch points are [x, y, pressure]"
-                    );
-                }
             }
         }
         state["response"] = response.clone();

@@ -36,62 +36,6 @@ fn messages(db: &Connection, revision_id: &str, limit: u64) -> Result<Value> {
     Ok(json!(messages))
 }
 
-pub(crate) fn is_image(model: &Value) -> bool {
-    model["kind"] == "image"
-}
-
-const IMAGE_SIZES: [&str; 3] = ["1024x1024", "1536x1024", "1024x1536"];
-
-/// An image request: `request.json` holds `prompt` and an optional `size`;
-/// the optional `image` binding holds one PNG (a sketch or control image).
-fn image_request(
-    db: &Connection,
-    request: &str,
-    image: Option<&str>,
-    limit: u64,
-) -> Result<(Value, Option<Vec<u8>>)> {
-    let files = get(db, "revision", request)?;
-    ensure!(
-        files.as_object().is_some_and(|m| m.len() == 1),
-        "Expected one request.json"
-    );
-    let data = artifacts::bytes(&files["request.json"])?;
-    ensure!(data.len() <= 16384, "Image prompt exceeds byte limit");
-    let request: Value = serde_json::from_slice(&data)?;
-    ensure!(
-        request
-            .as_object()
-            .is_some_and(|m| m.keys().all(|k| k == "prompt" || k == "size"))
-            && request["prompt"]
-                .as_str()
-                .is_some_and(|p| !p.trim().is_empty())
-            && request
-                .get("size")
-                .is_none_or(|s| s.as_str().is_some_and(|s| IMAGE_SIZES.contains(&s))),
-        "Expected prompt and optional size {IMAGE_SIZES:?}"
-    );
-    let image = match image {
-        None => None,
-        Some(revision_id) => {
-            let files = get(db, "revision", revision_id)?;
-            let files = files.as_object().context("Invalid image revision")?;
-            ensure!(files.len() == 1, "Expected one PNG image");
-            let (name, entry) = files.iter().next().unwrap();
-            let bytes = artifacts::bytes(entry)?;
-            ensure!(
-                name.ends_with(".png") && bytes.starts_with(b"\x89PNG\r\n\x1a\n"),
-                "Image input must be a PNG"
-            );
-            ensure!(
-                bytes.len() as u64 <= limit,
-                "Image input exceeds byte limit"
-            );
-            Some(bytes)
-        }
-    };
-    Ok((request, image))
-}
-
 // A reservation that has provably never reached send intent can be released.
 // Callers hold the task lock, which also serializes the worker's send transition.
 pub(super) fn release_unsent(db: &Connection, id: &str, reason: &str) -> Result<()> {
@@ -161,6 +105,10 @@ pub(super) fn schedule(
     let call = if let Some(call) = find(&tx, "model_call", &id)? {
         call
     } else {
+        ensure!(
+            grant["model"].is_string(),
+            "This model requires the visual experiment branch"
+        );
         if state["authority"] != *stamp {
             state["requests"] = json!({});
         }
@@ -184,62 +132,34 @@ pub(super) fn schedule(
             tx.commit()?;
             anyhow::bail!("Model call budget exhausted ({used}/{budget})");
         }
-        let image = is_image(&grant["model"]);
-        // Consume approvals for every bound port together: if a later port
-        // still waits, roll back the earlier consumption (as run inputs do).
-        tx.execute_batch("SAVEPOINT model_access")?;
-        for (port, key) in [("request", "model"), ("image", "image")] {
-            let Some(binding) = bound.get(port).filter(|b| !b.is_null()) else {
-                continue;
-            };
-            let from = binding_origin(binding);
-            let revision_id = field(binding, "revision")?;
-            if let Some(p) = permission::graph_gate(
+        if let Some(p) = permission::graph_gate(
+            &tx,
+            task,
+            "model",
+            json!([origin, dest, input, grant["model"], id]),
+            json!([id, input, grant["model"]]),
+            state["requests"]["model"].as_str(),
+            json!(["model", origin, dest]),
+            crate::intent::graph_route(
                 &tx,
-                task,
                 "model",
-                json!([from, dest, revision_id, grant["model"], id]),
-                json!([id, revision_id, grant["model"]]),
-                state["requests"][key].as_str(),
-                json!(["model", from, dest]),
-                crate::intent::graph_route(&tx, "model", &node["inputs"][port], &dest, binding)?,
-            )? {
-                let pending = field(&p, "request_id")?.to_owned();
-                let row = get(&tx, "request", &pending)?;
-                tx.execute_batch("ROLLBACK TO model_access")?;
-                put(&tx, "request", &pending, &row)?;
-                state["requests"][key] = json!(pending);
-                state["status"] = json!("permission_required");
-                tx.commit()?;
-                return Ok(());
-            }
+                &node["inputs"]["request"],
+                &dest,
+                &bound["request"],
+            )?,
+        )? {
+            state["requests"]["model"] = p["request_id"].clone();
+            state["status"] = json!("permission_required");
+            tx.commit()?;
+            return Ok(());
         }
-        tx.execute_batch("RELEASE model_access")?;
-        let image_input = bound
-            .get("image")
-            .filter(|b| !b.is_null())
-            .map(|b| field(b, "revision").map(str::to_owned))
-            .transpose()?;
-        if image {
-            image_request(
-                &tx,
-                input,
-                image_input.as_deref(),
-                cfg.limit("image_output_bytes"),
-            )?;
-        } else {
-            messages(&tx, input, cfg.limit("model_input_bytes"))?;
-        }
+        messages(&tx, input, cfg.limit("model_input_bytes"))?;
         let call = json!({
             "task": task, "node": node["id"], "attempt": id, "alias": node["model"],
-            "model": grant["model"], "input": input, "input_origin": origin, "output": null,
-            "image_input": image_input, "kind": if image { "image" } else { "text" },
-            "output_name": if image { "result.png" } else { "result.json" },
+            "model": grant["model"], "kind":"text", "output_name":"result.json", "input": input, "input_origin": origin, "output": null,
             "authority": stamp, "state": "reserved", "reserved_at": now_ms(), "usage": null,
-            "port": cfg.limit(if image { "image_port" } else { "ollama_port" }),
-            "timeout": cfg.limit(if image { "image_timeout_s" } else { "model_timeout_s" }),
-            "input_limit": cfg.limit(if image { "image_output_bytes" } else { "model_input_bytes" }),
-            "output_limit": cfg.limit(if image { "image_output_bytes" } else { "model_output_tokens" })
+            "port": cfg.limit("ollama_port"), "timeout": cfg.limit("model_timeout_s"),
+            "input_limit": cfg.limit("model_input_bytes"), "output_limit": cfg.limit("model_output_tokens")
         });
         put(&tx, "model_call", &id, &call)?;
         call
@@ -266,6 +186,10 @@ pub(super) fn schedule(
             state["error"] = call["error"].clone();
         }
         "sending" => state["status"] = json!("running"),
+        "reserved" if !call["model"].is_string() => {
+            release_unsent(db, &id, "This model requires the visual experiment branch")?;
+            anyhow::bail!("This model requires the visual experiment branch");
+        }
         "reserved" => {
             state["status"] = json!("running");
             if !paused {
@@ -378,9 +302,6 @@ pub fn worker(id: &str, fd: i32) -> Result<()> {
     let lease = unsafe { File::from_raw_fd(fd) };
     let mut db = connect()?;
     let mut call = get(&db, "model_call", id)?;
-    if call["kind"] == "image" {
-        return image_worker(id, lease, db, call);
-    }
     let task = field(&call, "task")?.to_owned();
     // Metadata requests contain only the configured model name. Check locality
     // before reading the prompt, then recheck authority under the task lock.
@@ -510,284 +431,4 @@ pub(super) fn history(db: &Connection, task: &str) -> Result<Vec<Value>> {
         calls.push(serde_json::from_str(&row?)?);
     }
     Ok(calls)
-}
-
-/// Run curl with an empty environment, no proxy, redirects or retries.
-/// `args` must not carry secrets: they are visible to other local processes.
-fn curl(timeout: u64, max_bytes: u64, url: &str, args: &[String]) -> Result<(u16, Vec<u8>)> {
-    let out = Command::new("/usr/bin/curl")
-        .env_clear()
-        .args([
-            "-q",
-            "--silent",
-            "--write-out",
-            "\n%{http_code}",
-            "--noproxy",
-            "*",
-        ])
-        .args([
-            "--max-time",
-            &timeout.to_string(),
-            "--max-filesize",
-            &max_bytes.to_string(),
-        ])
-        .args(args)
-        .arg(url)
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()?;
-    // curl exit 7: the connection was refused, so nothing was sent.
-    if out.status.code() == Some(7) {
-        return Err(NotSent(format!("Image backend not reachable at {url}")).into());
-    }
-    ensure!(
-        out.status.success(),
-        "Image HTTP call failed ({})",
-        out.status
-    );
-    let split = out
-        .stdout
-        .iter()
-        .rposition(|&b| b == b'\n')
-        .context("Missing HTTP status")?;
-    let status = std::str::from_utf8(&out.stdout[split + 1..])?.parse::<u16>()?;
-    Ok((status, out.stdout[..split].to_vec()))
-}
-
-#[derive(Debug)]
-struct NotSent(String);
-impl std::fmt::Display for NotSent {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.0)
-    }
-}
-impl std::error::Error for NotSent {}
-
-/// A private directory for one call's request files; removed on drop.
-struct Scratch(std::path::PathBuf);
-impl Scratch {
-    fn new(id: &str) -> Result<Self> {
-        use std::os::unix::fs::DirBuilderExt;
-        let path = root()?.join("model-scratch").join(id);
-        let _ = fs::remove_dir_all(&path);
-        fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(&path)?;
-        Ok(Self(path))
-    }
-    fn write(&self, name: &str, data: &[u8]) -> Result<String> {
-        use std::os::unix::fs::OpenOptionsExt;
-        let path = self.0.join(name);
-        File::options()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&path)?
-            .write_all(data)?;
-        Ok(path.to_str().context("Invalid scratch path")?.to_owned())
-    }
-}
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        let _ = fs::remove_dir_all(&self.0);
-    }
-}
-
-fn keychain(service: &str) -> Result<String> {
-    let out = Command::new("/usr/bin/security")
-        .env_clear()
-        .args(["find-generic-password", "-a", "an", "-s", service, "-w"])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()?;
-    ensure!(
-        out.status.success(),
-        "No Keychain entry {service} for account an"
-    );
-    let key = String::from_utf8(out.stdout)?.trim().to_owned();
-    ensure!(!key.is_empty(), "Empty Keychain entry {service}");
-    Ok(key)
-}
-
-/// Generate one image. Returns the PNG and reported usage.
-fn generate(
-    call: &Value,
-    prompt: &Value,
-    image: Option<&[u8]>,
-    scratch: &Scratch,
-) -> Result<(Vec<u8>, Value)> {
-    let model = &call["model"];
-    let timeout = call["timeout"].as_u64().unwrap();
-    let limit = call["output_limit"].as_u64().unwrap();
-    let size = prompt["size"].as_str().unwrap_or("1024x1024");
-    let (status, body) = if model["backend"] == "local" {
-        let request = json!({"model":model["model"],"prompt":prompt["prompt"],"size":size,
-            "image":image.map(|b| STANDARD.encode(b))});
-        let file = scratch.write("request.json", &serde_json::to_vec(&request)?)?;
-        let port = call["port"].as_u64().unwrap();
-        curl(
-            timeout,
-            limit,
-            &format!("http://127.0.0.1:{port}/generate"),
-            &[
-                "-H".into(),
-                "Content-Type: application/json".into(),
-                "--data-binary".into(),
-                format!("@{file}"),
-            ],
-        )?
-    } else {
-        // The key goes through a 0600 header file, never argv or the registry.
-        let key = keychain(field(model, "keychain")?)?;
-        let header = scratch.write("auth", format!("Authorization: Bearer {key}").as_bytes())?;
-        let prompt_file = scratch.write("prompt.txt", field(prompt, "prompt")?.as_bytes())?;
-        let mut args = vec![
-            "-H".into(),
-            format!("@{header}"),
-            "-F".into(),
-            format!("model={}", field(model, "model")?),
-            "-F".into(),
-            format!("prompt=<{prompt_file}"),
-            "-F".into(),
-            format!("size={size}"),
-        ];
-        let endpoint = if let Some(bytes) = image {
-            let png = scratch.write("image.png", bytes)?;
-            args.extend(["-F".into(), format!("image=@{png};type=image/png")]);
-            "edits"
-        } else {
-            "generations"
-        };
-        curl(
-            timeout,
-            limit,
-            &format!("https://api.openai.com/v1/images/{endpoint}"),
-            &args,
-        )?
-    };
-    if !(200..300).contains(&status) {
-        return Err(HttpStatus(status).into());
-    }
-    let reply: Value = serde_json::from_slice(&body)?;
-    let encoded = reply["image"]
-        .as_str()
-        .or_else(|| reply["data"][0]["b64_json"].as_str())
-        .context("Image backend returned no image")?;
-    let png = STANDARD.decode(encoded)?;
-    ensure!(
-        png.starts_with(b"\x89PNG\r\n\x1a\n"),
-        "Image backend returned a non-PNG image"
-    );
-    Ok((png, reply.get("usage").cloned().unwrap_or(Value::Null)))
-}
-
-fn image_worker(id: &str, lease: File, mut db: Connection, mut call: Value) -> Result<()> {
-    let task = field(&call, "task")?.to_owned();
-    let (prompt, image) = {
-        let _lock = instances::lock(&db, &task)?;
-        let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        let graph = get(&tx, "graph", &task)?;
-        call = get(&tx, "model_call", id)?;
-        let activity = &graph["activity"][field(&call, "node")?];
-        if scheduler::paused(&graph)
-            || activity["id"] != id
-            || activity["status"] == "cancelled"
-            || call["state"] != "reserved"
-        {
-            return Ok(());
-        }
-        ensure!(
-            call["authority"] == json!(hash(canonical(&permission::stamp(&tx, &task)?).as_bytes())),
-            "Expired model authority"
-        );
-        let request = image_request(
-            &tx,
-            field(&call, "input")?,
-            call["image_input"].as_str(),
-            call["input_limit"].as_u64().unwrap(),
-        )?;
-        call["state"] = json!("sending");
-        call["sent_at"] = json!(now_ms());
-        put(&tx, "model_call", id, &call)?;
-        tx.commit()?;
-        request
-    };
-    let scratch = Scratch::new(id)?;
-    let answer = generate(&call, &prompt, image.as_deref(), &scratch);
-    drop(scratch);
-    let lock = instances::lock(&db, &task)?;
-    let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    call["settled_at"] = json!(now_ms());
-    match answer {
-        Ok((png, usage)) => {
-            call["output"] = json!(revision(&tx, &json!({"result.png":STANDARD.encode(&png)}))?);
-            call["usage"] = usage;
-            call["state"] = json!("completed");
-        }
-        Err(e)
-            if e.downcast_ref::<HttpStatus>()
-                .is_some_and(|s| (400..500).contains(&s.0)) =>
-        {
-            call["state"] = json!("failed");
-            call["error"] = json!(e.to_string());
-        }
-        Err(e)
-            if e.downcast_ref::<NotSent>().is_some()
-                || e.to_string().starts_with("No Keychain") =>
-        {
-            call["state"] = json!("failed");
-            call["error"] = json!(e.to_string());
-        }
-        _ => {
-            call["state"] = json!("unknown");
-            call["error"] = json!("No confirmed image response; explicit retry required");
-        }
-    }
-    put(&tx, "model_call", id, &call)?;
-    tx.commit()?;
-    drop(lease);
-    drop(lock);
-    wake(&task)
-}
-
-#[cfg(test)]
-mod image_tests {
-    use super::*;
-
-    #[test]
-    fn image_requests_need_a_prompt_a_known_size_and_a_png() {
-        let dir = std::env::temp_dir().join(uid());
-        std::env::set_var("AN_HOME", &dir);
-        let mut registry = connect().unwrap();
-        let db = registry.transaction().unwrap();
-        let file =
-            |name: &str, data: &[u8]| revision(&db, &json!({name: STANDARD.encode(data)})).unwrap();
-        let request = |v: Value| file("request.json", v.to_string().as_bytes());
-        let png = file("control.png", b"\x89PNG\r\n\x1a\nrest");
-        let ok = request(json!({"prompt":"a cottage","size":"1024x1536"}));
-        let (parsed, image) = image_request(&db, &ok, Some(&png), 1 << 20).unwrap();
-        assert_eq!(parsed["prompt"], "a cottage");
-        assert!(image.unwrap().starts_with(b"\x89PNG"));
-        for bad in [
-            json!({"prompt":"  "}),
-            json!({"prompt":"x","size":"7x7"}),
-            json!({"prompt":"x","seed":1}),
-        ] {
-            assert!(image_request(&db, &request(bad), None, 1 << 20).is_err());
-        }
-        let jpeg = file("control.png", b"\xff\xd8\xff not a png");
-        assert!(image_request(&db, &ok, Some(&jpeg), 1 << 20).is_err());
-        assert!(
-            image_request(&db, &ok, Some(&png), 4).is_err(),
-            "byte limit"
-        );
-        let _ = fs::remove_dir_all(dir);
-    }
-
-    #[test]
-    fn http_errors_name_rejected_credentials() {
-        assert!(HttpStatus(401).to_string().contains("credentials"));
-        assert!(HttpStatus(500).to_string().contains("500"));
-    }
 }

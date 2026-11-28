@@ -853,6 +853,90 @@ fn host_config_overrides_limits_and_rejects_unknown_settings() {
 }
 
 #[test]
+fn published_visual_files_can_be_opened_resumed_and_exported_without_a_provider() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let f = Fixture::graph_task();
+    fs::write(f.root.join("config.json"), json!({
+        "image_port":11435,"image_timeout_s":600,"image_output_bytes":33554432,
+        "model_aliases":{"local":"review-text","painting":{"kind":"image","backend":"local","model":"image-model"}}
+    }).to_string()).unwrap();
+    f.call(&["task", "new", "--model", "local"]);
+    let denied = f.run(&["task", "new", "--model", "painting"]);
+    assert!(!denied.status.success());
+    assert!(String::from_utf8_lossy(&denied.stderr).contains("Unknown model alias"));
+
+    let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j0b0AAAAASUVORK5CYII=";
+    f.insert(
+        "task",
+        "task",
+        json!({"workspace":"studio","work":{},"inputs":{}}),
+    );
+    f.insert("workspace", "studio", json!({"images":[]}));
+    f.insert("revision", "painting", json!({"result.png":png}));
+    f.insert("revision", "published", json!({"painting/result.png":png}));
+    f.insert(
+        "graph_delivery",
+        "visual",
+        json!({
+            "id":"visual","task":"closed","workspace":"studio","revision":"published",
+            "bindings":{"painting":{"spool":"model:painting","revision":"painting"}}
+        }),
+    );
+    let opened = f.graph("open", json!({"delivery":"visual"})).unwrap();
+    assert_eq!(opened["files"]["painting"]["result.png"], png);
+    let resumed = f.graph("resume", json!({"delivery":"visual"})).unwrap();
+    let original: String =
+        f.db.query_row(
+            "SELECT json_extract(body,'$.inputs.original') FROM objects WHERE kind='task' AND id=?",
+            [resumed["task"].as_str().unwrap()],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(original, "published");
+    let path = f.root.canonicalize().unwrap().join("export");
+    let dest = path.to_str().unwrap();
+    let policy = f.root.join("flows.json");
+    fs::write(
+        &policy,
+        json!([["export", "model:painting", dest]]).to_string(),
+    )
+    .unwrap();
+    f.call(&[
+        "workspace",
+        "policy",
+        "set",
+        "studio",
+        "--file",
+        policy.to_str().unwrap(),
+    ]);
+    let args = ["export", "visual", dest, "--task", "task"];
+    let request = f.call(&args);
+    let id = request["request_id"].as_str().unwrap();
+    f.call(&[
+        "permission",
+        "decide",
+        "--task",
+        "task",
+        "--request-id",
+        id,
+        "--decision",
+        "once",
+    ]);
+    let mut approved = args.to_vec();
+    approved.extend(["--request-id", id]);
+    let result = f.run(&approved);
+    assert!(
+        result.status.success(),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
+    assert_eq!(
+        fs::read(path.join("painting/result.png")).unwrap(),
+        STANDARD.decode(png).unwrap()
+    );
+}
+
+#[test]
 fn new_submissions_require_admitted_panels_but_legacy_receipts_and_deliveries_reopen() {
     use base64::{engine::general_purpose::STANDARD, Engine};
     let f = Fixture::graph_task();

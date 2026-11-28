@@ -8,7 +8,7 @@ import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCE = ROOT / "examples/graph_studio/spool"
+SOURCE = ROOT / "examples/markdown_review/spool"
 
 
 def main():
@@ -18,12 +18,18 @@ def main():
         env = {**os.environ, "AN_HOME": str(Path(temp) / "registry")}
         path = image / "spool.yaml"
         manifest = path.read_text()
+        panel_dir = image / "code/panels"
+        panel_dir.mkdir()
+        (panel_dir / "review.html").write_text("<p>Review</p>")
+        with (image / "Dockerfile").open("a") as docker:
+            docker.write("\nCOPY code/panels /spool/code/panels\n")
+        manifest = manifest.replace("    kind: surface", "    kind: surface\n    html: spool/code/panels/review.html")
         cases = {
             "legacy": (manifest.split("panels:")[0].replace("an.spool/v2", "an.spool/v1"), None),
             "declared": (manifest, None),
-            "missing": (manifest.replace("panels/edit.html", "panels/missing.html"), "Missing or oversized panel HTML"),
-            "fallback": (manifest.replace("    decision: {type: point}\n", ""), "panels.edit"),
-            "escape": (manifest.replace("panels/edit.html","panels/../edit.html"), "panels.edit"),
+            "missing": (manifest.replace("panels/review.html", "panels/missing.html"), "Missing or oversized panel HTML"),
+            "fallback": (manifest.replace("    decision: {type: choose}\n", ""), "panels.resolve"),
+            "escape": (manifest.replace("panels/review.html","panels/../review.html"), "panels.resolve"),
         }
         for case, (content, error) in cases.items():
             path.write_text(content)

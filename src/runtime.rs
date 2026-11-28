@@ -48,7 +48,11 @@ fn record(db: &Connection, image: &str) -> Result<Option<Value>> {
         return Ok(None);
     }
     if let Some(panels) = v["manifest"].get("panels") {
-        crate::panels::validate(panels)?;
+        // A cached interface may use a decision type from another build.
+        // Fresh admission validates the manifest and reports the specific error.
+        if crate::panels::validate(panels).is_err() {
+            return Ok(None);
+        }
     }
     v["image"] = json!(image);
     Ok(Some(v))
@@ -372,15 +376,34 @@ mod cached_admission_tests {
     use super::*;
 
     #[test]
-    fn cached_native_panels_need_re_registration() {
+    fn unsupported_cached_panels_do_not_hide_usable_spools() {
         let db = Connection::open_in_memory().unwrap();
         db.execute_batch("CREATE TABLE objects(kind TEXT,id TEXT,body TEXT,PRIMARY KEY(kind,id))")
             .unwrap();
-        let admission = json!({"spec":"spool/v2","manifest_digest":"digest","manifest":{
-            "panels":{"paint":{"kind":"native","title":"Paint","bindings":["document"],"adapter":"krita"}}
-        }});
-        put(&db, "admission", "digest", &admission).unwrap();
-        // Native application surfaces were removed; such admissions are stale.
-        assert!(record(&db, "spool@digest").is_err());
+        let mut admission =
+            json!({"spec":"spool/v2","manifest_digest":"digest","manifest":{"name":"text"}});
+        put(&db, "admission", "text", &admission).unwrap();
+        put(
+            &db,
+            "task",
+            "task",
+            &json!({"work":{"spool@text":"a","spool@visual":"b"}}),
+        )
+        .unwrap();
+        for panel in [
+            json!({"kind":"native","title":"Paint","bindings":["document"],"adapter":"krita"}),
+            json!({"kind":"surface","title":"Draw","bindings":[],"decision":{"type":"sketch"}}),
+        ] {
+            admission["manifest"]["panels"] = json!({"paint":panel});
+            put(&db, "admission", "visual", &admission).unwrap();
+            assert_eq!(
+                summary(&db, "spool@visual").unwrap()["status"],
+                "needs_admission"
+            );
+            assert_eq!(
+                catalog(&db, "task").unwrap()["spools"],
+                json!({"spool@text":{"name":"text"}})
+            );
+        }
     }
 }

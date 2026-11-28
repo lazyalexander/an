@@ -1,20 +1,18 @@
 # Incremental tasks in An Studio
 
-An Studio serves a task on loopback. The browser hosts its admitted panels. Apple Container runs every business operation in a pinned spool, including document editing, save verification, model generation and export. The Rust host owns scheduling, versions and authorization. Python serves the host projection and the browser never receives the harness turn credential.
+An Studio serves a task on loopback. The browser hosts its admitted panels. Apple Container runs document transformations in pinned spools. The Rust host owns scheduling, local model calls, artifact versions, authorization and export. Python serves the host projection and the browser never receives the harness turn credential.
 
-## Run an experiment
+## Run Markdown review
 
-With Apple Container running, build the spool and start the Bridge experiment from the repository root.
+Start Apple Container and serve the configured local text model in Ollama. From the repository root run
 
 ```sh
 cargo build --locked
-container build --tag an-graph-studio:headless examples/graph_studio/spool
-python3 examples/graph_studio/demo.py bridge
+container build --tag an-markdown-review:headless examples/markdown_review/spool
+python3 examples/markdown_review/demo.py --intent
 ```
 
-Open the printed Studio URL. Approve the preview requests, select a reference and click the location to mark. A second headless driver reads the frozen response and proposes the processing node. The initial driver has already exited. The spool writes a layered OpenRaster document, reopens its archive to check the saved layers and returns its bytes. The surface completes when An captures that output. The report includes the painting, annotated SVG and choice. Its **交付文件** section downloads the fixed versions.
-
-Run the same command with `cad` to set the rotation period of a chamfered plate and deliver a binary STL and animated SVG. Both examples unload their instances and close their task after publication. The page stays available until interrupted. The same task can be reopened later with its ID.
+Open the printed Studio URL, decide the authorization card and choose a revision if the two suggestions conflict. Download `revised.md` and `changes.diff` from the delivery. Studio stays open until you interrupt the demo. To reopen the published files later, run
 
 ```sh
 (cd studio && python3 -m orchestrator --task TASK_ID --an ../target/debug/an)
@@ -31,7 +29,7 @@ Call `an_graph_submit` with `base_revision`, `idempotency_key` and a `nodes` arr
 | `run` | Supply a granted digest-pinned `spool`, `argv` and output paths relative to `/output`. Input names match the admitted manifest. Each port receives its bound revision under `/input/<port>/`. Read-only spools support concurrent instances. Editable work is serialized. |
 | `expand` | Runs a pinned, read-only spool in a dedicated short-lived instance with the same input authorization as a run. Declare the single output `subgraph.json`. Write an object with a nonempty `nodes` array there. After confirmed driver cleanup, An requires output authorization for the exact proposal revision before copying its contents into graph metadata. The workspace flow is `["publish", driverSpool, "graph-metadata"]`. The cumulative per-task limit is configurable and defaults to 256 nodes. |
 | `model` | A granted model alias, one `request` binding containing `request.json`, and one output `result.json`. An runs local inference on the host. |
-| `surface` | Use `spool` and `panel` to select an admitted decision. Bind the declared input names. Declare the `response` output. For a verified save, add a `document` output and `save: {"node":"save-run","port":"file.ora"}`. The designated run can consume the provisional response. To generate the save run after the user responds, set `continuation` to a declared expand node bound to this response. The saver ID is reserved for this continuation, whose proposal must include it. Other consumers wait for the captured save. |
+| `surface` | Use `spool` and `panel` to select an admitted decision. Bind the declared input names. Declare the `response` output. For a verified save, add a `document` output and `save: {"node":"save-run","port":"revised.md"}`. The designated run can consume the provisional response. To generate the save run after the user responds, set `continuation` to a declared expand node bound to this response. The saver ID is reserved for this continuation, whose proposal must include it. Other consumers wait for the captured save. |
 | `delivery` | Bind the files to publish with `inputs`, use an empty `outputs` list and optionally select a declared presentation using `spool` and `panel`. The group is published after authorization for all its members. |
 
 A repeated identical submission returns its original receipt. A stale base returns `status: conflict` and the current revision. A submission can include `retry` for failed or cancelled node IDs and `supersede` for unconsumed queued nodes or waiting surfaces. Submit replacement nodes under new IDs. An unknown run is reconciled by its reserved ID and kept for investigation.
@@ -54,7 +52,7 @@ The request file contains one `messages` array of text messages with `role` and 
 
 Each authorized attempt reserves a task slot before sending. The graph state includes a `model_calls` ledger with attempts, revision IDs, send and settlement timestamps, the model name, digest when observed in the running model list, and reported token counts. The evidence API supports separately authorized reads of model input and output. A sending attempt whose worker disappeared or whose response could not be confirmed becomes `unknown`; usage remains unknown. Explicit retry uses a fresh attempt and slot. A reserved attempt can resume before sending. Settled attempts reuse the captured result. Stop and turn expiry suppress downstream work; a request already sent may still complete on the host.
 
-With Ollama serving the configured local model, run `python3 examples/graph_studio/demo.py bridge-model` with the example image. Select the painting and enter an instruction such as “attach a separate annotation text file” or “only deliver the painting”. A follow-up driver reads the authorized model decision and selects the delivery contents. Run `python3 tests/model_node_smoke.py` for counted backend recovery tests and `python3 tests/graph_studio_smoke.py --experiment bridge-model --browser` for the real model path.
+Run `python3 tests/model_node_smoke.py` to check the call ledger and recovery with a counted backend. Run `python3 tests/markdown_review_smoke.py --real` to exercise the document workflow with the configured local Ollama model.
 
 ## Person controls
 
@@ -65,17 +63,6 @@ The person controls a task through the host, never through the agent. Pass `{"ac
 ## Starting from a sentence
 
 Run Studio for a workspace instead of a task: `(cd studio && python3 -m orchestrator --workspace WORKSPACE_ID --an ../target/debug/an)`. The page opens on a text box. Typing a sentence binds a fresh session, creates the task, begins its turn and records the sentence as the task's first instruction. A detached local controller owns the turn, MCP configuration and runner. Restarting Studio reconnects to the controller for the same registry, workspace and harness. From the `studio` directory, the operator can also use `python3 -m an_host --workspace WORKSPACE_ID --an ../target/debug/an serve` to launch it headless, `start "instruction"` to create a task, `agent TASK_ID` to print its private MCP configuration, and `stop` to shut down that controller. Use the same binary and agent configuration across clients. Workspace task credentials are stored under `$AN_HOME/controllers/` and the browser receives only the task ID. Use **新任务** to return to the text box.
-
-## Image model nodes
-
-An image alias in `model_aliases` (see [Configuration](configuration.md)) makes a granted task's `model` nodes produce images: `an task new --model sketch-local` or `--model sketch-remote`. Containers have no GPU, so inference stays on the host like text models, under the same authorization, quota, at-most-once sending and evidence.
-
-An image node binds `request` (`request.json` with `prompt` and optional `size` of `1024x1024`, `1536x1024` or `1024x1536`) and optionally `image` (one PNG, for example a sketch rendered as dark lines on white), and declares the output `result.png`. All bound ports are approved together.
-
-- **`local`** calls a loopback image service. `services/image_local.py` keeps SDXL base 1.0 with the xinsir ControlNet scribble model resident on Apple Silicon; run it with a Python environment that has torch (MPS), diffusers, transformers and accelerate and the weights in the Hugging Face cache. An unreachable service fails the node without sending.
-- **`openai`** sends the request to the OpenAI Images API (`edits` with an image, `generations` without). An reads the key from the macOS Keychain entry named by `keychain` (account `an`) at send time and passes it to curl through a private 0600 header file; it never enters the registry, logs, process arguments or containers. Store it with `security add-generic-password -U -a an -s an.openai -w KEY`.
-
-The sketch experiment uses this path: `driver.py sketch SPOOL --model=ALIAS` adds a container step that renders the strokes to `control.png` and writes the prompt from the person's note, then the image node, and delivers the sketch, the line art and the painting. `python3 tests/sketch_smoke.py --model sketch-local` runs it end to end.
 
 ## Agent runner
 
@@ -105,12 +92,12 @@ The proposed interaction when someone refers to a selected document block or ask
 
 For a new surface submit a pinned spool reference, a panel ID and artifact bindings. The host derives the response contract when accepting the graph. A read-only delivery can select a declared delivery panel or publish files directly. Previously stored graphs and deliveries retain their original package and request identity.
 
-Studio opens the basic form and offers the admitted custom view through **专用面板**. For example, choose 2 in the CAD timing form or answer the same waiting request from a terminal with the active task turn:
+Studio opens the basic form and offers the admitted custom view through **专用面板**. For example, choose suggestion B in the Markdown conflict form or answer the same waiting request from a terminal with the active task turn:
 
 ```sh
 an decision list --task "$task"
-an decision answer --task "$task" --node timing
-printf '%s\n' '{"seconds":2}' | an decision answer --task "$task" --node timing --request "$request" --json -
+an decision answer --task "$task" --node resolve
+printf '%s\n' '{"choice":"B"}' | an decision answer --task "$task" --node resolve --request "$request" --json -
 ```
 
 The list includes the attempt ID, permitted fields and bound artifact versions. Pass the listed request ID when answering a previously inspected decision. Both input modes record the same viewed and responded events. Preview and handoff approvals still use the normal permission commands.
@@ -123,24 +110,10 @@ Use `an export DELIVERY_ID DESTINATION` to export the published revision. For a 
 
 
 
-## Reproduce acceptance
-
-Run `python3 tests/graph_studio_smoke.py --experiment bridge` and repeat with `--experiment cad` after building the example image. Each test creates an isolated registry. The Bridge test checks overlapping execution intervals on distinct candidate instances and verifies that the second driver generates the processing node after the human response. Use `--choice A` to cover denied handoff and retry. Both tests close the task and check the published files and authorized evidence from a fresh workspace task.
-
-Pass `--browser` with Chrome and `playwright-core` installed to exercise the macro UI. Set `PLAYWRIGHT_CORE` to the module directory if it is outside Node's search path. Use `--directory` to retain the test registry and desktop/mobile screenshots. `cargo test` also covers a seeded indeterminate run, denied access, damaged package data, duplicate responses and expired requests.
-
-To add a second mark to a Bridge V1 made with the revision-capable image, run
-`python3 examples/graph_studio/demo.py bridge --resume V1_DELIVERY_ID` with the same registry and image.
-Approve input access, click a new point on the V1 preview, and save. The new delivery contains the SVG with both marks and an OpenRaster painting with separate annotation layers. The original delivery remains available under its own ID.
-
-## Sketch to painting
-
-Run `python3 examples/graph_studio/demo.py sketch` (or `python3 tests/sketch_smoke.py --browser`) with the example image. The person draws on the sketch canvas with a pen; a container step turns the strokes into pressure-width SVG line art. With an image model grant, a further step renders the strokes as a control image and the host image model node produces the finished painting; see [Image model nodes](#image-model-nodes).
-
-### Markdown review
+## Markdown review acceptance
 
 Build the example with `container build -t an-markdown-review:headless examples/markdown_review/spool`.
-Run `python3 examples/graph_studio/demo.py markdown --review-case conflict` and open the Studio URL.
+Run `python3 examples/markdown_review/demo.py --review-case conflict` and open the Studio URL.
 The fixture supplies the original Markdown and two paragraph replacement suggestions. The local model classifies the pair. Conflicting replacements open a declared choice with both edits and reasons. The compatible fixture proceeds directly to delivery. Both paths publish the revised Markdown and a unified diff.
 
 The central timeline shows instructions, agent messages, stages, decisions, deliveries, failures and controls in host event order. A stage folds the work nodes one submission or driver expansion added into titled steps with progress; commands, inputs and tool calls stay behind the sources view. A failure carries a reason category (`denied`, `authority`, `exit`, `output`, `budget`, `declaration`, `unknown`, `other`) that the page shows as readable text; the raw error remains in the node's sources. Select a waiting decision to answer inline. Inspect execution details through the graph and sources controls. After the task closes its published delivery remains accessible.
@@ -149,7 +122,7 @@ Run `python3 tests/markdown_review_smoke.py --browser` for the controlled backen
 
 ### Text workflow authorization experiments
 
-For interactive Markdown review use `python3 examples/graph_studio/demo.py markdown --intent`. Studio shows the turn authorization card before the first protected transfer. A conflict subsequently opens the separate review decision. Build the minutes experiment's two spool images with the following commands, then open the URL printed by the demo:
+For interactive Markdown review use `python3 examples/markdown_review/demo.py --intent`. Studio shows the turn authorization card before the first protected transfer. A conflict subsequently opens the separate review decision. Build the minutes experiment's two spool images with the following commands, then open the URL printed by the demo:
 
 ```sh
 container build -t an-minutes-organize:test examples/minutes/organize
