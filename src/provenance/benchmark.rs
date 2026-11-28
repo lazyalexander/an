@@ -90,7 +90,7 @@ fn projections() -> Result<()> {
     for (name, sql) in [
         ("sources", include_str!("sources.sql")),
         ("impact", include_str!("impact.sql")),
-        ("history", include_str!("history.sql")),
+        ("history", include_str!("decisions/history.sql")),
     ] {
         let mut explain = db.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
         let mut rows = explain.raw_query();

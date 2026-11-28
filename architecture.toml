@@ -20,3 +20,6 @@ sources = ["src/workspace/inbox.rs", "src/workspace/inbox.sql"]
 # Read frozen content via the public SQL projection and the registration lookup.
 private_tables = ["pv_version", "pv_block", "pv_edge", "pv_choice"]
 negative_fixture = "tests/fixtures/inbox-private-table.sql"
+
+[retention]
+consumer = "src/store/gc.rs"

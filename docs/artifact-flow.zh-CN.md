@@ -57,8 +57,8 @@ An 在决定触发后续工作前，把决定版本、归属、来源引用和�
 | 模块 | 设计与可验证的不变量 |
 | --- | --- |
 | 版本与引用 | Rust 值类型表示产物、版本号和块端点。工作区内跨任务修订使用原产物 ID；提交比较预期上一版。SQLite 事务同时写版本、块、双向索引和回执，允许同批前向引用。原文引用逐字节核对，spool 引用的来源必须匹配此尝试的实际输入。[领域类型](../src/provenance/domain.rs) · [版本提交](../src/provenance/versions.rs) |
-| 决定与接续 | 决定版本先进入提议状态，一次采纳或拒绝使该版定案。修订会产生新提议。回执保存验证身份、受托记录、可选的 harness 署名和理由、所见游标和接受位置。声明了 `await_decision` 的驱动等待该版采纳，拒绝使驱动失败。图提交也可用 `decision_receipt` 标注因果关系。[决定记录](../src/provenance/history.rs) · [接续条件](../src/provenance/continuation.rs) |
-| 历史与证据 | 每次持久化有新游标的图时，SQLite 同事务追加时间点和发生变化的节点快照。按游标选每个节点最近的快照即可取得节点、依赖、运行尝试和绑定。材料记录关联宿主观察到的运行或模型调用。引用日志时冻结实际字节、偏移、截取范围和已知的采集截断标记。[历史读取](../src/provenance/history.sql) · [证据](../src/provenance/evidence.rs) |
+| 决定与接续 | 决定版本先进入提议状态，一次采纳或拒绝使该版定案。修订会产生新提议。回执保存验证身份、受托记录、可选的 harness 署名和理由、所见游标和接受位置。声明了 `await_decision` 的驱动等待该版采纳，拒绝使驱动失败。图提交也可用 `decision_receipt` 标注因果关系。[决定记录](../src/provenance/decisions/history.rs) · [接续条件](../src/provenance/decisions/continuation.rs) |
+| 历史与证据 | 每次持久化有新游标的图时，SQLite 同事务追加时间点和发生变化的节点快照。按游标选每个节点最近的快照即可取得节点、依赖、运行尝试和绑定。材料记录关联宿主观察到的运行或模型调用。引用日志时冻结实际字节、偏移、截取范围和已知的采集截断标记。[历史读取](../src/provenance/decisions/history.sql) · [证据](../src/provenance/evidence.rs) |
 | 查询与流向 | 查询使用队列逐块遍历，每一跳检查调用者对具体版本的读取权。授权、交给容器输入挂载点、工作区发布分别落账。文件流向以文件精度呈现。导出先持久化尝试，再写目录，再确认；失去确认时查询返回原尝试的 `unknown`。显式 `--retry` 建立新尝试，目标目录须可创建。[查询](../src/provenance/query.rs) · [导出](../src/provenance/export.rs) |
 
 CLI 入口为 `an provenance --task TASK ACTION`，从标准输入读 JSON。任务 MCP 的 `an_provenance` 接受同名 `action` 和 `payload`。例如，`sources` 接受 `{"delivery":"…","binding":"announcement","block":"opening"}`，`impact` 接受 `{"artifact":"opening","version":1,"block":"conclusion"}`，`history` 接受 `{"cursor":12}`。新建产物可省略 ID，由宿主分配并在幂等回执中返回；同批互引时显式提供 ID。旧交付按文件精度返回，早于历史采集的游标返回历史不可用。

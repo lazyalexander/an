@@ -86,6 +86,8 @@ def check():
     for path in inbox["sources"]:
         verify(not private_table.search((ROOT / path).read_text()), f"{path}: use frozen block projection")
     verify(private_table.search((ROOT / inbox["negative_fixture"]).read_text()), "private SQL fixture escaped")
+    gc = (ROOT / spec["retention"]["consumer"]).read_text()
+    verify(api["storage_prefix"] not in gc, "GC must use the provenance retention API")
     core = spec["core"]
     for file in (ROOT / core["root"]).rglob("*.rs"):
         imports = re.findall(

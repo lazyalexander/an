@@ -1,4 +1,4 @@
-use super::{
+use crate::provenance::{
     access::{Actor, Right},
     domain::{Choice, Decision},
 };

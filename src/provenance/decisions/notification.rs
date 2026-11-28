@@ -1,5 +1,5 @@
 //! A task-local recipient polls for work. Dispatch is durable before payload return.
-use super::{
+use crate::provenance::{
     access::{require_active_grant, Actor, Right},
     domain::{ArtifactId, VersionId},
 };
@@ -8,7 +8,7 @@ use anyhow::{ensure, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 
-pub(super) fn recipient(
+pub(in crate::provenance) fn recipient(
     db: &Connection,
     task: &str,
     id: &str,

@@ -1,5 +1,5 @@
 //! Explicit links retain each decision and its original notification history.
-use super::{
+use crate::provenance::{
     access::{Actor, Right},
     domain::{ArtifactId, Decision, VersionId},
 };
@@ -7,7 +7,7 @@ use anyhow::{ensure, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde_json::{json, Value};
 
-pub(super) fn link(
+pub(in crate::provenance) fn link(
     db: &Connection,
     actor: &Actor,
     decision: &Decision,
@@ -45,7 +45,11 @@ pub(super) fn link(
     Ok(())
 }
 
-pub(super) fn inspect(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
+pub(in crate::provenance) fn inspect(
+    db: &Connection,
+    actor: &Actor,
+    args: &Value,
+) -> Result<Value> {
     actor.controller()?;
     let receipt = args["decision"]
         .as_str()
@@ -77,7 +81,7 @@ pub(super) fn inspect(db: &Connection, actor: &Actor, args: &Value) -> Result<Va
 }
 
 /// The immutable correction may precede the grant for receiving its new version.
-pub(super) fn notify(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
+pub(in crate::provenance) fn notify(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
     actor.controller()?;
     let decision = args["decision"]
         .as_str()

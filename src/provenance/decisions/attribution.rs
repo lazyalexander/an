@@ -1,5 +1,5 @@
 //! Preserve what a source reports without issuing an executable decision receipt.
-use super::{
+use crate::provenance::{
     access::{Actor, Right},
     domain::{Attribution, Block, BlockRef, Relation, ReportedOutcome, VersionRef},
 };

@@ -1,20 +1,19 @@
 //! The transaction boundary shared by the CLI and the task MCP gateway.
 mod access;
-mod attribution;
-pub(crate) mod continuation;
-mod correction;
+mod decisions;
+pub(crate) use decisions::continuation;
+use decisions::{attribution, correction, history, notification};
 mod domain;
 mod evidence;
 pub(crate) mod export;
 pub(crate) mod flow;
 mod handoff;
-mod history;
+pub(crate) mod retention;
 use crate::workspace::inbox;
 pub(crate) use domain::BlockRef;
 pub(crate) use handoff::valid_endpoint;
 pub(crate) use history::require_accepted;
 mod material;
-mod notification;
 mod operation;
 use operation::Operation;
 pub(crate) mod publication;
