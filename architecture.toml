@@ -6,9 +6,9 @@ dependencies = ["serde"]
 negative_fixture = "tests/fixtures/provenance-sqlite.rs"
 
 [provenance]
-entry = "execute"
+entries = { "src/main.rs" = "execute", "src/mcp.rs" = "execute_mcp" }
 callers = ["src/main.rs", "src/mcp.rs"]
-adapter_api = ["execute", "authenticate", "scoped", "export::run"]
+adapter_api = ["execute", "execute_mcp", "authenticate", "scoped", "export::run"]
 storage_prefix = "pv_"
 
 [core]

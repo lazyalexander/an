@@ -73,7 +73,7 @@ def check():
         code = (ROOT / path).read_text()
         calls = set(re.findall(r"\bprovenance\s*::\s*([\w:]+)", code))
         verify(
-            api["entry"] in calls and calls <= set(api["adapter_api"]),
+            api["entries"][path] in calls and calls <= set(api["adapter_api"]),
             f"{path}: unexpected application entry points {calls}",
         )
         verify(
