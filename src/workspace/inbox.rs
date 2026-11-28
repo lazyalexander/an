@@ -1,10 +1,7 @@
 //! Only explicitly handed-in blocks enter the primary agent's review inbox.
-use super::{
-    access::{Actor, Right},
-    domain::BlockRef,
-};
 use crate::{
     permission,
+    provenance::{Actor, BlockRef, Right},
     store::{find, get, uid},
 };
 use anyhow::{ensure, Context, Result};
@@ -19,7 +16,7 @@ fn workspace(db: &Connection, task: &str) -> Result<String> {
         .to_owned())
 }
 
-pub(super) fn is_primary(db: &Connection, task: &str) -> Result<bool> {
+pub(crate) fn is_primary(db: &Connection, task: &str) -> Result<bool> {
     let ws = workspace(db, task)?;
     let Some(identity) = find(db, "workspace_primary", &ws)? else {
         return Ok(false);
@@ -32,7 +29,7 @@ pub(super) fn is_primary(db: &Connection, task: &str) -> Result<bool> {
     Ok(binding["workspace"] == ws && binding["task"] == task)
 }
 
-pub(super) fn authorize(
+pub(crate) fn authorize(
     db: &Connection,
     actor: &Actor,
     source: &BlockRef,
@@ -40,18 +37,8 @@ pub(super) fn authorize(
 ) -> Result<Option<Value>> {
     let ws = workspace(db, &actor.task)?;
     get(db, "workspace_primary", &ws).context("Workspace has no primary inbox")?;
-    let exists: bool = db.query_row(
-        "SELECT EXISTS(SELECT 1 FROM pv_block b JOIN pv_version v USING(artifact,version)
-        WHERE b.artifact=? AND b.version=? AND b.block=? AND v.task=?)",
-        params![
-            source.artifact.0,
-            source.version.0,
-            source.block,
-            actor.task
-        ],
-        |r| r.get(0),
-    )?;
-    ensure!(exists, "Review block unavailable in source task");
+    crate::provenance::block_registration(db, &actor.task, source)?
+        .context("Review block unavailable in source task")?;
     permission::gate(
         db,
         &actor.task,
@@ -65,12 +52,27 @@ pub(super) fn authorize(
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct Submission {
+pub(crate) struct Submission {
     pub idempotency_key: String,
     pub source: BlockRef,
 }
 
-pub(super) fn submit(db: &Connection, actor: &Actor, source: &BlockRef) -> Result<Value> {
+#[derive(serde::Serialize)]
+struct Receipt<'a> {
+    id: &'a str,
+    workspace: &'a str,
+    source: &'a BlockRef,
+    task: &'a str,
+    registration_cursor: u64,
+    attempt: Option<String>,
+    sender: &'a str,
+    grant: &'a str,
+    recipient: &'static str,
+    purpose: &'static str,
+    status: &'static str,
+}
+
+pub(crate) fn submit(db: &Connection, actor: &Actor, source: &BlockRef) -> Result<Value> {
     let grant = actor
         .grant
         .as_ref()
@@ -82,26 +84,23 @@ pub(super) fn submit(db: &Connection, actor: &Actor, source: &BlockRef) -> Resul
         },
     )?;
     let ws = workspace(db, &actor.task)?;
-    let (cursor, attempt): (u64, Option<String>) = db.query_row(
-        "SELECT registered_cursor,json_extract(material,'$.attempt') FROM pv_version
-        WHERE artifact=? AND version=? AND task=?",
-        params![source.artifact.0, source.version.0, actor.task],
-        |r| Ok((r.get(0)?, r.get(1)?)),
-    )?;
+    let (cursor, attempt) = crate::provenance::block_registration(db, &actor.task, source)?
+        .context("Review block unavailable in source task")?;
     let id = uid();
-    let receipt = json!({
-        "id": id,
-        "workspace": ws,
-        "source": source,
-        "task": actor.task,
-        "registration_cursor": cursor,
-        "attempt": attempt,
-        "sender": actor.id,
-        "grant": grant,
-        "recipient": "primary",
-        "purpose": "review",
-        "status": "pending",
-    });
+    let receipt = Receipt {
+        id: &id,
+        workspace: &ws,
+        source,
+        task: &actor.task,
+        registration_cursor: cursor,
+        attempt,
+        sender: &actor.id,
+        grant,
+        recipient: "primary",
+        purpose: "review",
+        status: "pending",
+    };
+    let receipt = serde_json::to_value(receipt)?;
     db.execute(
         "INSERT INTO pv_inbox(workspace,receipt,artifact,version,block,metadata)
          VALUES(?,?,?,?,?,?)",
@@ -117,13 +116,10 @@ pub(super) fn submit(db: &Connection, actor: &Actor, source: &BlockRef) -> Resul
     Ok(receipt)
 }
 
-pub(super) fn list(db: &Connection, actor: &Actor) -> Result<Value> {
+pub(crate) fn list(db: &Connection, actor: &Actor) -> Result<Value> {
     actor.require(db, Right::ReadInbox)?;
     ensure!(is_primary(db, &actor.task)?, "Primary inbox outside task");
-    let mut stmt = db.prepare(
-        "SELECT i.metadata,json_extract(b.body,'$.text') FROM pv_inbox i
-        JOIN pv_block b USING(artifact,version,block) WHERE i.workspace=? ORDER BY i.seq",
-    )?;
+    let mut stmt = db.prepare(include_str!("inbox.sql"))?;
     let mut rows = stmt.query([workspace(db, &actor.task)?])?;
     let mut items = vec![];
     while let Some(row) = rows.next()? {

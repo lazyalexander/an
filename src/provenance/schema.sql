@@ -99,3 +99,6 @@ CREATE TABLE IF NOT EXISTS pv_inbox (
     metadata TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS pv_workspace_inbox ON pv_inbox(workspace,seq);
+
+CREATE VIEW IF NOT EXISTS pv_frozen_text AS
+SELECT artifact,version,block,json_extract(body,'$.text') AS text FROM pv_block;

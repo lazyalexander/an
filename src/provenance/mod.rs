@@ -9,9 +9,10 @@ pub(crate) mod export;
 pub(crate) mod flow;
 mod handoff;
 mod history;
+use crate::workspace::inbox;
+pub(crate) use domain::BlockRef;
 pub(crate) use handoff::valid_endpoint;
 pub(crate) use history::require_accepted;
-mod inbox;
 mod material;
 mod notification;
 pub(crate) mod publication;
@@ -24,10 +25,26 @@ use crate::{
     store::{canonical, connect, hash},
 };
 pub(crate) use access::scoped;
-use access::Actor;
+pub(crate) use access::{Actor, Right};
 use anyhow::{ensure, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction, TransactionBehavior};
 use serde_json::{json, Value};
+
+pub(crate) fn block_registration(
+    db: &Connection,
+    task: &str,
+    source: &BlockRef,
+) -> Result<Option<(u64, Option<String>)>> {
+    Ok(db
+        .query_row(
+            "SELECT registered_cursor,json_extract(material,'$.attempt')
+        FROM pv_block JOIN pv_version USING(artifact,version)
+        WHERE artifact=? AND version=? AND block=? AND task=?",
+            params![source.artifact.0, source.version.0, source.block, task],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?)
+}
 
 pub fn authenticate(db: &Connection, task: &str) -> Result<()> {
     Actor::authenticate(db, task).map(|_| ())

@@ -81,6 +81,11 @@ def check():
             and not re.search(r"use\s+[^;]*\bprovenance\b", code),
             f"{path}: access provenance through the named facade",
         )
+    inbox = spec["workspace_inbox"]
+    private_table = re.compile(r"\b(?:" + "|".join(map(re.escape, inbox["private_tables"])) + r")\b")
+    for path in inbox["sources"]:
+        verify(not private_table.search((ROOT / path).read_text()), f"{path}: use frozen block projection")
+    verify(private_table.search((ROOT / inbox["negative_fixture"]).read_text()), "private SQL fixture escaped")
     core = spec["core"]
     for file in (ROOT / core["root"]).rglob("*.rs"):
         imports = re.findall(

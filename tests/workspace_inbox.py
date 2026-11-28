@@ -62,6 +62,7 @@ def exercise(worker, primary):
     text = "Propose a Friday release."
     private = "Internal-only note."
     program = """from pathlib import Path
+import sys
 for name in sys.argv[1:4]:
     Path('/output',name).write_text('Private draft: '+name)
 Path('/output/proposal.md').write_text(sys.argv[4]+'\\n'+sys.argv[5])
