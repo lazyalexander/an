@@ -1,5 +1,6 @@
 //! The transaction boundary shared by the CLI and the task MCP gateway.
 mod access;
+pub(crate) mod continuation;
 mod domain;
 mod evidence;
 pub(crate) mod export;
@@ -30,7 +31,7 @@ pub fn schema(db: &Connection) -> Result<()> {
 
 pub fn execute(task: &str, action: &str, args: &Value) -> Result<Value> {
     let mut db = connect()?;
-    let _lock = instances::lock(&db, task)?;
+    let lock = instances::lock(&db, task)?;
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let actor = Actor::authenticate(&tx, task)?;
     let result = match action {
@@ -55,9 +56,11 @@ pub fn execute(task: &str, action: &str, args: &Value) -> Result<Value> {
             })?
         }
         "commit" => {
-            let batch: domain::Batch = serde_json::from_value(args.clone())?;
-            let key = batch.idempotency_key.clone();
-            replay(&tx, &actor, &key, action, args, || {
+            let key = args["idempotency_key"]
+                .as_str()
+                .context("Expected idempotency key")?;
+            replay(&tx, &actor, key, action, args, || {
+                let batch = versions::parse(args.clone())?;
                 let receipt = versions::commit(&tx, &actor, batch)?;
                 history::proposed(&tx, task, &receipt)?;
                 Ok(receipt)
@@ -66,6 +69,12 @@ pub fn execute(task: &str, action: &str, args: &Value) -> Result<Value> {
         _ => anyhow::bail!("Unknown provenance operation"),
     };
     tx.commit()?;
+    drop(lock);
+    if action == "decide" {
+        if let Err(error) = crate::graph::wake(task) {
+            eprintln!("Decision recorded. Scheduler will reconcile on next state read: {error}");
+        }
+    }
     Ok(result)
 }
 
@@ -102,60 +111,7 @@ fn replay(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    fn db() -> Result<Connection> {
-        let db = Connection::open_in_memory()?;
-        db.execute_batch("CREATE TABLE objects(kind,id,body,PRIMARY KEY(kind,id))")?;
-        schema(&db)?;
-        Ok(db)
-    }
+mod tests;
 
-    #[test]
-    fn invalid_last_edge_rolls_back_the_batch_and_head() -> Result<()> {
-        let mut db = db()?;
-        let actor = access::test_controller("t");
-        let batch = json!({"idempotency_key":"k","versions":[
-            {"artifact":"a","expected":0,"kind":"document","blocks":[{"id":"b","text":"x","original":true}]},
-            {"artifact":"d","expected":0,"kind":"decision","blocks":[{"id":"b","text":"x","cites":[{"relation":"quotes","source":{"artifact":"a","version":1,"block":"missing"}}]}]}]});
-        {
-            let tx = db.transaction()?;
-            assert!(versions::commit(&tx, &actor, serde_json::from_value(batch)?).is_err());
-        }
-        assert_eq!(
-            db.query_row("SELECT count(*) FROM pv_artifact", [], |r| r
-                .get::<_, usize>(0))?,
-            0
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn receipt_replay_and_frozen_graph_position() -> Result<()> {
-        let mut db = db()?;
-        let actor = access::test_controller("t");
-        let tx = db.transaction()?;
-        let batch = json!({"idempotency_key":"k","versions":[{"artifact":"a","expected":0,"kind":"decision","blocks":[{"id":"b","text":"x","original":true}]}]});
-        let receipt = versions::commit(&tx, &actor, serde_json::from_value(batch)?)?;
-        history::proposed(&tx, "t", &receipt)?;
-        let args = json!({"idempotency_key":"pick","artifact":"a","version":1,"choice":"accept","seen_cursor":1});
-        let result = replay(&tx, &actor, "pick", "decide", &args, || {
-            history::decide(&tx, &actor, serde_json::from_value(args.clone())?)
-        })?;
-        assert_eq!(
-            result,
-            replay(&tx, &actor, "pick", "decide", &args, || unreachable!())?
-        );
-        assert!(replay(&tx, &actor, "pick", "decide", &json!({}), || unreachable!()).is_err());
-        assert_eq!(
-            history::view(&tx, &actor, 1)?["event"]["kind"],
-            "versions_registered"
-        );
-        assert_eq!(
-            history::view(&tx, &actor, 2)?["event"]["kind"],
-            "decision_recorded"
-        );
-        tx.commit()?;
-        Ok(())
-    }
-}
+#[cfg(test)]
+mod benchmark;

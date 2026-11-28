@@ -79,6 +79,7 @@ pub fn admit(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
         return Ok(pending);
     }
     record["task"] = json!(actor.task);
+    record["scope"] = json!(hash(canonical(&stamp).as_bytes()));
     put(db, "provenance_material", &id, &record)?;
     Ok(json!({"admitted":id}))
 }
@@ -87,4 +88,71 @@ pub fn admitted(db: &Connection, actor: &Actor, material: &Material) -> Result<V
     actor.controller()?;
     let id = key(&actor.task, &permission::stamp(db, &actor.task)?, material)?;
     find(db, "provenance_material", &id)?.context("Material requires admission in this turn")
+}
+
+/// A producer supplies only block declarations. The controller selects the
+/// artifact, expected head, file and evidence when registering that output.
+pub fn declared_blocks(
+    db: &Connection,
+    actor: &Actor,
+    draft: &super::domain::Draft,
+    id: &str,
+    declaration: &Material,
+) -> Result<(Vec<super::domain::Block>, Value)> {
+    use anyhow::ensure;
+    let Material::Output {
+        node,
+        attempt,
+        port,
+    } = declaration
+    else {
+        anyhow::bail!("Expected an output declaration")
+    };
+    ensure!(
+        matches!(&draft.material,Some(Material::Output{node:n,attempt:a,port:p}) if n==node && a==attempt && p!=port)
+            && draft.blocks.is_empty(),
+        "Declaration must be a separate output of the same attempt"
+    );
+    let proof = admitted(db, actor, declaration)?;
+    let files = get(
+        db,
+        "revision",
+        proof["revision"]
+            .as_str()
+            .context("Missing declaration revision")?,
+    )?;
+    let bytes = crate::artifacts::bytes(files.get(port).context("Missing declaration file")?)?;
+    let declarations: Value = serde_json::from_slice(&bytes)?;
+    let blocks = declarations
+        .get(id)
+        .context("Artifact absent from producer declaration")?;
+    Ok((
+        serde_json::from_value(blocks.clone())?,
+        json!({"revision":proof["revision"],"port":port,"attempt":attempt}),
+    ))
+}
+
+pub fn visible_in_turn(db: &Connection, actor: &Actor, record: &Value) -> Result<bool> {
+    let stamp = permission::stamp(db, &actor.task)?;
+    if record["scope"] == hash(canonical(&stamp).as_bytes()) {
+        return Ok(true);
+    }
+    let material = if let Some(input) = record["input"].as_str() {
+        Material::Input { name: input.into() }
+    } else {
+        Material::Output {
+            node: record["node"].as_str().context("Missing producer")?.into(),
+            attempt: record["attempt"]
+                .as_str()
+                .context("Missing attempt")?
+                .into(),
+            port: record["port"].as_str().context("Missing port")?.into(),
+        }
+    };
+    Ok(find(
+        db,
+        "provenance_material",
+        &key(&actor.task, &stamp, &material)?,
+    )?
+    .is_some())
 }

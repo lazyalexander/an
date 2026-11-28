@@ -21,6 +21,10 @@ fn revision(db: &Connection, task: &str, cursor: u64) -> Result<u64> {
 }
 
 pub fn view(db: &Connection, actor: &Actor, cursor: u64) -> Result<Value> {
+    ensure!(
+        actor.may_observe_position(),
+        "Graph position outside authority"
+    );
     let rev = revision(db, &actor.task, cursor)?;
     if actor.grant.is_some() {
         return Ok(json!({"task":actor.task,"cursor":cursor,"revision":rev}));
@@ -85,7 +89,7 @@ pub fn decide(tx: &Transaction, actor: &Actor, decision: Decision) -> Result<Val
         .as_array()
         .context("Missing graph events")?
         .last()
-        .unwrap();
+        .context("Missing decision event")?;
     let receipt = json!({"id":id,"artifact":decision.artifact,"version":decision.version,"choice":decision.choice,
         "actor":actor.id,"grant":actor.grant,"reported_participant":decision.reported_participant,
         "reason":decision.reason,"task":actor.task,"time_ms":event["time_ms"],

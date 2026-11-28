@@ -122,6 +122,14 @@ fn seeds(db: &Connection, actor: &Actor, args: &Value) -> Result<Vec<BlockRef>> 
                 refs.push(endpoint);
             }
         }
+        if refs.is_empty() && args.get("block").is_some() {
+            let managed: bool = db.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pv_published WHERE delivery=? AND binding=?)",
+                params![args["delivery"].as_str(), name],
+                |r| r.get(0),
+            )?;
+            ensure!(!managed, "Block unavailable");
+        }
         return Ok(refs);
     }
     let artifact = ArtifactId(
@@ -152,58 +160,89 @@ fn seeds(db: &Connection, actor: &Actor, args: &Value) -> Result<Vec<BlockRef>> 
     Ok(rows.collect::<rusqlite::Result<_>>()?)
 }
 
+struct RecordedBlock {
+    task: String,
+    author: String,
+    participant: Option<String>,
+    material: Option<String>,
+    evidence: String,
+    content: String,
+}
+
 fn describe(db: &Connection, actor: &Actor, endpoint: &BlockRef) -> Result<Value> {
-    let (task,author,participant,material,evidence,block):(String,String,Option<String>,Option<String>,String,String)=db.query_row(
-        "SELECT task,author,participant,material,evidence,body FROM pv_version JOIN pv_block USING(artifact,version)
-         WHERE artifact=? AND version=? AND block=?",params![endpoint.artifact.0,endpoint.version.0,endpoint.block],
-        |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?,r.get(5)?)))?;
-    let private = actor.grant.is_none() && task == actor.task;
-    let mut item = json!({"ref":endpoint,"content":serde_json::from_str::<Value>(&block)?});
-    let choice: Option<String> = db
-        .query_row(
-            "SELECT body FROM pv_choice WHERE artifact=? AND version=?",
-            params![endpoint.artifact.0, endpoint.version.0],
-            |r| r.get(0),
-        )
-        .optional()?;
-    let can_audit_author = actor.grant.is_none()
+    let row = db.query_row(
+        "SELECT task,author,participant,material,evidence,body
+         FROM pv_version JOIN pv_block USING(artifact,version)
+         WHERE artifact=? AND version=? AND block=?",
+        params![endpoint.artifact.0, endpoint.version.0, endpoint.block],
+        |r| {
+            Ok(RecordedBlock {
+                task: r.get(0)?,
+                author: r.get(1)?,
+                participant: r.get(2)?,
+                material: r.get(3)?,
+                evidence: r.get(4)?,
+                content: r.get(5)?,
+            })
+        },
+    )?;
+    let local_controller = actor.grant.is_none() && row.task == actor.task;
+    let mut item = json!({
+        "ref": endpoint,
+        "previous_version": endpoint.version.0.checked_sub(1).filter(|n|*n>0),
+        "content": serde_json::from_str::<Value>(&row.content)?
+    });
+    let owner = actor.grant.is_none()
         && actor.allows(
             db,
             &Right::Revise {
                 artifact: endpoint.artifact.clone(),
             },
         )?;
-    if private || can_audit_author {
-        item["registered_by"] = json!(author);
-        item["reported_participant"] = json!(participant);
-        if let Some(id) = author.strip_prefix("agent:") {
+    if local_controller || owner {
+        item["registered_by"] = json!(row.author);
+        item["reported_participant"] = json!(row.participant);
+        if let Some(id) = row.author.strip_prefix("agent:") {
             let grant = get(db, "provenance_grant", id)?;
             item["delegation"] =
                 json!({"grant":id,"issuer":grant["issuer"],"target":grant["target"]});
         }
-    }
-    if private {
+        let choice: Option<String> = db
+            .query_row(
+                "SELECT body FROM pv_choice WHERE artifact=? AND version=?",
+                params![endpoint.artifact.0, endpoint.version.0],
+                |r| r.get(0),
+            )
+            .optional()?;
         if let Some(choice) = choice {
             let decision: Value = serde_json::from_str(&choice)?;
-            let mut q=db.prepare("SELECT cursor,revision,event FROM pv_point WHERE task=? AND json_extract(event,'$.decision_receipt')=? ORDER BY cursor")?;
-            let mut rows = q.query(params![task, decision["id"].as_str()])?;
-            let mut changes = vec![];
-            while let Some(row) = rows.next()? {
-                changes.push(json!({"cursor":row.get::<_,u64>(0)?,"revision":row.get::<_,u64>(1)?,"event":serde_json::from_str::<Value>(&row.get::<_,String>(2)?)?}));
-            }
-            // A decision made in another task has its own private rationale.
             if decision["task"] == actor.task {
+                item["triggered"] = changes(
+                    db,
+                    &actor.task,
+                    decision["id"].as_str().context("Missing receipt")?,
+                )?;
                 item["decision"] = decision;
-                item["triggered"] = json!(changes);
+            } else if owner {
+                item["decision"] = json!({"id":decision["id"],"choice":decision["choice"],
+                    "actor":decision["actor"],"grant":decision["grant"]});
             }
         }
-        if let Some(material) = material {
-            let m: Value = serde_json::from_str(&material)?;
-            item["file_flows"] = file_flows(db, &task, &m)?;
+    }
+    if local_controller {
+        if let Some(material) = row.material {
+            let mut m: Value = serde_json::from_str(&material)?;
+            item["file_flows"] = file_flows(db, &row.task, &m)?;
+            if !super::material::visible_in_turn(db, actor, &m)? {
+                if let Some(fields) = m.as_object_mut() {
+                    fields.remove("execution");
+                    fields.remove("bindings");
+                }
+            }
             item["material"] = m;
         }
     }
-    let snapshots: Vec<String> = serde_json::from_str(&evidence)?;
+    let snapshots: Vec<String> = serde_json::from_str(&row.evidence)?;
     let mut visible = vec![];
     for snapshot in snapshots {
         if actor.allows(
@@ -219,12 +258,25 @@ fn describe(db: &Connection, actor: &Actor, endpoint: &BlockRef) -> Result<Value
     Ok(item)
 }
 
+fn changes(db: &Connection, task: &str, receipt: &str) -> Result<Value> {
+    let mut stmt=db.prepare(
+        "SELECT cursor,revision,event FROM pv_point WHERE task=? AND
+        coalesce(json_extract(event,'$.decision_receipt'),json_extract(event,'$.data.decision_receipt'))=? ORDER BY cursor"
+    )?;
+    let mut rows = stmt.query(params![task, receipt])?;
+    let mut changes = Vec::new();
+    while let Some(row) = rows.next()? {
+        changes.push(json!({
+            "cursor":row.get::<_,u64>(0)?,
+            "revision":row.get::<_,u64>(1)?,
+            "event":serde_json::from_str::<Value>(&row.get::<_,String>(2)?)?
+        }));
+    }
+    Ok(json!(changes))
+}
+
 fn file_flows(db: &Connection, task: &str, m: &Value) -> Result<Value> {
-    let mut stmt=db.prepare("SELECT seq,phase,attempt,target,delivery,time_ms FROM pv_flow f
-        WHERE task=?1 AND ((revision=?2 AND source_attempt IS ?3 AND source_input IS ?4) OR
-          (phase IN ('exported','unknown') AND delivery IN
-            (SELECT delivery FROM pv_flow WHERE task=?1 AND revision=?2 AND source_attempt IS ?3 AND source_input IS ?4 AND phase='published')))
-        ORDER BY seq")?;
+    let mut stmt = db.prepare(include_str!("file_flows.sql"))?;
     let mut rows = stmt.query(params![
         task,
         m["revision"].as_str(),

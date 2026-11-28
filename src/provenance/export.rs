@@ -2,7 +2,7 @@
 //! any point before confirmation leaves an explicit unknown outcome.
 use crate::{
     artifacts, permission,
-    store::{canonical, connect, find, get, hash, uid},
+    store::{canonical, connect, find, get, hash, put, uid},
 };
 use anyhow::{ensure, Context, Result};
 use rusqlite::{params, OptionalExtension, Transaction, TransactionBehavior};
@@ -98,6 +98,16 @@ pub fn run(
         // Check the caller's authority for this exact destination even when
         // returning an existing receipt in another turn.
         if !retry || result["status"] == "exported" {
+            if let Some(key) = request {
+                let r = get(&tx, "request", key)?;
+                if r["task"] == group.task
+                    && r["export_attempt"] == result["attempt"]
+                    && r["state"] == "used"
+                    && r["revisions"] == permission::stamp(&tx, &group.task)?
+                {
+                    return Ok(result);
+                }
+            }
             if let Some(p) = group.authorize(&tx, id, &dest, request)? {
                 tx.commit()?;
                 return Ok(p);
@@ -118,6 +128,11 @@ pub fn run(
         "INSERT INTO pv_export(operation,attempt,result) VALUES(?,?,?)",
         params![operation, attempt, result.to_string()],
     )?;
+    if let Some(key) = request {
+        let mut used = get(&tx, "request", key)?;
+        used["export_attempt"] = json!(attempt);
+        put(&tx, "request", key, &used)?;
+    }
     export_event(&tx, &group, &result)?;
     tx.commit()?;
     artifacts::stage(&dest, &files, false)

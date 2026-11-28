@@ -12,13 +12,33 @@ use rusqlite::{params, OptionalExtension, Transaction};
 use serde_json::{json, Value};
 use std::collections::BTreeSet;
 
-pub fn commit(tx: &Transaction, actor: &Actor, batch: Batch) -> Result<Value> {
-    ensure!(!batch.versions.is_empty(), "Empty submission");
+/// Allocate missing IDs after the replay check so an interrupted client can
+/// retrieve the original assignments. Same-batch citations use explicit IDs.
+pub fn parse(mut payload: Value) -> Result<Batch> {
+    for draft in payload["versions"]
+        .as_array_mut()
+        .context("Expected versions")?
+    {
+        if draft.get("artifact").is_none() {
+            draft
+                .as_object_mut()
+                .context("Expected version object")?
+                .insert("artifact".into(), json!(uid()));
+        }
+    }
+    Ok(serde_json::from_value(payload)?)
+}
+
+pub fn commit(tx: &Transaction, actor: &Actor, mut batch: Batch) -> Result<Value> {
+    ensure!(
+        !batch.idempotency_key.is_empty() && !batch.versions.is_empty(),
+        "Empty submission"
+    );
     let mut created = BTreeSet::new();
     let mut receipt = Vec::new();
-    for draft in &batch.versions {
+    for draft in &mut batch.versions {
         ensure!(
-            valid_name(&draft.artifact.0) && created.insert(&draft.artifact),
+            valid_name(&draft.artifact.0) && created.insert(draft.artifact.clone()),
             "Invalid or repeated artifact ID"
         );
         receipt.push(insert(
@@ -31,7 +51,7 @@ pub fn commit(tx: &Transaction, actor: &Actor, batch: Batch) -> Result<Value> {
     // Resolve the whole batch before commit. References within this batch
     // may point forward, subject to the same authority and cycle checks.
     for (draft, item) in batch.versions.iter().zip(&receipt) {
-        let version = item["version"].as_u64().unwrap();
+        let version = item.version.0;
         for block in &draft.blocks {
             for citation in &block.cites {
                 let src = &citation.source;
@@ -92,7 +112,7 @@ pub fn commit(tx: &Transaction, actor: &Actor, batch: Batch) -> Result<Value> {
              UNION SELECT p.start,e.source,e.source_version,e.source_block FROM path p JOIN pv_edge e
                ON (e.artifact,e.version,e.block)=(p.a,p.v,p.b))
              SELECT EXISTS(SELECT 1 FROM path WHERE (a,v,b)=(?1,?2,start))",
-             params![item["artifact"].as_str(),item["version"].as_u64()],|r|r.get(0))?;
+             params![item.artifact.0,item.version.0],|r|r.get(0))?;
         ensure!(!cycle, "Circular block reference");
     }
     Ok(json!({"id":uid(),"versions":receipt}))
@@ -101,9 +121,9 @@ pub fn commit(tx: &Transaction, actor: &Actor, batch: Batch) -> Result<Value> {
 fn insert(
     tx: &Transaction,
     actor: &Actor,
-    draft: &Draft,
+    draft: &mut Draft,
     participant: Option<&str>,
-) -> Result<Value> {
+) -> Result<VersionRef> {
     let id = &draft.artifact.0;
     let kind = serde_json::to_value(draft.kind)?;
     let version = draft
@@ -138,6 +158,11 @@ fn insert(
         .as_ref()
         .map(|m| material::admitted(tx, actor, m))
         .transpose()?;
+    if let Some(declaration) = &draft.declaration {
+        let (blocks, proof) = material::declared_blocks(tx, actor, draft, id, declaration)?;
+        draft.blocks = blocks;
+        material.as_mut().context("Declaration requires material")?["declaration"] = proof;
+    }
     let file = match (&mut material, &draft.file) {
         (Some(m), Some(path)) => {
             let files = get(
@@ -208,5 +233,8 @@ fn insert(
             ],
         )?;
     }
-    Ok(json!({"artifact":id,"version":version}))
+    Ok(VersionRef {
+        artifact: draft.artifact.clone(),
+        version: VersionId(version),
+    })
 }

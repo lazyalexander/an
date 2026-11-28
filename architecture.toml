@@ -1,0 +1,16 @@
+# Checked by tests/architecture.rs in a normal cargo test run.
+[domain]
+source = "src/provenance/domain.rs"
+# The checker compiles the domain in isolation with only these Cargo dependencies.
+dependencies = ["serde"]
+negative_fixture = "tests/fixtures/provenance-sqlite.rs"
+
+[provenance]
+entry = "execute"
+callers = ["src/main.rs", "src/mcp.rs"]
+adapter_api = ["execute", "authenticate", "scoped", "export::run"]
+storage_prefix = "pv_"
+
+[core]
+root = "src"
+excluded_sources = ["examples", "studio"]

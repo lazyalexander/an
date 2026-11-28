@@ -70,4 +70,9 @@ CREATE TABLE IF NOT EXISTS pv_published (
     workspace TEXT,PRIMARY KEY(delivery,binding)
 );
 CREATE INDEX IF NOT EXISTS pv_public_versions ON pv_published(artifact,version,workspace);
-CREATE INDEX IF NOT EXISTS pv_decision_changes ON pv_point(task,json_extract(event,'$.decision_receipt'));
+CREATE INDEX IF NOT EXISTS pv_decision_changes ON pv_point(task,coalesce(json_extract(event,'$.decision_receipt'),json_extract(event,'$.data.decision_receipt')));
+CREATE INDEX IF NOT EXISTS pv_registered ON pv_version(task,registered_cursor);
+CREATE TABLE IF NOT EXISTS pv_product (
+    task TEXT NOT NULL,attempt TEXT NOT NULL,revision TEXT NOT NULL,
+    PRIMARY KEY(task,attempt,revision)
+);

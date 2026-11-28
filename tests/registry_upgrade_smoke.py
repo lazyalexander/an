@@ -32,11 +32,13 @@ def main():
                                   text=True, env={**os.environ, "AN_PYTHON": "/missing"})
         assert json.loads(cli("permission","pending","--task",task).stdout)[0]["id"] == req
         cli("permission","decide","--task",task,"--request-id",req,"--decision","once")
-        cli("export","--request-id",req,run,destination)
+        receipt = json.loads(cli("export","--request-id",req,run,destination).stdout)
         assert (Path(destination)/"报告.txt").read_bytes() == b"previous revision"
         with kernel.connect() as db:
             assert kernel.get(db, "request", req)["state"] == "used"
-        assert "already used" in cli("export","--request-id",req,run,destination,check=False).stderr
+        Path(destination).rename(str(destination) + "-saved")
+        assert json.loads(cli("export","--request-id",req,run,destination).stdout) == receipt
+        assert not Path(destination).exists()
 
 
 if __name__ == "__main__":

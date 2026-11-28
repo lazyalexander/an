@@ -9,6 +9,13 @@ pub struct ArtifactId(pub String);
 #[serde(transparent)]
 pub struct VersionId(pub u32);
 
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct VersionRef {
+    pub artifact: ArtifactId,
+    pub version: VersionId,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct BlockRef {
@@ -72,7 +79,9 @@ pub struct Draft {
     pub expected: VersionId,
     pub kind: Kind,
     pub material: Option<Material>,
+    pub declaration: Option<Material>,
     pub file: Option<String>,
+    #[serde(default)]
     pub blocks: Vec<Block>,
     #[serde(default)]
     pub evidence: Vec<String>,

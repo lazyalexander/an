@@ -186,16 +186,18 @@ pub(super) fn advance(
             }
             finished |= state["status"] == "done";
             if graph["activity"][id] != state {
+                let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
                 if state["status"] == "authorization_expired" {
                     graph["activity"][id] = state.clone();
                     event(graph, "host", "authorization_expired", id, state.clone());
-                    put(db, "graph", task, graph)?;
+                    put(&tx, "graph", task, graph)?;
                     state = attempt::next(&state)?;
                     finished = true;
                 }
                 graph["activity"][id] = state.clone();
                 event(graph, "host", field(&state, "status")?, id, state.clone());
-                put(db, "graph", task, graph)?;
+                put(&tx, "graph", task, graph)?;
+                tx.commit()?;
             }
         }
         if !finished {
@@ -223,6 +225,7 @@ fn project_run_outputs(
         let name = name.as_str().context("Invalid output")?;
         let entry = files.get(name).context("Missing output")?;
         let id = revision(&tx, &json!({name:entry}))?;
+        crate::provenance::flow::produced(&tx, field(run, "task")?, attempt, &id)?;
         outputs[name] = json!({"revision":id, "spool":run["spool"], "run":attempt});
     }
     // Keep the run rowid used by the delivery listing cursor.
@@ -314,7 +317,7 @@ fn accept_expansion(
         "host",
         "expanded",
         id,
-        json!({"attempt":state["id"],"nodes":additions.iter().map(|n| &n["id"]).collect::<Vec<_>>()}),
+        json!({"attempt":state["id"],"decision_receipt":state["decision_receipt"],"nodes":additions.iter().map(|n| &n["id"]).collect::<Vec<_>>()}),
     );
     put(&tx, "graph", task, &next)?;
     tx.commit()?;
@@ -331,6 +334,14 @@ fn step(
     state: &mut Value,
     lock: &File,
 ) -> Result<()> {
+    if let Some(guard) = node.get("await_decision") {
+        let Some(receipt) = crate::provenance::continuation::accepted(db, guard)? else {
+            state["bindings"] = bound.clone();
+            state["waiting_reason"] = json!({"reason":"decision"});
+            return Ok(());
+        };
+        state["decision_receipt"] = json!(receipt);
+    }
     if let Some(saved) = find(db, "graph_ready", field(state, "id")?)? {
         *state = saved;
         return Ok(());

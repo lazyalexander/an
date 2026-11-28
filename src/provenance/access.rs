@@ -45,11 +45,8 @@ impl Actor {
             let token = std::env::var("AN_PROVENANCE_TOKEN").context("Invalid delegation")?;
             let digest = hash(token.as_bytes());
             let grant = find(db, "provenance_key", &digest)?.context("Inactive delegation")?;
-            let record = get(
-                db,
-                "provenance_grant",
-                grant.as_str().context("Invalid delegation")?,
-            )?;
+            let grant_id = grant.as_str().context("Invalid delegation")?;
+            let record = get(db, "provenance_grant", grant_id)?;
             ensure!(
                 record["active"] == true
                     && record["target"] == task
@@ -62,9 +59,9 @@ impl Actor {
                 "Inactive delegation"
             );
             return Ok(Self {
-                id: format!("agent:{}", record["id"].as_str().unwrap()),
+                id: format!("agent:{grant_id}"),
                 task: task.into(),
-                grant: Some(grant.as_str().unwrap().into()),
+                grant: Some(grant_id.into()),
                 rights: serde_json::from_value(record["rights"].clone())?,
             });
         }
@@ -75,6 +72,14 @@ impl Actor {
             grant: None,
             rights: vec![],
         })
+    }
+
+    pub fn may_observe_position(&self) -> bool {
+        self.grant.is_none()
+            || self
+                .rights
+                .iter()
+                .any(|right| matches!(right, Right::Decide { .. }))
     }
 
     pub fn controller(&self) -> Result<()> {
@@ -166,7 +171,12 @@ pub fn grant(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
     }
     let id = uid();
     let secret = uid();
-    let record = json!({"id":id,"issuer":actor.id,"task":actor.task,"target":target,"epoch":epoch,"target_scope":permission::delegation_scope(db,target)?,"source_scope":permission::delegation_scope(db,&actor.task)?,"rights":rights,"active":true});
+    let record = json!({
+        "id":id, "issuer":actor.id, "task":actor.task, "target":target, "epoch":epoch,
+        "target_scope":permission::delegation_scope(db,target)?,
+        "source_scope":permission::delegation_scope(db,&actor.task)?,
+        "rights":rights, "active":true
+    });
     put(db, "provenance_grant", &id, &record)?;
     put(db, "provenance_key", &hash(secret.as_bytes()), &json!(id))?;
     Ok(json!({"grant":id,"token":secret}))

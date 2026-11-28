@@ -51,3 +51,39 @@ An 在决定触发后续工作前，把决定版本、归属、来源引用和�
 3. 在同一工作区的另一个任务中，让获得委托的 agent 把开馆日修订为周二。记录能指回它的授权。反查周一版准确列出公告和行动清单中引用开馆日的块，排除有独立来源的「免费登记」。旧公告仍显示周一，明确采用新版的文档显示周二。
 4. 给 subagent 只读权限核对一份运行证据。它能读到指定版本，写入被拒绝，其他私有日志及其目标不可见。关闭原任务并执行回收后，从交付仍能定位到引用的证据，重新获准后能读回相同内容。
 5. 分别制造已授权但未交接、成功发布、导出结果未知三种结果。正向查询只将有对应回执的事实标为已发生。重新打开查询或恢复宿主时，未知的导出不会再次执行。
+
+## 首版实现与复验
+
+在会议纪要案例中，整理 spool 输出公开条目和一份块清单。An 用实际的输出版本验证清单中的 UTF-8 字节区间和来源，再登记开馆决定。控制器采纳后，一次性接续驱动追加两个排版任务。两个排版任务各自交回文件和块清单。发布时固定选定的文档版本，因此以后在相同工作区修订公告，旧交付仍指向发布时的版本。[无头案例](../examples/minutes/provenance.py)
+
+| 模块 | 设计与可验证的不变量 |
+| --- | --- |
+| 版本与引用 | Rust 值类型表示产物、版本号和块端点。工作区内跨任务修订使用原产物 ID；提交比较预期上一版。SQLite 事务同时写版本、块、双向索引和回执，允许同批前向引用。原文引用逐字节核对，spool 引用的来源必须匹配此尝试的实际输入。[领域类型](../src/provenance/domain.rs) · [版本提交](../src/provenance/versions.rs) |
+| 决定与接续 | 决定版本先进入提议状态，一次采纳或拒绝使该版定案。修订会产生新提议。回执保存验证身份、受托记录、可选的 harness 署名和理由、所见游标和接受位置。声明了 `await_decision` 的驱动等待该版采纳，拒绝使驱动失败。图提交也可用 `decision_receipt` 标注因果关系。[决定记录](../src/provenance/history.rs) · [接续条件](../src/provenance/continuation.rs) |
+| 历史与证据 | 每次持久化有新游标的图时，SQLite 同事务追加时间点和发生变化的节点快照。按游标选每个节点最近的快照即可取得节点、依赖、运行尝试和绑定。材料记录关联宿主观察到的运行或模型调用。引用日志时冻结实际字节、偏移、截取范围和已知的采集截断标记。[历史读取](../src/provenance/history.sql) · [证据](../src/provenance/evidence.rs) |
+| 查询与流向 | 查询使用队列逐块遍历，每一跳检查调用者对具体版本的读取权。授权、交给容器输入挂载点、工作区发布分别落账。文件流向以文件精度呈现。导出先持久化尝试，再写目录，再确认；失去确认时查询返回原尝试的 `unknown`。显式 `--retry` 建立新尝试，目标目录须可创建。[查询](../src/provenance/query.rs) · [导出](../src/provenance/export.rs) |
+
+CLI 入口为 `an provenance --task TASK ACTION`，从标准输入读 JSON。任务 MCP 的 `an_provenance` 接受同名 `action` 和 `payload`。例如，`sources` 接受 `{"delivery":"…","binding":"announcement","block":"opening"}`，`impact` 接受 `{"artifact":"opening","version":1,"block":"conclusion"}`，`history` 接受 `{"cursor":12}`。新建产物可省略 ID，由宿主分配并在幂等回执中返回；同批互引时显式提供 ID。旧交付按文件精度返回，早于历史采集的游标返回历史不可用。
+
+控制器用 `admit-material` 核准材料进入登记过程。显式限制 workspace 流向时需要允许相应来源的 `["preview", origin, "provenance"]`。用 `grant` 签发具体版本的读取或决定权、产物修订权、或单个证据快照的读取权。受托进程从 `AN_PROVENANCE_TOKEN` 取得身份，MCP 只列出专用工具。撤回委托、结束相关 turn 或变更策略都会使旧委托失效。重新打开交付时，可用 `reopen-evidence` 对该交付确实引用的快照重新申请读取权。
+
+架构测试读取根目录的 TOML，按声明的外部依赖单独编译领域模块，检查 CLI/MCP 的公共入口，并用一个故意导入 SQLite 的夹具验证边界。运行以下命令可复验并重建基线。[后端架构约束](../architecture.toml)
+
+```sh
+cargo test --offline
+cargo build --offline
+python3 tests/provenance_mcp.py
+container build --tag an-minutes-organize:provenance examples/minutes/organize
+container build --tag an-minutes-format:provenance examples/minutes/format
+python3 examples/minutes/provenance.py
+cargo test --release --offline provenance::benchmark -- --ignored --nocapture
+```
+
+基线使用 release 构建和内存 SQLite。每个投影预热一次，再调用 Rust 应用查询 200 次。来源和影响查询各经过 8 个块。历史查询还原 32 个节点，每个节点有 32 条历史记录。下表记录同一次运行的中位数和 P95，单位为微秒，测量范围不含 CLI 启动、容器运行和磁盘冷读。
+
+| 不相关引用数 | 查来源，中位 / P95 | 查影响，中位 / P95 | 还原图，中位 / P95 |
+| ---: | ---: | ---: | ---: |
+| 0 | 125.4 / 168.0 | 98.5 / 107.8 | 49.8 / 56.1 |
+| 50,000 | 79.2 / 87.6 | 81.2 / 86.8 | 43.3 / 45.8 |
+
+查询计划显示，来源查询使用引用表的复合主键，影响查询使用 `pv_consumers(source, source_version, source_block)`；历史查询按任务、节点和游标取最近记录。基准会检查反查是否仍命中来源端索引。[基准实现](../src/provenance/benchmark.rs)

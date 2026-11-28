@@ -237,6 +237,13 @@ fn append_nodes(
         );
     }
     for node in additions {
+        if node.get("await_decision").is_some() {
+            ensure!(
+                driver.is_none(),
+                "Decision guard requires controller submission"
+            );
+            crate::provenance::continuation::declare(db, task, node)?;
+        }
         if node.get("versions").is_some() {
             ensure!(
                 driver.is_none(),
