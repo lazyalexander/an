@@ -1,6 +1,6 @@
 # Architecture
 
-An lets an agent run industrial work for one person. An is the only hub: the person, the agents and any presentation layer are its clients. It is the layer between the person and the agent: it curates what passes in each direction, and it chains isolated container programs and agents into a recorded pipeline. The person sends instructions and controls through An. Their workspace presents the materials handed to its main agent and the deliveries An publishes. Agents plan the work. An schedules the container steps through Apple Container and records their inputs and outputs. Painting, CAD and animation are instances of this shape, not separate products.
+An manages the flow of artifacts through a workspace. The harness agent plans work and reviews its results. An schedules isolated spools on Apple Container, checks each protected transfer, and records the versions consumed and produced. A person can inspect the resulting delivery, make a decision in Studio or the CLI, and resume from the published version in a later task.
 
 ## Artifact flow designs (中文)
 
@@ -21,7 +21,7 @@ The [container engine design (中文)](container-engine.zh-CN.md) describes the 
 2. **An mediates graph changes and artifact transfers.** The person sends instructions through An. The main agent submits work through the task gateway, including model calls and requests to downstream tools. The harness coordinates its agents' private work. An records who received protected material, exercised delegated authority or handed a result to a recipient.
 3. **Each part of the work runs in its own container.** Temporary code, temporary artifacts and secrets stay inside the container that needs them. Every transfer between containers crosses an An permission check.
 4. **No one draws a pipeline.** There is no predefined graph and no template. Agents decide the next step from the last result. A container may use a fixed internal procedure. Between containers, the graph grows as work happens: it is the execution record and the provenance, not a plan.
-5. **A text box whenever a person is involved.** The macro UI resembles a mainstream agent harness: the person starts and steers work by typing, and the agent answers in the same timeline. Work that needs more than text, such as pressure painting or image and model inspection, is added as presentation plugins. A headless batch pipeline may use only the CLI. The person sets the goal and can delegate decisions within a recorded scope.
+5. **A text box whenever a person is involved.** The macro UI resembles a mainstream agent harness: the person starts and steers work by typing, and the agent answers in the same timeline. Work that needs more than text, such as pressure painting or image and model inspection, can be explored in presentation plugins. A headless batch pipeline may use only the CLI. The person sets the goal and can delegate decisions within a recorded scope.
 
 ## How the parts fit
 
@@ -75,7 +75,7 @@ Two things a mainstream harness does not do carry most of An's weight:
 
 ## Scope and realism
 
-The mechanics are proven: activating spools in containers, exchanging artifacts under authorization and publishing deliveries run end to end in the Bridge, CAD and Markdown review experiments. What is hard is not the plumbing:
+Markdown review exercises container admission, authorized handoffs and publication end to end. The planner and the presentation layer still face the following constraints.
 
 1. **Choosing and composing spools.** With a dozen well-described spools a capable model composes them; with hundreds it needs retrieval and evaluation, not a longer prompt. Small local models plan poorly.
 2. **Format compatibility** between spools is the most common failure point and needs converter spools and strict media types.
@@ -93,7 +93,7 @@ So An targets bounded domains first: tens of curated spools, a person at the dec
 
 ## Presentation plugins
 
-A plugin presents a kind of surface that a basic form cannot, inside the macro UI: the sketch canvas is the first, image comparison and 3D viewers are the next candidates. The contract: An dispatches a frozen input, the plugin presents it without reaching the agent, and its result enters the graph as a validated response. Plugins also report observations (see above).
+Spools can ship a custom presentation for a declared decision. An supplies the frozen inputs and validates the response against the same schema used by the CLI. Specialized drawing and viewing interactions are developed on the visual experiment branch.
 
 ## Agent boundary
 
@@ -117,7 +117,7 @@ This needs a manifest schema after `an.spool/v1`, whose reader rejects unknown f
 The macro UI follows a harness layout:
 
 - **Timeline, center.** Only An-level records: the person's instructions, the agent's stage summaries, decisions, failures and deliveries. No prompts, tool calls, agent loop or scrolling logs.
-- **Side panel.** The surfaces waiting for the person and the outputs to check. It widens or switches to a focus view when an image or model needs room. Pressure painting uses the sketch canvas.
+- **Side panel.** The surfaces waiting for the person and the outputs to check. It widens or switches to a focus view when an image or model needs room.
 - **Instruction box, bottom.** Always present when a person is involved. Without a task it starts one. In a task, free text is relayed with its original kept and its context attached. Text never answers a waiting surface; the agent may supersede that surface in response.
 - **Agent messages** appear in the timeline next to the instructions they answer.
 - **Controls.** Stop, pause, approve and deny are separate buttons executed by An. They are never parsed from text.
@@ -128,7 +128,9 @@ A pipeline without the macro UI still needs somewhere to present surfaces and pe
 
 The An host owns tasks, grants, graph transitions, immutable versions and receipt validation. Task Studio starts with `cd studio && python3 -m orchestrator --task TASK`. Its entry point imports only the graph server and configuration. A task's admitted panel declarations supply the decisions shown in the timeline.
 
-Experiment packages under `examples/` own prompts, document transformations, application spools, demo entry points and fixtures: graph Studio (Bridge, CAD, sketch), Markdown review, minutes and the Codex agent adapter. Their spools run in containers. Host-side services that need the GPU, such as `services/image_local.py`, run outside containers and are reached only by the host.
+Markdown review and minutes own their prompts, transformations, spools and fixtures under `examples/`. The Codex adapter under `examples/agents/` connects a harness to the task MCP interface. Studio and the scheduler can run independently of all three examples.
+
+The [visual experiment branch](https://github.com/lazyalexander/an/tree/experiment/visual-studio) preserves the Bridge and CAD workflows, canvas, image services, composition benchmarks and their tests. The common boundary is a frozen artifact revision and its published bindings. Opening, exporting or resuming from a published visual delivery reads those records directly. Finish pending visual work with the experiment build. Use a separate registry for new experiments. A capability belongs on `dev` when a spool-independent contract can express it and a headless test can verify its behavior. A domain workflow stays with its fixtures and acceptance tests.
 
 ## Status
 
@@ -147,26 +149,14 @@ Experiment packages under `examples/` own prompts, document transformations, app
 | Instruction relay with revision binding | Implemented: unchanged text, sender turn, seen and current revision, stale flag |
 | Model calls through An for container subagents | Implemented for host-local Ollama via model nodes |
 | Scoped authority for a subagent | Agents have task- and turn-bound credentials. Drivers receive bound inputs and granted spools. Per-assignment delegation, access to selected blocks and returning reports to named recipients are proposed in [item 6](material-permissions.zh-CN.md). |
-| Model-backed subagents inside drivers | Bridge model mode uses a host-mediated inference result to choose the next subgraph |
+| Model-backed subagents inside drivers | The Markdown review driver reads a host-mediated inference result to select automatic revision or a human decision |
 | Presentation without the macro UI (CLI / harness rendering of decision types) | Interactive and JSON CLI implemented; dedicated harness rendering remains open |
-| Sketch surface (An's own pressure canvas) | Implemented: `sketch` decision type, Studio canvas, SVG line-art spool, host image model nodes for the finished painting; Krita path removed; iPad Safari pressure not yet measured |
 | Turn-level policy to avoid approval fatigue | Implemented for declared graph routes. Markdown review and minutes-to-announcement exercise the shared CLI and Studio authorization card. |
 | Reclamation of unreferenced intermediate artifacts | Implemented for unreferenced file revisions after task settlement. The workspace design adds retention for handoffs to the main agent and frozen review snapshots. |
 | Agent messages to the person (`an_graph_say`) | Implemented: idempotent, revision- and instruction-linked, shown in the timeline |
 | Starting a task from a sentence in the macro UI | Implemented: workspace Studio creates the task and the runner wakes the agent |
 | Harness-neutral agent runner | Implemented in the Studio controller: wakes on instructions, answers and resume; at most once; pause and stop respected; Codex adapter |
 | Versioned selections and explanations | Instructions already preserve the original text and graph revision. Binding a selected block and viewed cursor, opening its historical graph and saving a cited explanation are proposed in [item 8](natural-interaction.zh-CN.md). |
-| Presentation plugin contract beyond the sketch canvas (image, 3D viewers) | Not started |
-| Remote model providers with host-held credentials | Implemented for images: OpenAI Images API with the key read from the macOS Keychain at send time; text models remain host-local Ollama |
-| Image model nodes (sketch to finished painting) | Implemented: local SDXL + ControlNet scribble service and OpenAI backend behind the same node; local path verified end to end (33 s per image) |
 | Outbound curation: stage summaries and readable failure reasons | Implemented without a model: agent and driver submissions fold into titled stages with progress; failures carry a reason category shown as locale text |
 | Observations: plugin snapshots of what the person sees, as versioned context | Not started |
-| Spool catalog retrieval and composition evaluation | Task-scoped MCP catalog and a [seven-case composition benchmark](../examples/composition/README.md). Codex selection accuracy and live execution are awaiting measurement. |
-
-## Sketch surface
-
-An draws with its own canvas instead of driving a painting application. Krita was tried first as a native surface and removed: An could not control it well, it is a large collection of features of which An needs a small part, and a model can produce the finished picture from a sketch. Traditional application steps become spools written to An's rules, which An admits and controls.
-
-The canvas is a framework surface (`sketch` decision type). Strokes are versioned data: normalized `[x, y, pressure]` points with colour and size. Downstream spools turn them into line art; host image model nodes turn them into a finished painting.
-
-Pressure measurements on the reference machine: synthetic input reaches a canvas with zero pressure, and macOS delivers the Sidecar Pencil to ordinary applications as a plain mouse. Through the Codonic Pad injector (PadMac/PadPad), Chrome on the Mac receives genuine pen events: pressure 0.04–0.85 with 164 distinct values, tilt, about 85 Hz and 3 ms event latency. iPad Safari with Apple Pencil, which needs no injector, is not measured yet; the probe page is on the `spike/pressure-canvas` branch. Earlier probe evidence and the Krita adapter remain in git history.
+| Spool catalog | Task-scoped MCP discovery exposes the admitted interfaces available to the agent. |

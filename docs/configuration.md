@@ -16,9 +16,6 @@ Operational defaults live in [`config/an.json`](../config/an.json) and are compi
 | `graph_expansion_budget` | 256 | Nodes drivers may add to one task |
 | `instruction_max_bytes` | 4096 | Size of one relayed instruction |
 | `agent_message_max_bytes` | 4096 | Size of one agent message to the person |
-| `image_port` | 11435 | Loopback port of the local image service |
-| `image_timeout_s` | 600 | One image generation |
-| `image_output_bytes` | 33554432 | Size of an image input or result |
 | `model_aliases` | `{"local":"qwen3:8b"}` | Trusted alias mapping to installed local Ollama models |
 | `model_default_calls` | 4 | Task quota when the host grants an alias |
 | `ollama_port` | 11434 | Ollama port on 127.0.0.1 |
@@ -28,14 +25,13 @@ Operational defaults live in [`config/an.json`](../config/an.json) and are compi
 
 Format contracts that admission depends on stay in code: the 64 KiB `spool.yaml` limit, export path budgets and digest shape. An image is therefore admitted identically on every host.
 
+Existing host configurations may still contain image aliases and the former `image_port`, `image_timeout_s` and `image_output_bytes` settings. The mainline reader ignores those entries and retains the configured text aliases. Only local text models can be granted for new calls.
+
 ## Studio
 
 [`studio/config/studio.json`](../studio/config/studio.json) selects the locale and holds Studio settings (`graph.poll_ms`, `graph.panel_timeout_ms`, `graph.max_body_bytes`). The `agent` section configures the [agent runner](graph-studio.md#agent-runner): `command` (null disables it), `poll_ms`, `timeout_s` per wake, and `env`, the extra variable names passed to the agent. Pass `--config FILE` to `python3 -m orchestrator` to override them; the same unknown-key rule applies.
 
 Task Studio reads its labels from `studio/config/locales/<locale>.json`.
-
-`model_aliases` maps an alias to a local Ollama model name, or to an image backend object: `{"kind": "image", "backend": "local", "model": ...}` or `{"kind": "image", "backend": "openai", "model": ..., "keychain": SERVICE}`. API keys are never configuration; they live in the Keychain entry named by `keychain`.
-
 
 Studio and the headless controller accept JSON or TOML overrides through `--config`. They apply the same validation to both formats. For example:
 
