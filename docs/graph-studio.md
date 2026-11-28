@@ -38,6 +38,8 @@ A repeated identical submission returns its original receipt. A stale base retur
 
 Read `an_graph_state` with `after` set to the last event cursor. The result includes the current graph, activity, revision, cursor and later events. A container exit, an approval, a response or reconnection wakes scheduling. Task and SQLite locks serialize concurrent updates. Business responses and harness permission decisions use separate APIs.
 
+For the proposed reviewer interface, including how a harness resumes work from receipts and supplies frozen materials to a subagent, see [How agents access An (中文)](agent-access.zh-CN.md).
+
 ## Host model calls
 
 Grant an installed local model when creating a task, for example `an task new --model local --model-calls 4 --input request.json`.
@@ -96,6 +98,8 @@ The agent answers the person with `an_graph_say`: `text`, an `idempotency_key`, 
 ## Instructions
 
 The person can type to the agent. Pass `{"text": ..., "revision": N}` to `an graph --task TASK instruct` with the current `AN_TURN`, where `N` is the graph revision the person was looking at; Studio sends it from the box under the work area. An relays the text unchanged and never interprets it. The agent reads it from `an_graph_state` as an event with `actor: "user"`, `kind: "instruction"` and data `text`, `seen_revision`, `revision` and `stale`. `stale` is true when the graph moved on after the person looked. An instruction never answers a waiting surface; the agent may supersede that surface instead. Controls stay separate buttons. The size limit is `instruction_max_bytes` (see [Configuration](configuration.md)).
+
+The proposed interaction when someone refers to a selected document block or asks how it was produced is described in [Natural interaction and the role of models (中文)](natural-interaction.zh-CN.md).
 
 ## Declared panels and terminal decisions
 

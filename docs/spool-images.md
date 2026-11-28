@@ -4,6 +4,8 @@ An v0.3 uses `/bin/sleep infinity` as the idle process for explicitly loaded ins
 
 Each guest command ends at a VM stop boundary. An confirms the container has stopped and restarts its idle process before publishing results or accepting another command. The instance ID and mounted data persist across commands; guest processes and in-memory services end at the boundary. This adds a container stop/start to each command.
 
+The proposed contract for reusing an admitted spool across runs and following up after an instance is reclaimed is in [Spool, instance, container and run (中文)](spool-execution.zh-CN.md).
+
 ## spool/v2 image admission
 
 Ship the domain instructions as a nonblank, regular UTF-8 file at `/spool/SKILL.md` (maximum 256 KiB). Put at least one nonempty regular file under the real directory `/spool/code/`. Programs and dependencies may use any language. Describe commands, inputs and declared outputs in the skill. A writable task may copy the generator into `/work`; the packaged baseline is read-only.

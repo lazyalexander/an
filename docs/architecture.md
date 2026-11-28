@@ -1,16 +1,27 @@
 # Architecture
 
-An lets an agent run industrial work for one person. An is the only hub: the person, the agents and any presentation layer are its clients. It is the layer between the person and the agent: it curates what passes in each direction, and it chains isolated container programs and agents into a recorded pipeline. The person has one input, instructions and controls sent to An, and one output, the deliveries An publishes. Everything between them is planned by agents, executed in Apple Container and recorded by An. Painting, CAD and animation are instances of this shape, not separate products.
+An lets an agent run industrial work for one person. An is the only hub: the person, the agents and any presentation layer are its clients. It is the layer between the person and the agent: it curates what passes in each direction, and it chains isolated container programs and agents into a recorded pipeline. The person sends instructions and controls through An. Their workspace presents the materials handed to its main agent and the deliveries An publishes. Agents plan the work. An schedules the container steps through Apple Container and records their inputs and outputs. Painting, CAD and animation are instances of this shape, not separate products.
+
+## Artifact flow designs (中文)
+
+1. [Decision provenance and downstream effects](artifact-flow.zh-CN.md)
+2. [Artifact versions and cross-document block references](artifact-revisions.zh-CN.md)
+3. [Human, agent and An responsibilities](decision-authority.zh-CN.md)
+4. [Workspace, session, task and turn](workspace-lifecycle.zh-CN.md)
+5. [Spool, instance, container and run](spool-execution.zh-CN.md)
+6. [Identity, authorization and delegation](material-permissions.zh-CN.md)
+7. [How agents access An](agent-access.zh-CN.md)
+8. [Natural interaction and the role of models](natural-interaction.zh-CN.md)
 
 The [container engine design (中文)](container-engine.zh-CN.md) describes the execution boundary, recovery rules and headless acceptance checks.
 
 ## Final form
 
-1. **An agent and its subagents drive the work.** The main agent runs in the harness and talks to An through task-scoped MCP. Subagents run as drivers inside containers. A subagent never holds more authority than the agent that started it: it sees only its bound inputs, its granted spools and its task namespace.
-2. **Every action passes through An.** The person instructs An, and An relays the instruction to the agent. The agent acts only through An: graph submissions, transfers and model calls are An operations. Nothing addresses an agent, a container or another agent out of band.
+1. **One main agent is responsible for a workspace at a time.** It can advance several tasks through task-scoped MCP. The harness manages sessions and subagents. An mediates the materials handed to each task and returned to the main agent. Container drivers receive the inputs and spools granted for their work.
+2. **An mediates graph changes and artifact transfers.** The person sends instructions through An. The main agent submits work through the task gateway, including model calls and requests to downstream tools. The harness coordinates its agents' private work. An records who received protected material, exercised delegated authority or handed a result to a recipient.
 3. **Each part of the work runs in its own container.** Temporary code, temporary artifacts and secrets stay inside the container that needs them. Every transfer between containers crosses an An permission check.
 4. **No one draws a pipeline.** There is no predefined graph and no template. Agents decide the next step from the last result. A container may use a fixed internal procedure. Between containers, the graph grows as work happens: it is the execution record and the provenance, not a plan.
-5. **A text box whenever a person is involved.** The macro UI resembles a mainstream agent harness: the person starts and steers work by typing, and the agent answers in the same timeline. Work that needs more than text, such as pressure painting or image and model inspection, is added as presentation plugins. A headless batch pipeline may use only the CLI. Intervention is mandatory in every pipeline.
+5. **A text box whenever a person is involved.** The macro UI resembles a mainstream agent harness: the person starts and steers work by typing, and the agent answers in the same timeline. Work that needs more than text, such as pressure painting or image and model inspection, is added as presentation plugins. A headless batch pipeline may use only the CLI. The person sets the goal and can delegate decisions within a recorded scope.
 
 ## How the parts fit
 
@@ -24,11 +35,11 @@ person ── instructions / controls ──┐
                                     │
              ┌──────────────────────┼─────────────────────┐
           run nodes            expand nodes          surface / delivery nodes
-          (spools)             (subagent drivers,    (panels for the person,
+          (spools)             (staged drivers,      (panels for the person,
                                 model calls via An)   published results)
 ```
 
-- **Decisions are recorded before they run.** An agent's choice becomes a graph submission with an idempotency key and a base revision. Recovery reads the record and never asks the model again.
+- **Decisions are recorded before they run.** Graph submissions record an agent's workflow choices with an idempotency key and a base revision. The proposed business decision record also identifies the decision-maker, grant and evidence. Recovery reuses the recorded choice and reconciles its outstanding effects.
 - **Drivers are staged, not resident.** An `expand` node runs a driver to completion in a dedicated short-lived instance and returns `subgraph.json`. A surface can name a `continuation` expand node that consumes the person's response. Waiting for the person holds no container. State a driver wants to keep is an output bound to the next driver. A resident driver may later serve as a cache, but correctness depends only on the staged record.
 - **The graph is append-only.** Nodes keep immutable IDs. `retry` re-runs failed or cancelled attempts. `supersede` replaces queued work or waiting surfaces. Earlier deliveries can be resumed as a new task's `original` input.
 - **Instances are reclaimed by the host.** Settled runs and drivers are unloaded by the scheduler, not by agent discretion.
@@ -44,12 +55,11 @@ An separates two channels from the person:
 
 ## Curation between the person and the agent
 
-An curates both directions, without becoming a second agent:
+The main agent interprets free text. An presents recorded facts and executes the person's controls even while the agent is offline. The workspace requires no resident LLM in An. [Natural interaction and the role of models (中文)](natural-interaction.zh-CN.md)
 
-- **The original is always kept.** Curation adds a layer on top of the original text and never replaces it. Both are recorded, and the agent can read both.
-- **Person to agent:** An attaches context, not new intent: the graph revision the person was looking at, the selected node or artifact and the turn. It does not paraphrase what the person meant.
-- **Agent to person:** An turns agent output into timeline entries: messages, stage summaries, decisions and deliveries. Prompts, tool calls and the agent loop stay hidden. This direction matters most, because it is what makes the macro UI readable.
-- **Curation by a model is a graph step.** If a model rewrites or summarises, it runs as a recorded node with its own inputs and outputs, so every change can be traced. Nothing on the relay path is rewritten silently.
+- **What the person said and saw.** An preserves the original instruction and its turn. The proposed context records the viewed graph revision and event cursor, the selected artifact version and block, and any explicitly selected recipient. The agent receives the context it is authorized to use.
+- **What happened.** The timeline shows instructions, agent messages, stage progress, decisions, deliveries, failures and controls. The proposed artifact view traces the selected block to its sources and the graph at the time. Opening captured model inputs and execution logs requires evidence access.
+- **What it means.** The person can ask the main agent to explain the evidence and save a versioned explanation with its author and citations. If the task uses a model node to summarize or rewrite material, An records the model call and its input and output versions.
 
 ## What sets An apart from a chat harness
 
@@ -78,8 +88,8 @@ So An targets bounded domains first: tens of curated spools, a person at the dec
 ## Starting work and agent replies
 
 - **Start from a sentence.** The person opens the macro UI for a workspace and types what they want. An creates a task, begins a turn and records the sentence as the task's first instruction. The agent attached to that task picks it up.
-- **The agent talks through An.** The agent posts messages to the person with `an_graph_say`: progress, a question, or a result. Each message is recorded with the graph revision it refers to and, when it answers an instruction, that instruction's cursor. Messages appear in the timeline; they never carry decisions, which stay typed surfaces.
-- **The agent runner belongs to the product.** Whatever wakes the agent when a task starts, an instruction arrives or a surface is answered must be a harness-neutral part of An, not an example script.
+- **The agent talks through An.** The agent posts messages to the person with `an_graph_say`: progress, a question, or a result. Each message is recorded with the graph revision it refers to and, when it answers an instruction, that instruction's cursor. Messages appear in the timeline. A typed surface records a person's response. The proposed delegation contract records a decision taken by an authorized agent.
+- **The controller wakes the configured harness.** An passes task events such as a new instruction or an answered surface to the harness through the agent runner. The harness chooses which agent or thread to start or resume.
 
 ## Presentation plugins
 
@@ -87,7 +97,7 @@ A plugin presents a kind of surface that a basic form cannot, inside the macro U
 
 ## Agent boundary
 
-- The harness exposes only task-scoped An MCP to the agent. A general shell under the controller's identity defeats the boundary and is not permitted.
+- The main agent operates An through task-scoped MCP. A harness that offers shell tools must isolate the host registry, control socket and controller credentials from those tools. The proposed review interface gives a subagent frozen files for ordinary review and scoped access for independent protected actions. [How agents access An (中文)](agent-access.zh-CN.md)
 - Container drivers have no network. A subagent that needs a model calls it through An: credentials stay on the host, and each call is budgeted and recorded per task. No model credential enters a container.
 
 ## Presentation
@@ -98,7 +108,7 @@ A spool declares the interaction it needs in its manifest, next to its inputs an
 
 A declaration uses a small set of decision types: choose among artifacts, locate a point or region on an artifact, adjust a value or enumeration, confirm or reject, and compare versions. The response schema follows from the declaration. A spool may also ship a custom panel package for the macro UI, but it must declare one of these types as a fallback so the CLI and the harness can present the same decision.
 
-Ask the person only when the agent should not decide alone: an irreversible step, a matter of taste, ambiguous intent or a costly branch. One surface asks one decision and always offers "let the agent decide". Several waiting surfaces are queued by priority, not shown at once. Responses are recorded so later runs can ask less.
+Ask the person when their judgment or authority is needed, for example on a matter of taste, ambiguous intent, a costly branch or an irreversible action. A surface names the choice and can offer "let the agent decide" when the person has authority to delegate it. A combined confirmation lists each covered action and An records each separately. Waiting surfaces are queued by priority. Responses are recorded so later runs can ask less.
 
 This needs a manifest schema after `an.spool/v1`, whose reader rejects unknown fields.
 
@@ -127,22 +137,25 @@ Experiment packages under `examples/` own prompts, document transformations, app
 | Incremental graph with run, surface, delivery | Implemented |
 | Staged container drivers (`expand`, `continuation`) | Implemented |
 | Delivery resume as a new task | Implemented |
+| Main agent workspace across sessions | Designed. Explicit handoffs create durable review items. Reviewers can receive read-only evidence snapshots scoped to a graph revision and event cursor. |
+| Follow-up work across agents and fresh instances | Designed. A follow-up links its original delegation, report version and new run evidence. |
 | Host-side instance reclamation | Implemented for settled runs and drivers |
 | Macro UI with panels, permissions, deliveries | Implemented with a task timeline, inline decisions, deliveries and task controls |
 | Spool-declared UI and decision types (manifest after v1) | Implemented in `an.spool/v2`, with pinned presentations and host-validated responses |
+| Delegated business decisions and versioned review conclusions | Designed. The decision record links the authorized decision-maker, grant, review evidence and subsequent effects. |
 | Control channel (pause, resume, stop) | Implemented: host-executed, turn-gated, recorded as user events; not exposed to agents |
 | Instruction relay with revision binding | Implemented: unchanged text, sender turn, seen and current revision, stale flag |
 | Model calls through An for container subagents | Implemented for host-local Ollama via model nodes |
-| Subagent authority as a strict subset of its parent | Partial: drivers see bound inputs and granted spools; model aliases and call quotas are task-scoped |
+| Scoped authority for a subagent | Agents have task- and turn-bound credentials. Drivers receive bound inputs and granted spools. Per-assignment delegation, access to selected blocks and returning reports to named recipients are proposed in [item 6](material-permissions.zh-CN.md). |
 | Model-backed subagents inside drivers | Bridge model mode uses a host-mediated inference result to choose the next subgraph |
 | Presentation without the macro UI (CLI / harness rendering of decision types) | Interactive and JSON CLI implemented; dedicated harness rendering remains open |
 | Sketch surface (An's own pressure canvas) | Implemented: `sketch` decision type, Studio canvas, SVG line-art spool, host image model nodes for the finished painting; Krita path removed; iPad Safari pressure not yet measured |
 | Turn-level policy to avoid approval fatigue | Implemented for declared graph routes. Markdown review and minutes-to-announcement exercise the shared CLI and Studio authorization card. |
-| Reclamation of unreferenced intermediate artifacts | Not started |
+| Reclamation of unreferenced intermediate artifacts | Implemented for unreferenced file revisions after task settlement. The workspace design adds retention for handoffs to the main agent and frozen review snapshots. |
 | Agent messages to the person (`an_graph_say`) | Implemented: idempotent, revision- and instruction-linked, shown in the timeline |
 | Starting a task from a sentence in the macro UI | Implemented: workspace Studio creates the task and the runner wakes the agent |
 | Harness-neutral agent runner | Implemented in the Studio controller: wakes on instructions, answers and resume; at most once; pause and stop respected; Codex adapter |
-| Curation layer (original kept, context attached, outbound summaries) | Partial: instructions carry revision and turn; no outbound summaries |
+| Versioned selections and explanations | Instructions already preserve the original text and graph revision. Binding a selected block and viewed cursor, opening its historical graph and saving a cited explanation are proposed in [item 8](natural-interaction.zh-CN.md). |
 | Presentation plugin contract beyond the sketch canvas (image, 3D viewers) | Not started |
 | Remote model providers with host-held credentials | Implemented for images: OpenAI Images API with the key read from the macOS Keychain at send time; text models remain host-local Ollama |
 | Image model nodes (sketch to finished painting) | Implemented: local SDXL + ControlNet scribble service and OpenAI backend behind the same node; local path verified end to end (33 s per image) |
