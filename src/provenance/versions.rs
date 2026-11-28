@@ -107,6 +107,7 @@ pub fn commit(tx: &Transaction, actor: &Actor, mut batch: Batch) -> Result<Value
         }
     }
     for item in &receipt {
+        validate_reshape(tx, item)?;
         let cycle:bool=tx.query_row("WITH RECURSIVE path(start,a,v,b) AS (
              SELECT block,source,source_version,source_block FROM pv_edge WHERE artifact=?1 AND version=?2
              UNION SELECT p.start,e.source,e.source_version,e.source_block FROM path p JOIN pv_edge e
@@ -246,4 +247,20 @@ fn insert(
         artifact: draft.artifact.clone(),
         version: VersionId(version),
     })
+}
+
+/// Structural edits replace parent blocks with fresh positions in one revision.
+/// Ordinary citations can continue to reference any authorized frozen version.
+fn validate_reshape(tx: &Transaction, item: &VersionRef) -> Result<()> {
+    let invalid: Option<String> = tx
+        .query_row(
+            include_str!("invalid_reshape.sql"),
+            params![item.artifact.0, item.version.0],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(block) = invalid {
+        anyhow::bail!("Invalid split or merge at block {block}");
+    }
+    Ok(())
 }

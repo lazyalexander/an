@@ -29,6 +29,8 @@ pub struct BlockRef {
 pub enum Relation {
     Quotes,
     BasedOn,
+    SplitFrom,
+    MergedFrom,
     Verifies,
 }
 

@@ -185,3 +185,60 @@ fn moving_a_block_preserves_identity_and_removal_retires_it() -> Result<()> {
     assert_eq!(view["blocks"][1]["ref"]["block"], "a");
     Ok(())
 }
+
+#[test]
+fn split_and_merge_keep_both_paths_to_the_original_block() -> Result<()> {
+    let mut db = db()?;
+    let actor = access::test_controller("t");
+    let mut edit = |expected, blocks: Vec<Value>| -> Result<()> {
+        let tx = db.transaction()?;
+        let batch = versions::parse(json!({"idempotency_key":"edit","versions":[{
+            "artifact":"doc","expected":expected,"kind":"document","blocks":blocks
+        }]}))?;
+        versions::commit(&tx, &actor, batch)?;
+        Ok(tx.commit()?)
+    };
+    let derived = |id, relation, version, parents: &[&str]| {
+        let cites: Vec<_> = parents
+            .iter()
+            .map(|p| {
+                json!({"relation":relation,
+            "source":{"artifact":"doc","version":version,"block":p}})
+            })
+            .collect();
+        json!({"id":id,"text":id,"cites":cites})
+    };
+    edit(
+        0,
+        vec![json!({"id":"original","text":"original","original":true})],
+    )?;
+    let left = derived("left", "split_from", 1, &["original"]);
+    assert!(edit(1, vec![left.clone()]).is_err());
+    edit(
+        1,
+        vec![left, derived("right", "split_from", 1, &["original"])],
+    )?;
+    assert!(edit(
+        2,
+        vec![derived("left", "merged_from", 2, &["left", "right"])]
+    )
+    .is_err());
+    edit(
+        2,
+        vec![derived("combined", "merged_from", 2, &["left", "right"])],
+    )?;
+    for (version, block, direction) in [
+        (1, "original", query::Direction::Impact),
+        (3, "combined", query::Direction::Sources),
+    ] {
+        let trace = query::trace(
+            &db,
+            &actor,
+            &json!({"artifact":"doc","version":version,"block":block}),
+            direction,
+        )?;
+        assert_eq!(trace["edges"].as_array().unwrap().len(), 4);
+        assert_eq!(trace["blocks"].as_array().unwrap().len(), 4);
+    }
+    Ok(())
+}
