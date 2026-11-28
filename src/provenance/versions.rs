@@ -41,6 +41,12 @@ pub fn commit(tx: &Transaction, actor: &Actor, mut batch: Batch) -> Result<Value
             valid_name(&draft.artifact.0) && created.insert(draft.artifact.clone()),
             "Invalid or repeated artifact ID"
         );
+        if draft.attribution.is_some() {
+            ensure!(
+                draft.kind == Kind::Decision,
+                "Expected decision attribution"
+            );
+        }
         receipt.push(insert(
             tx,
             actor,
@@ -52,6 +58,9 @@ pub fn commit(tx: &Transaction, actor: &Actor, mut batch: Batch) -> Result<Value
     // may point forward, subject to the same authority and cycle checks.
     for (draft, item) in batch.versions.iter().zip(&receipt) {
         let version = item.version.0;
+        if let Some(record) = &draft.attribution {
+            super::attribution::save(tx, item, &draft.blocks, record)?;
+        }
         for block in &draft.blocks {
             for citation in &block.cites {
                 let src = &citation.source;
@@ -140,12 +149,13 @@ fn insert(
         )
         .context("Artifact already registered")?;
     } else {
-        actor.require(
-            tx,
-            Right::Revise {
-                artifact: draft.artifact.clone(),
-            },
-        )?;
+        let artifact = draft.artifact.clone();
+        let right = if draft.attribution.is_some() {
+            Right::Register { artifact }
+        } else {
+            Right::Revise { artifact }
+        };
+        actor.require(tx, right)?;
         ensure!(
             tx.execute(
                 "UPDATE pv_artifact SET head=? WHERE id=? AND head=? AND kind=?",

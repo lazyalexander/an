@@ -200,6 +200,9 @@ fn describe(db: &Connection, actor: &Actor, endpoint: &BlockRef) -> Result<Value
             },
         )?;
     if local_controller || owner {
+        if let Some(record) = super::attribution::visible(db, actor, endpoint)? {
+            item["attribution"] = record;
+        }
         item["registered_by"] = json!(row.author);
         item["reported_participant"] = json!(row.participant);
         if let Some(id) = row.author.strip_prefix("agent:") {

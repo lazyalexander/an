@@ -76,3 +76,7 @@ CREATE TABLE IF NOT EXISTS pv_product (
     task TEXT NOT NULL,attempt TEXT NOT NULL,revision TEXT NOT NULL,
     PRIMARY KEY(task,attempt,revision)
 );
+CREATE TABLE IF NOT EXISTS pv_attribution (
+    artifact TEXT NOT NULL, version INTEGER NOT NULL, record TEXT NOT NULL, registered_at INTEGER NOT NULL,
+    PRIMARY KEY (artifact, version)
+);

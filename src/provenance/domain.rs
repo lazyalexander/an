@@ -74,6 +74,23 @@ pub enum Kind {
     Report,
 }
 
+#[derive(Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReportedOutcome {
+    Approved,
+    Suggested,
+}
+
+#[derive(Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Attribution {
+    pub outcome: ReportedOutcome,
+    pub speaker: Option<String>,
+    pub source_time: Option<String>,
+    pub statement: BlockRef,
+    pub authority: Option<BlockRef>,
+}
+
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Draft {
@@ -82,6 +99,7 @@ pub struct Draft {
     pub kind: Kind,
     pub material: Option<Material>,
     pub declaration: Option<Material>,
+    pub attribution: Option<Attribution>,
     pub file: Option<String>,
     #[serde(default)]
     pub blocks: Vec<Block>,

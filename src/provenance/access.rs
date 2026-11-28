@@ -16,6 +16,9 @@ pub enum Right {
         artifact: ArtifactId,
         version: VersionId,
     },
+    Register {
+        artifact: ArtifactId,
+    },
     Revise {
         artifact: ArtifactId,
     },
@@ -146,7 +149,9 @@ impl Actor {
                     |row| row.get(0),
                 )?)
             }
-            Right::Revise { artifact } | Right::Decide { artifact, .. } => self.owns(db, artifact),
+            Right::Register { artifact }
+            | Right::Revise { artifact }
+            | Right::Decide { artifact, .. } => self.owns(db, artifact),
         }
     }
 

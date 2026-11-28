@@ -1,5 +1,6 @@
 //! The transaction boundary shared by the CLI and the task MCP gateway.
 mod access;
+mod attribution;
 pub(crate) mod continuation;
 mod domain;
 mod evidence;
