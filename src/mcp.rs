@@ -114,6 +114,21 @@ impl Gateway {
                 json!({"task":self.task,"workspace":get(&connect()?,"task",&self.task)?["workspace"]}),
             ));
         }
+        if name == "an_provenance" && self.builtins.contains_key(name) {
+            validate_builtin(&self.builtins[name].input_schema, &args)?;
+            let action = args["action"]
+                .as_str()
+                .context("Expected provenance action")?;
+            ensure!(
+                !matches!(action, "grant" | "revoke" | "admit-material" | "freeze"),
+                "Controller CLI required"
+            );
+            return Ok(text(crate::provenance::execute(
+                &self.task,
+                action,
+                &args["payload"],
+            )?));
+        }
         permission::current(&connect()?, &self.task)?;
         if let Some(tool) = self.builtins.get(name) {
             validate_builtin(&tool.input_schema, &args)?;
@@ -322,9 +337,9 @@ fn validate_builtin(schema: &JsonObject, args: &Value) -> Result<()> {
         ensure!(
             match def["type"].as_str() {
                 Some("string") => v.is_string(),
-                Some("object") => v
-                    .as_object()
-                    .is_some_and(|m| m.values().all(Value::is_string)),
+                Some("object") => v.as_object().is_some_and(|m| def["additionalProperties"]
+                    == true
+                    || m.values().all(Value::is_string)),
                 Some("integer") => v.as_u64().is_some_and(|n| i64::try_from(n).is_ok()),
                 Some("array") => v.as_array().is_some_and(|a| a.iter().all(|item| {
                     if def["items"]["type"] == "object" {
@@ -457,15 +472,21 @@ pub async fn execute() -> Result<()> {
                 id
             };
             let record = get(&connect()?, "task", &task)?;
-            let bootstrap = env::var("AN_TURN").unwrap_or_default().is_empty()
+            let scoped = crate::provenance::scoped();
+            if scoped {
+                crate::provenance::authenticate(&connect()?, &task)?;
+            }
+            let bootstrap = !scoped
+                && env::var("AN_TURN").unwrap_or_default().is_empty()
                 && env::var("AN_AGENT_TOKEN").unwrap_or_default().is_empty();
-            if !bootstrap {
+            if !bootstrap && !scoped {
                 crate::transfer::Transfer::recover()?;
                 crate::graph::wake(&task)?;
             }
             let mut builtins = BTreeMap::new();
             for tool in serde_json::from_str::<Vec<Tool>>(include_str!("tools.json"))? {
                 if (tool.name != "an_deliveries" || record["workspace"].is_string())
+                    && (!scoped || tool.name == "an_provenance")
                     && (!bootstrap || tool.name == "an_state")
                 {
                     builtins.insert(tool.name.to_string(), tool);
@@ -474,7 +495,10 @@ pub async fn execute() -> Result<()> {
             let mut routes = BTreeMap::new();
             let mut peers = BTreeMap::new();
             let mut states = BTreeMap::new();
-            if let Some(grants) = record["tools"].as_object().filter(|_| !bootstrap) {
+            if let Some(grants) = record["tools"]
+                .as_object()
+                .filter(|_| !bootstrap && !scoped)
+            {
                 let mut discovery = tokio::task::JoinSet::new();
                 for server in grants
                     .keys()

@@ -1,0 +1,163 @@
+//! Capability lookup is repeated in the operation transaction, including on replay.
+use super::domain::{ArtifactId, VersionId};
+use crate::{
+    permission,
+    store::{find, get, hash, put, uid},
+};
+use anyhow::{ensure, Context, Result};
+use rusqlite::{Connection, OptionalExtension};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+
+#[derive(Clone, Deserialize, Serialize, PartialEq)]
+#[serde(tag = "right", rename_all = "snake_case", deny_unknown_fields)]
+pub enum Right {
+    Read {
+        artifact: ArtifactId,
+        version: VersionId,
+    },
+    Revise {
+        artifact: ArtifactId,
+    },
+    Decide {
+        artifact: ArtifactId,
+        version: VersionId,
+    },
+    Evidence {
+        snapshot: String,
+    },
+}
+
+pub struct Actor {
+    pub id: String,
+    pub task: String,
+    pub grant: Option<String>,
+    rights: Vec<Right>,
+}
+
+pub fn scoped() -> bool {
+    std::env::var_os("AN_PROVENANCE_TOKEN").is_some()
+}
+
+impl Actor {
+    pub fn authenticate(db: &Connection, task: &str) -> Result<Self> {
+        if let Ok(token) = std::env::var("AN_PROVENANCE_TOKEN") {
+            let digest = hash(token.as_bytes());
+            let grant = find(db, "provenance_key", &digest)?.context("Inactive delegation")?;
+            let record = get(
+                db,
+                "provenance_grant",
+                grant.as_str().context("Invalid delegation")?,
+            )?;
+            ensure!(
+                record["active"] == true
+                    && record["target"] == task
+                    && record["epoch"].is_string()
+                    && get(db, "turn", task)? == record["epoch"],
+                "Inactive delegation"
+            );
+            return Ok(Self {
+                id: format!("agent:{}", record["id"].as_str().unwrap()),
+                task: task.into(),
+                grant: Some(grant.as_str().unwrap().into()),
+                rights: serde_json::from_value(record["rights"].clone())?,
+            });
+        }
+        permission::controller(db, task)?;
+        Ok(Self {
+            id: format!("controller:{task}"),
+            task: task.into(),
+            grant: None,
+            rights: vec![],
+        })
+    }
+
+    pub fn controller(&self) -> Result<()> {
+        ensure!(self.grant.is_none(), "Controller required");
+        Ok(())
+    }
+
+    fn owns(&self, db: &Connection, artifact: &ArtifactId) -> Result<bool> {
+        let owner: Option<String> = db
+            .query_row(
+                "SELECT owner FROM pv_artifact WHERE id=?",
+                [&artifact.0],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(owner.as_deref() == Some(&self.task) && self.grant.is_none())
+    }
+
+    pub fn allows(&self, db: &Connection, right: &Right) -> Result<bool> {
+        if self.grant.is_some() {
+            return Ok(self.rights.contains(right));
+        }
+        match right {
+            Right::Evidence { snapshot } => {
+                Ok(find(db, "frozen_evidence", snapshot)?.is_some_and(|s| s["task"] == self.task))
+            }
+            Right::Read { artifact, .. }
+            | Right::Revise { artifact }
+            | Right::Decide { artifact, .. } => self.owns(db, artifact),
+        }
+    }
+
+    pub fn require(&self, db: &Connection, right: Right) -> Result<()> {
+        ensure!(self.allows(db, &right)?, "Material outside authority");
+        Ok(())
+    }
+}
+
+pub fn grant(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
+    actor.controller()?;
+    let target = args["target"].as_str().context("Expected target task")?;
+    let workspace = get(db, "task", &actor.task)?["workspace"].clone();
+    ensure!(
+        actor.task == target
+            || (workspace.is_string() && get(db, "task", target)?["workspace"] == workspace),
+        "Target outside workspace"
+    );
+    let epoch = get(db, "turn", target)?;
+    ensure!(epoch.is_string(), "Target turn inactive");
+    let rights: Vec<Right> = serde_json::from_value(args["rights"].clone())?;
+    ensure!(!rights.is_empty(), "Empty grant");
+    for right in &rights {
+        actor.require(db, right.clone())?;
+        if let Right::Read { artifact, version } | Right::Decide { artifact, version } = right {
+            ensure!(
+                db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM pv_version WHERE artifact=? AND version=?)",
+                    rusqlite::params![artifact.0, version.0],
+                    |r| r.get::<_, bool>(0)
+                )?,
+                "Unknown version"
+            );
+        }
+    }
+    let id = uid();
+    let secret = uid();
+    let record = json!({"id":id,"issuer":actor.id,"task":actor.task,"target":target,"epoch":epoch,"rights":rights,"active":true});
+    put(db, "provenance_grant", &id, &record)?;
+    put(db, "provenance_key", &hash(secret.as_bytes()), &json!(id))?;
+    Ok(json!({"grant":id,"token":secret}))
+}
+
+pub fn revoke(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
+    actor.controller()?;
+    let id = args["grant"].as_str().context("Expected grant")?;
+    let mut record = get(db, "provenance_grant", id)?;
+    ensure!(record["issuer"] == actor.id, "Outside authority");
+    record["active"] = json!(false);
+    put(db, "provenance_grant", id, &record)?;
+    Ok(json!({"grant":id,"active":false}))
+}
+
+#[cfg(test)]
+pub(super) fn test_controller(task: &str) -> Actor {
+    Actor {
+        id: format!("controller:{task}"),
+        task: task.into(),
+        grant: None,
+        rights: vec![],
+    }
+}

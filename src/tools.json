@@ -1,5 +1,10 @@
 [
   {
+    "name":"an_provenance",
+    "description":"Query versioned blocks, impacts, graph history and frozen evidence. Commit or decide with an explicit delegation. Send the same JSON payload as an provenance.",
+    "inputSchema":{"type":"object","properties":{"action":{"type":"string"},"payload":{"type":"object","additionalProperties":true}},"required":["action","payload"],"additionalProperties":false}
+  },
+  {
     "name": "an_catalog",
     "description": "Discover task inputs and admitted spool interfaces without starting containers. Compare input and output ports, then read an_skill for the selected spool commands and output filenames.",
     "inputSchema": {"type": "object", "properties": {}, "required": [], "additionalProperties": false}
@@ -226,6 +231,7 @@
     "inputSchema": {
       "type": "object",
       "properties": {
+        "decision_receipt":{"type":"string"},
         "base_revision": {
           "type": "integer"
         },

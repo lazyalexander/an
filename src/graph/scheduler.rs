@@ -187,7 +187,9 @@ pub(super) fn advance(
             finished |= state["status"] == "done";
             if graph["activity"][id] != state {
                 if state["status"] == "authorization_expired" {
+                    graph["activity"][id] = state.clone();
                     event(graph, "host", "authorization_expired", id, state.clone());
+                    put(db, "graph", task, graph)?;
                     state = attempt::next(&state)?;
                     finished = true;
                 }
@@ -263,6 +265,7 @@ fn accept_expansion(
         state["proposal_request"] = request["request_id"].clone();
         state["status"] = json!(AttemptStatus::PermissionRequired);
         graph["activity"][id] = state.clone();
+        event(graph, "host", "proposal_permission_required", id, json!({}));
         put(&tx, "graph", task, graph)?;
         tx.commit()?;
         return Ok(());
@@ -373,6 +376,13 @@ fn step(
             if state["instance"].is_null() {
                 state["instance"] = json!(format!("driver-{attempt}"));
                 graph["activity"][field(node, "id")?] = state.clone();
+                event(
+                    graph,
+                    "host",
+                    "driver_reserved",
+                    field(node, "id")?,
+                    json!({}),
+                );
                 put(db, "graph", task, graph)?;
             }
             instances::dispatch_locked(

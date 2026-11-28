@@ -59,6 +59,15 @@ pub fn current(db: &Connection, task: &str) -> Result<String> {
     bail!("Active host turn required")
 }
 
+pub(crate) fn controller(db: &Connection, task: &str) -> Result<()> {
+    ensure!(
+        get(db, "turn", task)?.is_string()
+            && host_valid(db, task, &env::var("AN_TURN").unwrap_or_default())?,
+        "Active controller credential required"
+    );
+    Ok(())
+}
+
 fn host_valid(db: &Connection, task: &str, secret: &str) -> Result<bool> {
     if secret.is_empty() {
         return Ok(false);

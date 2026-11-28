@@ -21,6 +21,7 @@ pub fn connect() -> Result<Connection> {
     let db = Connection::open(root()?.join("registry.sqlite3"))?;
     db.busy_timeout(crate::config::load()?.seconds("sqlite_busy_s"))?;
     db.execute_batch("CREATE TABLE IF NOT EXISTS objects (kind, id, body, PRIMARY KEY(kind,id))")?;
+    crate::provenance::schema(&db)?;
     Ok(db)
 }
 pub fn uid() -> String {

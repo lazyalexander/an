@@ -37,6 +37,10 @@ fn field<'a>(v: &'a Value, key: &str) -> Result<&'a str> {
         .with_context(|| format!("Expected {key}"))
 }
 
+pub(crate) fn empty() -> Value {
+    json!({"revision":0,"nodes":{},"activity":{},"events":[]})
+}
+
 pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
     let mut db = connect()?;
     let lock = instances::lock(&db, task)?;
@@ -131,6 +135,14 @@ pub fn dispatch(task: &str, op: &str, args: &Value) -> Result<Value> {
     if let Some(cursor) = instruction_cursor {
         submission["instruction_cursor"] = cursor.clone();
     }
+    if let Some(cause) = args.get("decision_receipt") {
+        crate::provenance::require_accepted(
+            &tx,
+            task,
+            cause.as_str().context("Expected decision receipt")?,
+        )?;
+        submission["decision_receipt"] = cause.clone();
+    }
     events.push(submission);
     let receipt = json!({"revision":rev,"cursor":cursor,"status":"accepted"});
     put(&tx, "graph", task, &graph)?;
@@ -152,7 +164,7 @@ fn now_ms() -> u64 {
         .as_millis() as u64
 }
 
-fn event(graph: &mut Value, actor: &str, kind: &str, id: &str, data: Value) {
+pub(crate) fn event(graph: &mut Value, actor: &str, kind: &str, id: &str, data: Value) {
     let events = graph["events"].as_array_mut().unwrap();
     events.push(json!({"cursor":events.len()+1,"time_ms":now_ms(),"actor":actor,"kind":kind,"node":id,"data":data}));
 }

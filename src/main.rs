@@ -9,6 +9,7 @@ mod manifest;
 mod mcp;
 mod panels;
 mod permission;
+mod provenance;
 mod runtime;
 mod store;
 mod transfer;
@@ -62,6 +63,11 @@ enum Core {
     },
     /// Task-host graph interface. Read arguments as JSON on stdin.
     Graph {
+        #[command(flatten)]
+        target: Task,
+        action: String,
+    },
+    Provenance {
         #[command(flatten)]
         target: Task,
         action: String,
@@ -138,6 +144,10 @@ fn call(t: Task, op: &str, a: Value) -> Result<()> {
 }
 fn run() -> Result<()> {
     let op = std::env::args().nth(1).unwrap_or_default();
+    ensure!(
+        !provenance::scoped() || matches!(op.as_str(), "provenance" | "mcp"),
+        "Delegation limited to provenance"
+    );
     match op.as_str() {
         "task-cursors" => {
             display(permission::cursors(serde_json::from_reader(
@@ -270,6 +280,11 @@ fn run() -> Result<()> {
         Core::Graph { target, action } => {
             let args = serde_json::from_reader(std::io::stdin().lock())?;
             display(graph::host(&target.task, &action, &args)?);
+            Ok(())
+        }
+        Core::Provenance { target, action } => {
+            let args = serde_json::from_reader(std::io::stdin().lock())?;
+            display(provenance::execute(&target.task, &action, &args)?);
             Ok(())
         }
         Core::Decision { action } => decision::execute(action),
