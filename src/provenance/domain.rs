@@ -112,6 +112,7 @@ pub struct Decision {
     pub version: VersionId,
     pub choice: Choice,
     pub seen_cursor: u64,
+    pub review: Option<BlockRef>,
     pub reason: Option<String>,
     pub reported_participant: Option<String>,
 }

@@ -18,7 +18,11 @@ def check():
 
         def cli(*args, body=None):
             result = subprocess.check_output(
-                [binary, *args], env=env, text=True, input=json.dumps(body or {})
+                [binary, *args],
+                env=env,
+                text=True,
+                input=json.dumps(body or {}),
+                stderr=subprocess.PIPE,
             )
             return json.loads(result)
 
@@ -114,10 +118,147 @@ def check():
                 raise AssertionError("live MCP session retained revoked authority")
         finally:
             client.close()
+        check_conditional_rejection(provenance, binary, env, task)
         cli("graph", "--task", task, "finish")
         print(
-            "Verified MCP identity, projected edges, delegated rejection and live revocation."
+            "Verified MCP identity, projected edges, report-bound rejection, replay and revocation."
         )
+
+
+def check_conditional_rejection(provenance, binary, env, task):
+    target = {"artifact": "choice", "version": 2}
+    report = {"artifact": "review", "version": 2, "block": "finding"}
+    checked = {**target, "block": "conclusion"}
+    provenance(
+        "commit",
+        idempotency_key="second-review",
+        versions=[
+            {
+                "artifact": "choice",
+                "expected": 1,
+                "kind": "decision",
+                "blocks": [
+                    {"id": "conclusion", "text": "new proposal", "original": True}
+                ],
+            },
+            {
+                "artifact": "review",
+                "expected": 0,
+                "kind": "report",
+                "blocks": [
+                    {"id": "finding", "text": "pending review", "original": True}
+                ],
+            },
+        ],
+    )
+
+    def session(grant):
+        return Mcp(
+            {
+                "command": binary,
+                "args": ["mcp", "--task", task],
+                "env": {**env, "AN_TURN": "", "AN_PROVENANCE_TOKEN": grant["token"]},
+            }
+        )
+
+    reviewer = provenance(
+        "grant",
+        target=task,
+        rights=[{"right": "revise", "artifact": "review"}, {"right": "read", **target}],
+    )
+    client = session(reviewer)
+    try:
+        client.tool(
+            "an_provenance",
+            {
+                "action": "commit",
+                "payload": {
+                    "idempotency_key": "signed-finding",
+                    "versions": [
+                        {
+                            "artifact": "review",
+                            "expected": 1,
+                            "kind": "report",
+                            "blocks": [
+                                {
+                                    "id": "finding",
+                                    "text": "evidence missing",
+                                    "cites": [
+                                        {"relation": "verifies", "source": checked}
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                },
+            },
+        )
+        signed = provenance("sources", **report)["blocks"][0]
+        assert signed["registered_by"] == "agent:" + reviewer["grant"]
+        try:
+            client.tool(
+                "an_provenance",
+                {
+                    "action": "decide",
+                    "payload": {
+                        **target,
+                        "review": report,
+                        "choice": "reject",
+                        "seen_cursor": 4,
+                        "idempotency_key": "review-only",
+                    },
+                },
+            )
+        except RuntimeError as error:
+            assert "outside authority" in str(error), error
+        else:
+            raise AssertionError("reviewer could reject with review-only rights")
+    finally:
+        client.close()
+
+    right = {"right": "reject_with_report", **target, "report": report}
+    try:
+        provenance("grant", target=task, rights=[{**right, "version": 1}])
+    except subprocess.CalledProcessError as error:
+        assert "outside authority" in error.stderr, error.stderr
+    else:
+        raise AssertionError("unverified target version was granted")
+    grant = provenance("grant", target=task, rights=[right])
+    client = session(grant)
+
+    def decide(**overrides):
+        payload = {
+            **target,
+            "seen_cursor": 4,
+            "idempotency_key": "bounded-rejection",
+            "choice": "reject",
+            "review": report,
+            **overrides,
+        }
+        return client.tool("an_provenance", {"action": "decide", "payload": payload})
+
+    try:
+        for change, reason in [
+            ({"review": None}, "outside authority"),
+            ({"review": {**report, "version": 1}}, "outside authority"),
+            ({"choice": "accept"}, "must reject"),
+            ({"version": 1}, "outside authority"),
+        ]:
+            try:
+                decide(**change)
+            except RuntimeError as error:
+                assert reason in str(error), error
+            else:
+                raise AssertionError(change)
+        receipt = decide()
+        assert receipt == decide() and receipt["review"] == report
+        assert receipt["grant"] == grant["grant"] and receipt["choice"] == "reject"
+        assert receipt["delegated_by"] == f"controller:{task}"
+        provenance("revoke", grant=grant["grant"])
+        historic = provenance("sources", **checked)["blocks"][0]["decision"]
+        assert historic == receipt
+    finally:
+        client.close()
 
 
 if __name__ == "__main__":

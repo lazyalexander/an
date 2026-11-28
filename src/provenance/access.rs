@@ -1,5 +1,5 @@
 //! Capability lookup is repeated in the operation transaction, including on replay.
-use super::domain::{ArtifactId, VersionId};
+use super::domain::{ArtifactId, BlockRef, VersionId};
 use crate::{
     permission,
     store::{find, get, hash, put, uid},
@@ -22,6 +22,11 @@ pub enum Right {
     Decide {
         artifact: ArtifactId,
         version: VersionId,
+    },
+    RejectWithReport {
+        artifact: ArtifactId,
+        version: VersionId,
+        report: BlockRef,
     },
     Evidence {
         snapshot: String,
@@ -79,7 +84,7 @@ impl Actor {
             || self
                 .rights
                 .iter()
-                .any(|right| matches!(right, Right::Decide { .. }))
+                .any(|right| matches!(right, Right::Decide { .. } | Right::RejectWithReport { .. }))
     }
 
     pub fn controller(&self) -> Result<()> {
@@ -112,6 +117,34 @@ impl Actor {
                 }
                 Ok(db.query_row("SELECT EXISTS(SELECT 1 FROM pv_published WHERE artifact=? AND version=? AND workspace=(
                     SELECT json_extract(body,'$.workspace') FROM objects WHERE kind='task' AND id=?))",rusqlite::params![artifact.0,version.0,self.task],|r|r.get(0))?)
+            }
+            Right::RejectWithReport {
+                artifact,
+                version,
+                report,
+            } => {
+                if !self.owns(db, artifact)?
+                    || !self.allows(
+                        db,
+                        &Right::Read {
+                            artifact: report.artifact.clone(),
+                            version: report.version,
+                        },
+                    )?
+                {
+                    return Ok(false);
+                }
+                Ok(db.query_row(
+                    include_str!("verified_decision.sql"),
+                    rusqlite::params![
+                        report.artifact.0,
+                        report.version.0,
+                        report.block,
+                        artifact.0,
+                        version.0
+                    ],
+                    |row| row.get(0),
+                )?)
             }
             Right::Revise { artifact } | Right::Decide { artifact, .. } => self.owns(db, artifact),
         }

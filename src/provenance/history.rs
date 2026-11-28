@@ -1,10 +1,10 @@
 use super::{
     access::{Actor, Right},
-    domain::Decision,
+    domain::{Choice, Decision},
 };
 use crate::{
     graph,
-    store::{find, put, uid},
+    store::{find, get, put, uid},
 };
 use anyhow::{ensure, Context, Result};
 use rusqlite::{params, Connection, OptionalExtension, Transaction};
@@ -52,13 +52,24 @@ pub fn view(db: &Connection, actor: &Actor, cursor: u64) -> Result<Value> {
 }
 
 pub fn decide(tx: &Transaction, actor: &Actor, decision: Decision) -> Result<Value> {
-    actor.require(
-        tx,
-        Right::Decide {
+    let required = match &decision.review {
+        Some(report) => {
+            ensure!(
+                matches!(decision.choice, Choice::Reject),
+                "Report-bound decision must reject"
+            );
+            Right::RejectWithReport {
+                artifact: decision.artifact.clone(),
+                version: decision.version,
+                report: report.clone(),
+            }
+        }
+        None => Right::Decide {
             artifact: decision.artifact.clone(),
             version: decision.version,
         },
-    )?;
+    };
+    actor.require(tx, required)?;
     let kind: String = tx.query_row(
         "SELECT kind FROM pv_artifact JOIN pv_version ON pv_artifact.id=pv_version.artifact
         WHERE artifact=? AND version=?",
@@ -90,11 +101,17 @@ pub fn decide(tx: &Transaction, actor: &Actor, decision: Decision) -> Result<Val
         .context("Missing graph events")?
         .last()
         .context("Missing decision event")?;
-    let receipt = json!({"id":id,"artifact":decision.artifact,"version":decision.version,"choice":decision.choice,
+    let mut receipt = json!({"id":id,"artifact":decision.artifact,"version":decision.version,"choice":decision.choice,
         "actor":actor.id,"grant":actor.grant,"reported_participant":decision.reported_participant,
         "reason":decision.reason,"task":actor.task,"time_ms":event["time_ms"],
         "seen":{"revision":seen,"cursor":decision.seen_cursor},
         "accepted":{"revision":graph["revision"],"cursor":event["cursor"]}});
+    if let Some(grant) = &actor.grant {
+        receipt["delegated_by"] = get(tx, "provenance_grant", grant)?["issuer"].clone();
+    }
+    if let Some(report) = decision.review {
+        receipt["review"] = serde_json::to_value(report)?;
+    }
     tx.execute(
         "INSERT INTO pv_choice VALUES(?,?,?,?)",
         params![
