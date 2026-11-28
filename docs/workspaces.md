@@ -1,5 +1,7 @@
 # Workspace bindings
 
+A workspace groups published deliveries and the policies governing transfers between tasks. A harness session binds to a task in that workspace.
+
 Register the spool images and local MCP services first. Create a workspace with digest-pinned spool references and optional edit and tool grants.
 
 ```sh

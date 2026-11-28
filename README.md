@@ -4,15 +4,13 @@
 
 English · [简体中文](README.zh-CN.md)
 
-**A workspace for agent-produced artifacts.**
+**An tracks how artifacts move through a workspace.** From a sentence in a published announcement, a reviewer can follow a block reference to the exact decision it cites. Starting from that decision, the reviewer can find which documents used it and inspect the evidence they have permission to read.
 
-An connects an agent to a workspace of spools through MCP. Each spool is a container image that packages a headless program with the instructions for using it. The agent chooses which spool to run and where its output should go next. An schedules execution with Apple Container and checks permissions when data crosses a boundary.
-
-A spool can pass a frozen artifact directly to another spool or publish it to the workspace. The harness handles user approval. Developers maintain their own spool images.
+The agent plans the work and reviews the results through the task MCP gateway. People or explicitly delegated agents make decisions. An checks permissions, runs headless programs in digest-pinned spool images on Apple Container, and records the versions each run received and produced. Spool authors define how their documents are processed and how their blocks cite sources.
 
 Build the Rust CLI and stdio MCP gateway with `cargo build --release --locked`. Spool execution uses Apple Container.
 
-The host and Studio live in `src/` and `studio/`. Markdown review is the reference workflow on `dev`. It exercises a container driver, a model decision, human review and publication of a revised document with an applicable diff. Minutes provides a second, two-spool check of information flow.
+The [headless minutes example](examples/minutes/provenance.py) follows one decision through an announcement, an action list and a later revision. The [Markdown review example](docs/graph-studio.md) shows how Studio presents a choice and lets a person retrieve the revised file and its patch.
 
 Pressure drawing, CAD, image providers and the visual composition benchmark live on the [visual experiment branch](https://github.com/lazyalexander/an/tree/experiment/visual-studio). Published files can still be opened, exported or used as the original input of a new task on `dev`. Run unfinished visual workflows on the experiment branch.
 

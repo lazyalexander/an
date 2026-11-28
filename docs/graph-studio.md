@@ -1,6 +1,6 @@
 # Incremental tasks in An Studio
 
-An Studio serves a task on loopback. The browser hosts its admitted panels. Apple Container runs document transformations in pinned spools. The Rust host owns scheduling, local model calls, artifact versions, authorization and export. Python serves the host projection and the browser never receives the harness turn credential.
+Studio is a loopback client for an An task. It presents authorized choices, evidence and published deliveries. The Rust host records decisions and artifact versions, checks permissions, schedules spools on Apple Container and handles local model calls and exports. Python serves the task view to the browser. The controller keeps the turn credential. For the headless workflow, see the [minutes example](../examples/minutes/provenance.py).
 
 ## Run Markdown review
 
