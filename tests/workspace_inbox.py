@@ -2,14 +2,14 @@
 
 import json
 from pathlib import Path
-import sys
 import tempfile
 
 from mcp_client import Mcp
 
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "examples/minutes"))
-from provenance import FIXTURE, Host, content, endpoint, output, version
+from provenance_host import Host, content, endpoint, output, version
+
+FIXTURE = ROOT / "examples/minutes/minutes.json"
 
 
 def exercise(worker, primary):
@@ -62,7 +62,6 @@ def exercise(worker, primary):
     text = "Propose a Friday release."
     private = "Internal-only note."
     program = """from pathlib import Path
-import sys
 for name in sys.argv[1:4]:
     Path('/output',name).write_text('Private draft: '+name)
 Path('/output/proposal.md').write_text(sys.argv[4]+'\\n'+sys.argv[5])
