@@ -70,6 +70,50 @@ pub(crate) fn controller(db: &Connection, task: &str) -> Result<()> {
     Ok(())
 }
 
+pub(crate) fn controller_identity(db: &Connection, task: &str) -> Result<String> {
+    match find(db, "task_controller_identity", task)? {
+        Some(value) => Ok(value
+            .as_str()
+            .context("Invalid controller identity")?
+            .to_owned()),
+        None => Ok(format!("controller:{task}")),
+    }
+}
+
+pub(crate) fn persistent_controller(db: &Connection, task: &str) -> Result<String> {
+    let old = get(db, "host_auth", task)?;
+    let secret = env::var("AN_TURN").unwrap_or_default();
+    let supplied = hash(secret.as_bytes());
+    ensure!(
+        !secret.is_empty() && old["controller"] == supplied,
+        "Persistent controller credential required"
+    );
+    Ok(supplied)
+}
+
+/// Transfer control in the caller's binding transaction. Keep the host policy
+/// while invalidating old turn grants, controller keys and agent credentials.
+pub(crate) fn transfer_controller(db: &Connection, task: &str, digest: &str) -> Result<()> {
+    let owner = persistent_controller(db, task)?;
+    let old = get(db, "host_auth", task)?;
+    ensure!(
+        digest.len() == 64 && digest.bytes().all(|c| c.is_ascii_hexdigit()),
+        "Expected new controller SHA-256 digest"
+    );
+    let digest = digest.to_ascii_lowercase();
+    ensure!(
+        owner != digest && old["turn"] != digest && digest != hash(b""),
+        "Expected fresh controller"
+    );
+    let epoch = get(db, "turn", task)?;
+    let next = uid();
+    if let Some(policy) = find(db, "host_policy", epoch.as_str().context("Inactive turn")?)? {
+        put(db, "host_policy", &next, &policy)?;
+    }
+    put(db, "turn", task, &json!(next))?;
+    put(db, "host_auth", task, &json!({"controller":digest}))
+}
+
 fn host_valid(db: &Connection, task: &str, secret: &str) -> Result<bool> {
     if secret.is_empty() {
         return Ok(false);

@@ -57,9 +57,19 @@ pub fn guard(identity: &str, rotate: bool) -> Result<fs::File> {
 }
 pub fn resolve(db: &Transaction, identity: &str, fresh: bool) -> Result<String> {
     let mut b = get(db, "binding", identity)?;
+    let mut successor = None;
     if let Some(old) = b["task"].as_str() {
         if !fresh {
             return Ok(old.into());
+        }
+        let workspace = b["workspace"]
+            .as_str()
+            .ok_or_else(|| anyhow!("Invalid binding"))?;
+        if find(db, "workspace_primary", workspace)? == Some(json!(identity)) {
+            if let Some(agent) = find(db, "workspace_primary_agent", workspace)? {
+                let owner = crate::permission::persistent_controller(db, old)?;
+                successor = Some((agent, owner));
+            }
         }
         let active:bool=db.query_row("SELECT EXISTS(SELECT 1 FROM objects WHERE kind='instance' AND json_extract(body,'$.task')=? AND json_extract(body,'$.status')!='unloaded')",[old],|r|r.get(0))?;
         ensure!(!active, "Unload instances first");
@@ -78,6 +88,10 @@ pub fn resolve(db: &Transaction, identity: &str, fresh: bool) -> Result<String> 
         &serde_json::from_value::<Vec<String>>(cfg["editable"].clone())?,
         json!({}),
     )?;
+    if let Some((agent, owner)) = successor {
+        put(db, "task_controller_identity", &id, &agent)?;
+        put(db, "host_auth", &id, &json!({"controller":owner}))?;
+    }
     t["workspace"] = b["workspace"].clone();
     t["tools"] = cfg["tools"].clone();
     b["task"] = json!(id);

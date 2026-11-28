@@ -97,7 +97,7 @@ pub(super) fn record(
     {
         receipt["id"] = json!(uid());
         receipt["confirmed"] = json!(accepted);
-        receipt["actor"] = json!(format!("controller:{task}"));
+        receipt["actor"] = json!(crate::permission::controller_identity(db, task)?);
         receipt["request"] = state["id"].clone();
     }
     let approval = &receipts[1];

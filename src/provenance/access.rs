@@ -100,7 +100,7 @@ impl Actor {
         }
         permission::controller(db, task)?;
         Ok(Self {
-            id: format!("controller:{task}"),
+            id: permission::controller_identity(db, task)?,
             task: task.into(),
             grant: None,
             rights: vec![],

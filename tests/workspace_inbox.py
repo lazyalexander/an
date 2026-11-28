@@ -1,6 +1,8 @@
 """Recover a primary agent's inbox after a separate task has finished and been collected."""
 
+import hashlib
 import json
+import secrets
 from pathlib import Path
 import tempfile
 
@@ -31,17 +33,17 @@ def exercise(worker, primary):
         )
     )
     worker.call("workspace", "policy", "set", workspace, "--file", policy)
-    primary.begin(primary.call("task", "new", *role)["task"])
+    credentials = primary.begin(primary.call("task", "new", *role)["task"])
     worker.begin(worker.call("task", "new", *producer, "--input", FIXTURE)["task"])
     reader = primary.provenance(
         "grant", target=primary.task, rights=[{"right": "read_inbox"}]
     )
 
-    def reconnect(credential=reader):
+    def reconnect(credential=reader, session=None):
         return Mcp(
             {
                 "command": str(ROOT / "target/debug/an"),
-                "args": ["mcp", *role],
+                "args": ["mcp", *(session or role)],
                 "env": {
                     **primary.env,
                     "AN_TURN": "",
@@ -197,8 +199,64 @@ print('Private review log')
         finally:
             client.close()
 
+    # The occupied writer binding remains independent, even after its task closes.
+    new_session = ["--harness", "acceptance", "--session", "continued"]
+    successor = ["--harness", "acceptance", "--session", "successor"]
+    transfer = [workspace, "--task", primary.task]
+    primary.call("workspace", "continue", *transfer, *producer, denied="Destination already")
+    primary.env.pop("AN_TURN")
+    primary.call("workspace", "continue", *transfer, *new_session, denied="controller credential")
+    primary.env["AN_TURN"] = credentials["turn"]
+    stale = reconnect()
+    try:
+        moved = primary.call("workspace", "continue", *transfer, *new_session)
+        assert moved["from_agent"] == moved["to_agent"] and moved["task"] == primary.task
+        try:
+            inbox(stale)
+        except RuntimeError as error:
+            assert "binding" in str(error), error
+        else:
+            raise AssertionError("detached session still has access")
+    finally:
+        stale.close()
+    current = reconnect(session=new_session)
+    try:
+        assert inbox(current) == items
+    finally:
+        current.close()
+
+    replacement = secrets.token_hex(32)
+    digest = hashlib.sha256(replacement.encode()).hexdigest()
+    primary.call("workspace", "takeover", *transfer, *successor, body=digest,
+                 denied="Persistent controller")
+    primary.env["AN_TURN"] = credentials["controller"]
+    changed = primary.call("workspace", "takeover", *transfer, *successor, body=digest)
+    primary.env["AN_TURN"] = replacement
+    assert changed["from_agent"] == moved["to_agent"] and changed["to_agent"] != changed["from_agent"]
+    for key in ("turn", "controller"):
+        primary.env["AN_TURN"] = credentials[key]
+        primary.call("permission", "begin", "--task", primary.task, denied="Controller credential")
+        primary.call("task", "new", *successor, denied="Persistent controller")
+    primary.env["AN_TURN"] = replacement
+    primary.provenance("review-inbox", token=reviewer["token"], denied="Inactive delegation", **first)
+    primary.provenance("inbox", token=reader["token"], denied="Inactive delegation")
+    reader = primary.provenance("grant", target=primary.task, rights=[{"right": "read_inbox"}])
+    current = reconnect(reader, successor)
+    try:
+        assert inbox(current) == items
+    finally:
+        current.close()
     primary.provenance("revoke", grant=reader["grant"])
     primary.provenance("inbox", token=reader["token"], denied="Inactive delegation")
+    primary.graph("finish")
+    next_task = primary.call("task", "new", *successor)["task"]
+    primary.task = next_task
+    primary.env["AN_TURN"] = credentials["controller"]
+    primary.call("permission", "begin", "--task", next_task, denied="Controller credential")
+    primary.env["AN_TURN"] = replacement
+    primary.begin(next_task)
+    assert primary.provenance("inbox")["items"] == items
+
 
 
 if __name__ == "__main__":
@@ -211,4 +269,4 @@ if __name__ == "__main__":
         finally:
             for host in (worker, primary):
                 host.cleanup()
-    print("Verified offline hand-in, version-bound review, export denial and reconnect after task closure.")
+    print("Verified offline hand-in, version-bound review, export denial, session continuation and primary takeover.")

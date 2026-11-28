@@ -61,6 +61,14 @@
 
 首版交回一个文本块。来源任务先登记产物版本，然后让控制器通过 `grant` 对本任务签发 `{"right":"submit_review","source":{"artifact":"schedule","version":1,"block":"proposal"}}`。限制 workspace 流向时，要放行 `["submit_review", 块端点, workspace ID]`。宿主在签发时检查流向及宿主策略，实际交回时再次检查委托的有效范围。受托方通过 `submit-review` 提交 `source` 和 `idempotency_key`；回执固定用途为审阅、收件角色为主 agent，并标明来源任务、登记游标与已有的生产尝试。主工作台只投影选中块的正文。文档其余内容和来源证据沿用各自的读取权限。
 
-验收使用 `an-minutes-organize:provenance` 本地镜像，运行 `python3 tests/workspace_inbox.py`。真实容器写出三份草案、一份包含公开提议与私有备注的文档，并输出日志。主 MCP 离线时交回提议，来源任务关闭并回收后，重新启动主 MCP 两次均可核对原收件及其处置。已创建但没有主绑定的旧工作区暂未提供补登记流程。主会话接管属于后续验收。
+验收使用 `an-minutes-organize:provenance` 本地镜像，运行 `python3 tests/workspace_inbox.py`。真实容器写出三份草案、一份包含公开提议与私有备注的文档，并输出日志。主 MCP 离线时交回提议，来源任务关闭并回收后，重新启动主 MCP 两次均可核对原收件及其处置。已创建但没有主绑定的旧工作区暂未提供补登记流程。会话接续和主角色接管也由该用例验证。
 
 主会话控制器可单独签发 `{"right":"review_inbox"}`。使用 `review-inbox` 提交 `receipt`、`idempotency_key` 和 `outcome`（`adopt`、`return` 或 `request_evidence`）。每条收件只处置一次，相同请求可安全重放。列表保留原始交接回执，并在已处理项上附加 `disposition`。补证后的新版通过新的交接进入收件箱。业务决定与发布继续按各自的授权办理。
+
+## 已实现的主会话接续与接管
+
+`an workspace continue W --task T --harness H --session S` 将当前未关闭的主任务移交到目标会话，需要当前任务的有效控制器凭据。任务、主 agent 和 turn 均延续。目标可为全新会话或本工作区尚无任务的绑定。旧 MCP 连接再次调用时会重新检查绑定。其它已有任务的会话继续独立工作。
+
+更换负责主体使用 `an workspace takeover W --task T --harness H --session S`。新控制器预先保存随机密钥，将其 SHA-256 十六进制摘要作为 JSON 字符串通过标准输入提交；只有旧控制器的长期密钥能批准接管。接管原子更新绑定、主体、turn 和回执。新主体以自己的密钥作为 `AN_TURN` 连接，按需重新签发委托。宿主流向策略随任务保留，过去的收件与署名仍可核对。两种操作都返回持久化回执，其中包含任务、旧/新会话与主体。
+
+接续或接管后的主绑定创建下一项任务时，需要当前长期控制器凭据。新任务继承该控制器和主体，开始 turn 后可继续读取同一工作区收件。首版覆盖当前主任务的交接；直接定位任意历史任务，以及在原控制器密钥丢失后的恢复，仍需另外设计。

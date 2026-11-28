@@ -94,10 +94,12 @@ class Host:
     def begin(self, task):
         policy = self.home / "host.json"
         policy.write_text(json.dumps({"default": "ask", "effects": []}))
-        self.env["AN_TURN"] = self.call(
+        credentials = self.call(
             "permission", "begin", "--task", task, "--file", policy
-        )["turn"]
+        )
+        self.env["AN_TURN"] = credentials["turn"]
         self.task = task
+        return credentials
 
     def submit(self, key, nodes, **args):
         return self.graph(

@@ -2,6 +2,7 @@ mod binding;
 pub(crate) mod inbox;
 mod policy;
 mod registry;
+mod session;
 mod task;
 use crate::store::*;
 use anyhow::{anyhow, ensure, Result};
@@ -36,6 +37,10 @@ enum Command {
 }
 #[derive(Subcommand)]
 enum Workspace {
+    /// Move the primary task to another session of the same agent.
+    Continue(session::Target),
+    /// Transfer the primary task to a new controller (SHA-256 digest on stdin).
+    Takeover(session::Target),
     Review {
         workspace: String,
         #[arg(value_enum)]
@@ -156,10 +161,24 @@ pub fn execute() -> Result<Value> {
         tx.commit()?;
         return Ok(receipt);
     }
+    match &cli.command {
+        Command::Workspace {
+            action: Workspace::Continue(target),
+        } => {
+            return session::transfer(&mut db, target, None);
+        }
+        Command::Workspace {
+            action: Workspace::Takeover(target),
+        } => {
+            let digest: String = serde_json::from_reader(std::io::stdin().lock())?;
+            return session::transfer(&mut db, target, Some(&digest));
+        }
+        _ => {}
+    }
     let tx = db.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let result = match cli.command {
         Command::Workspace {
-            action: Workspace::Review { .. },
+            action: Workspace::Review { .. } | Workspace::Continue(_) | Workspace::Takeover(_),
         } => unreachable!(),
         Command::Deliveries { task, after } => deliveries(&tx, &task, after)?,
         Command::Workspace {
