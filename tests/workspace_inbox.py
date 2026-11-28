@@ -6,6 +6,7 @@ import secrets
 from pathlib import Path
 import tempfile
 
+from execution_snapshot import check_snapshot
 from mcp_client import Mcp
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -22,19 +23,21 @@ def exercise(worker, primary):
     worker.call("workspace", "bind", workspace, *producer)
     source = endpoint("schedule", "proposal")
     policy = worker.home / "routes.json"
+    credentials = primary.begin(primary.call("task", "new", *role)["task"])
+    worker.begin(worker.call("task", "new", *producer, "--input", FIXTURE)["task"])
     policy.write_text(
         json.dumps(
             [
                 ["input", "minutes.json", image],
                 ["preview", image, "provenance"],
+                ["inspect_block", source, primary.task],
                 ["submit_review", source, workspace],
+                ["submit_review", endpoint("inspection-report", "quotation"), workspace],
                 ["submit_review", endpoint("schedule", "proposal", 2), workspace],
             ]
         )
     )
     worker.call("workspace", "policy", "set", workspace, "--file", policy)
-    credentials = primary.begin(primary.call("task", "new", *role)["task"])
-    worker.begin(worker.call("task", "new", *producer, "--input", FIXTURE)["task"])
     reader = primary.provenance(
         "grant", target=primary.task, rights=[{"right": "read_inbox"}]
     )
@@ -101,6 +104,8 @@ print('Private review log')
             )
         ],
     )
+
+    check_snapshot(worker, primary, role, source, text)
 
     def send_right(block):
         return [{"right": "submit_review", "source": block}]
@@ -169,6 +174,9 @@ print('Private review log')
     second_source = endpoint("schedule", "proposal", 2)
     sender = worker.provenance("grant", target=worker.task, rights=send_right(second_source))
     second = submit(second_source, "send-v2")
+    report_source = endpoint("inspection-report", "quotation")
+    sender = worker.provenance("grant", target=worker.task, rights=send_right(report_source))
+    report = submit(report_source, "return-report")
     worker.graph("finish")
     worker.task = None
     adopted = primary.provenance("review-inbox", token=reviewer["token"], receipt=second["id"],
@@ -185,6 +193,7 @@ print('Private review log')
             assert items == [
                 {"text": text, "receipt": receipt, "disposition": result},
                 {"text": revised, "receipt": second, "disposition": adopted},
+                {"text": text, "receipt": report},
             ]
             assert all(
                 marker not in json.dumps(items)

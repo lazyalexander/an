@@ -31,6 +31,9 @@ pub enum Right {
         version: VersionId,
         recipient: String,
     },
+    InspectSnapshot {
+        snapshot: String,
+    },
     ReadInbox,
     ReviewInbox,
     SubmitReview {
@@ -140,6 +143,10 @@ impl Actor {
                 let graph = get(db, "graph", &self.task)?;
                 Ok(graph["nodes"][node].get("publication_review").is_some()
                     && graph["activity"][node]["id"] == attempt.as_str())
+            }
+            Right::InspectSnapshot { snapshot } => {
+                Ok(find(db, "execution_snapshot", snapshot)?
+                    .is_some_and(|v| v["task"] == self.task))
             }
             Right::ReadInbox | Right::ReviewInbox => super::inbox::is_primary(db, &self.task),
             Right::SubmitReview { source } => self.owns(db, &source.artifact),

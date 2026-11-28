@@ -113,6 +113,9 @@ fn mark_roots(
                 if retired => {}
             // This binding compares a hash when authorizing a flow. It never opens a file.
             "intent_version" => {}
+            // Execution snapshots embed their selected text. It is user content,
+            // even when a sentence happens to equal an unrelated revision ID.
+            "execution_snapshot" => {}
             _ => retain(&body, unused),
         }
     }

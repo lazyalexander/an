@@ -18,6 +18,13 @@ pub(super) fn apply(tx: &Connection, id: String, rules: Option<Value>) -> Result
             let (s, d) = (&row[1], &row[2]);
             let valid = match row[0].as_str() {
                 Some("input") => s.is_string() && images.contains(d),
+                Some("inspect_block") => {
+                    let target = d
+                        .as_str()
+                        .ok_or_else(|| anyhow!("Expected recipient task"))?;
+                    crate::provenance::valid_endpoint(s)
+                        && get(tx, "task", target)?["workspace"] == id
+                }
                 Some("submit_review") => crate::provenance::valid_endpoint(s) && d == &id,
                 Some("block_input") => crate::provenance::valid_endpoint(s) && images.contains(d),
                 Some("bridge_input") => {

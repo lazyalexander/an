@@ -20,6 +20,7 @@ pub(crate) mod publication;
 mod query;
 pub(crate) mod release;
 pub(crate) mod review;
+mod snapshot;
 mod versions;
 use crate::{
     instances,
@@ -75,6 +76,8 @@ fn dispatch(task: &str, action: &str, args: &Value, from_mcp: bool) -> Result<Va
     let actor = Actor::authenticate(&tx, task)?;
     let op = operation?;
     let result = match op {
+        Operation::FreezeExecution => snapshot::create(&tx, &actor, args)?,
+        Operation::ReadExecution => snapshot::read(&tx, &actor, args)?,
         Operation::Inbox => inbox::list(&tx, &actor)?,
         Operation::ReviewInbox => {
             let review: inbox::Review = serde_json::from_value(args.clone())?;

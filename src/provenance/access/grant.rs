@@ -68,6 +68,24 @@ pub fn grant(db: &Connection, actor: &Actor, args: &Value) -> Result<Value> {
             "Inbox delegation requires a single task-local right"
         );
     }
+    if let Some(id) = rights.iter().find_map(|right| match right {
+        Right::InspectSnapshot { snapshot } => Some(snapshot),
+        _ => None,
+    }) {
+        ensure!(
+            rights.len() == 1,
+            "Snapshot reader requires an exclusive read-only grant"
+        );
+        if let Some(request) = crate::provenance::snapshot::authorize(
+            db,
+            actor,
+            id,
+            target,
+            args["request_id"].as_str(),
+        )? {
+            return Ok(request);
+        }
+    }
     if let [Right::SubmitReview { source }] = rights.as_slice() {
         if let Some(pending) =
             crate::workspace::inbox::authorize(db, actor, source, args["request_id"].as_str())?
