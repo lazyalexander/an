@@ -42,6 +42,10 @@ struct RunId {
     #[arg(long)]
     request_id: Option<String>,
 }
+fn parse_json(input: &str) -> serde_json::Result<Value> {
+    serde_json::from_str(input)
+}
+
 #[derive(Subcommand)]
 enum Core {
     Check {
@@ -106,9 +110,9 @@ enum Core {
         #[arg(long)]
         input: Option<String>,
         /// JSON object mapping manifest port names to immutable source references.
-        #[arg(long, conflicts_with = "input")]
+        #[arg(long, conflicts_with = "input", value_parser = parse_json)]
         inputs: Option<Value>,
-        #[arg(long, requires = "inputs")]
+        #[arg(long, requires = "inputs", value_parser = parse_json)]
         input_requests: Option<Value>,
         #[arg(long = "output")]
         outputs: Vec<String>,

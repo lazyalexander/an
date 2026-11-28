@@ -290,6 +290,9 @@ pub fn execute() -> Result<Value> {
                     let (s, d) = (&row[1], &row[2]);
                     let valid = match row[0].as_str() {
                         Some("input") => s.is_string() && images.contains(d),
+                        Some("block_input") => {
+                            crate::provenance::valid_endpoint(s) && images.contains(d)
+                        }
                         Some("bridge_input") => {
                             s.as_str().is_some_and(|k| cfg["tools"].get(k).is_some())
                                 && images.contains(d)

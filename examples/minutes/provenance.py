@@ -185,6 +185,7 @@ def create_task(host):
         json.dumps(
             [
                 ["input", "minutes.json", organize],
+                ["block_input", endpoint("minutes", "opening"), formatter],
                 ["handoff", organize, formatter],
                 ["handoff", organize, organize],
                 ["publish", organize, "graph-metadata"],
@@ -463,7 +464,7 @@ def revise(host, resumed, delivery, monday, free, snapshot, second_snapshot):
     still_using = host.provenance("impact", **endpoint("opening", "conclusion"))
     assert {
         (b["ref"]["artifact"], b["ref"]["version"]) for b in still_using["blocks"]
-    } == {("opening", 1), ("announcement", 1), ("actions", 1)}
+    } == {("opening", 1), ("announcement", 1), ("actions", 1), ("review", 1)}
 
     return original_log
 
@@ -490,15 +491,104 @@ def check_export(host, delivery, dest):
     ).read_bytes()
 
 
+def check_block_input(host, formatter, monday):
+    host.provenance(
+        "handoff-block",
+        source=endpoint("minutes", "registration"),
+        recipient=formatter,
+        denied="Denied by workspace flow policy",
+    )
+    ticket = host.provenance(
+        "handoff-block", source=endpoint("minutes", "opening"), recipient=formatter
+    )
+    probe = """from pathlib import Path
+import sys
+root=Path('/input')
+files=[p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file()]
+assert files==['summary/block.txt'], files
+assert (root/files[0]).read_bytes()==sys.argv[1].encode()
+"""
+    instance = host.call("load", "--task", host.task, "--spool", formatter)["id"]
+    args = [
+        "run",
+        "--task",
+        host.task,
+        "--instance",
+        instance,
+        "--inputs",
+        json.dumps({"summary": ticket["handoff"]}),
+        "--",
+        "python3",
+        "-c",
+        probe,
+        monday,
+    ]
+    run = host.call(*args)
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        state = host.call("status", "--task", host.task, run)["status"]
+        if state != "running":
+            assert state == "completed", state
+            break
+        time.sleep(0.2)
+    else:
+        raise TimeoutError(run)
+    host.call(*args, denied="Invalid or revoked handoff")
+
+
 def exercise(host, resumed):
     organize, formatter, dest = create_task(host)
     monday, free, snapshot, second_snapshot = propose(host, organize)
+    check_block_input(host, formatter, monday)
     receipt = accept_and_expand(host, organize, formatter)
     delivery = publish(host)
     check_trace(host, delivery, receipt, organize, formatter)
+    host.provenance(
+        "commit",
+        idempotency_key="review",
+        versions=[
+            version(
+                "review",
+                [
+                    content(
+                        "checked",
+                        monday,
+                        source=endpoint("announcement", "opening"),
+                        relation="verifies",
+                    )
+                ],
+                kind="report",
+            )
+        ],
+    )
+    reader = host.provenance(
+        "grant",
+        target=host.task,
+        rights=[{"right": "read", "artifact": "announcement", "version": 1}],
+    )
+    visible = host.provenance(
+        "sources", token=reader["token"], **endpoint("announcement", "opening")
+    )
+    assert len(visible["blocks"]) == 1 and not visible["edges"]
+    host.provenance(
+        "commit",
+        token=reader["token"],
+        denied="outside authority",
+        idempotency_key="overwrite",
+        versions=[
+            version(
+                "opening",
+                [content("conclusion", "Changed")],
+                kind="decision",
+                expected=1,
+            )
+        ],
+    )
     original_log = revise(
         host, resumed, delivery, monday, free, snapshot, second_snapshot
     )
+    reviewed = host.provenance("sources", **endpoint("review", "checked"))
+    assert reviewed["edges"][0]["source"] == endpoint("announcement", "opening", 1)
     check_export(host, delivery, dest)
     host.graph("finish")
     host.task = None

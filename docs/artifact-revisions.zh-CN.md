@@ -49,7 +49,7 @@
 
 ## 首版无头验收
 
-沿用会议纪要样例中的开馆日和免费登记条目，下表列出第二项设计的验收目标。块身份、拆分和合并已有事务测试；仅将指定块交给 spool 的容器隔离验收仍待完成。[会议纪要输入](../examples/minutes/minutes.json)
+沿用会议纪要样例中的开馆日和免费登记条目，下表列出第二项设计的验收目标。块身份、拆分和合并由事务测试覆盖。会议纪要的真实容器验收覆盖指定块交接、公告只读委托，以及旧报告对原公告版本的引用。[会议纪要输入](../examples/minutes/minutes.json)
 
 | 操作 | 预期结果 |
 | --- | --- |
@@ -65,3 +65,9 @@
 同一文档中，拆出的每个新块用 `split_from` 指向上一版的同一个块；合并出的新块用多条 `merged_from` 指向上一版的不同块。一次提交须包含完整编辑，新块使用新位置 ID，被替换的位置保留在旧版。宿主核对端点、数量与身份，内容是否忠实由验收者判断。跨文档引用和一般改写继续使用 `quotes` 和 `based_on`。
 
 定向测试从一个块拆成两个，再合成一个，从两个方向核对四条引用；同时验证缺少拆分结果和复用旧位置的合并都会回滚。运行 `cargo test --offline split_and_merge` 可复验。[事务测试](../src/provenance/tests.rs)
+
+### 只交接一个文本块
+
+控制器用 `an provenance --task TASK handoff-block` 提交 `source`（产物 ID、版本号、块 ID）与 `recipient`（已准入的 spool）。限定 workspace 流向时，允许项为 `["block_input", source, recipient]`。An 检查版本读取权和此次交接授权，将该块的 UTF-8 正文冻结为单文件 `block.txt`，返回绑定任务、接收方和当前权限代次的一次性 handoff。把票据传给 `an run --inputs` 的指定端口即可消费。
+
+会议纪要案例在容器中枚举整个 `/input`，并逐字节比较 `summary/block.txt` 与开馆句子。相邻的登记条目无法签发票据，已消费的开馆票据也无法再次提交。复验命令为 `python3 examples/minutes/provenance.py`，镜像准备步骤见[无头验收说明](artifact-flow.zh-CN.md#首版实现与复验)。

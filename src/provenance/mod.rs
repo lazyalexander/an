@@ -5,7 +5,9 @@ mod domain;
 mod evidence;
 pub(crate) mod export;
 pub(crate) mod flow;
+mod handoff;
 mod history;
+pub(crate) use handoff::valid_endpoint;
 pub(crate) use history::require_accepted;
 mod material;
 pub(crate) mod publication;
@@ -37,6 +39,7 @@ pub fn execute(task: &str, action: &str, args: &Value) -> Result<Value> {
     let result = match action {
         "sources" => query::trace(&tx, &actor, args, query::Direction::Sources)?,
         "impact" => query::trace(&tx, &actor, args, query::Direction::Impact)?,
+        "handoff-block" => handoff::issue(&tx, &actor, args)?,
         "grant" => access::grant(&tx, &actor, args)?,
         "revoke" => access::revoke(&tx, &actor, args)?,
         "freeze" => evidence::freeze(&tx, &actor, args)?,
